@@ -1,0 +1,16 @@
+# The source distribution: what building the package needs, nothing else.
+# A wheel built from it equals one built from the checkout (tested).
+include pyproject.toml MANIFEST.in README.md LICENSE
+# Every installed document (pyproject.toml's data-files).
+include docs/USAGE.md docs/CHEATSHEET.md docs/STANDALONE.md docs/quickstart.md
+include docs/troubleshooting.md docs/update.md docs/uninstall.md docs/privacy.md docs/security.md
+include docs/install/linux.md docs/install/macos.md docs/install/windows-wsl2.md docs/install/nix.md
+include docs/providers/api-keys.md docs/providers/openrouter.md docs/providers/claude-account.md
+include docs/providers/chatgpt-account.md docs/providers/anthropic-compatible.md
+include docs/providers/openai-compatible.md docs/providers/lan.md docs/guides/profiles.md
+include docs/guides/models.md docs/guides/sessions.md docs/guides/lineup.md docs/guides/gateway.md
+include docs/guides/networking.md docs/guides/move-machines.md docs/reference/cli.md
+include docs/reference/tasks.md docs/reference/settings.md docs/reference/compatibility.md
+include docs/reference/licenses.md
+graft src/claude_multi
+global-exclude __pycache__ *.py[cod]

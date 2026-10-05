@@ -1,0 +1,337 @@
+{
+  "version": 1,
+  "type": "object",
+  "oneOf": [
+    {
+      "required": ["version", "session_id", "cwd", "composition_name", "composition_hash", "snapshot", "catalog_version", "catalog_hash", "launcher_version", "created_at", "forked_from"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": 1 }, "session_id": {}, "cwd": {},
+        "composition_name": {}, "composition_hash": {}, "snapshot": {},
+        "catalog_version": {}, "catalog_hash": {}, "launcher_version": {},
+        "created_at": {}, "forked_from": {}
+      }
+    },
+    {
+      "required": ["version", "session_id", "cwd", "composition_name", "composition_hash", "snapshot", "mode", "scope_generation", "workflows", "catalog_version", "catalog_hash", "launcher_version", "created_at", "forked_from"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": 2 }, "session_id": {}, "cwd": {},
+        "composition_name": {}, "composition_hash": {}, "snapshot": {},
+        "mode": {}, "scope_generation": {}, "workflows": {},
+        "catalog_version": {}, "catalog_hash": {}, "launcher_version": {},
+        "created_at": {}, "forked_from": {}
+      }
+    },
+    {
+      "required": ["version", "managed_id", "runtime_session_id", "runtime_aliases", "session_type", "identity_state", "last_event_source", "last_seen_at", "pending_forks", "cwd", "composition_name", "composition_hash", "snapshot", "mode", "scope_generation", "workflows", "catalog_version", "catalog_hash", "launcher_version", "created_at", "forked_from", "migrated_from_version"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": 3 }, "managed_id": {}, "runtime_session_id": {},
+        "runtime_aliases": {}, "mutation_token": {}, "launch_epoch": {},
+        "session_type": { "const": "managed-composition" },
+        "identity_state": {}, "last_event_source": {}, "last_seen_at": {},
+        "last_end_reason": {}, "observed_cwd": {}, "observed_model": {},
+        "pending_forks": {}, "cwd": {}, "composition_name": {},
+        "composition_hash": {}, "snapshot": {}, "mode": {},
+        "scope_generation": {}, "workflows": {}, "catalog_version": {},
+        "catalog_hash": {}, "launcher_version": {}, "created_at": {},
+        "forked_from": {}, "migrated_from_version": {}
+      }
+    },
+    {
+      "required": ["version", "managed_id", "runtime_session_id", "runtime_aliases", "session_type", "identity_state", "last_event_source", "last_seen_at", "pending_forks", "cwd", "ordinary_model", "context_profile", "mode", "scope_generation", "catalog_version", "catalog_hash", "launcher_version", "created_at", "forked_from", "migrated_from_version"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": 3 }, "managed_id": {}, "runtime_session_id": {},
+        "runtime_aliases": {}, "mutation_token": {}, "launch_epoch": {},
+        "session_type": { "const": "ordinary-gateway" },
+        "identity_state": {}, "last_event_source": {}, "last_seen_at": {},
+        "last_end_reason": {}, "observed_cwd": {}, "observed_model": {},
+        "pending_forks": {}, "cwd": {}, "ordinary_model": {},
+        "context_profile": {}, "no_subagents": {}, "mode": {}, "scope_generation": {},
+        "catalog_version": {}, "catalog_hash": {}, "launcher_version": {},
+        "created_at": {}, "forked_from": {}, "migrated_from_version": {}
+      }
+    },
+    {
+      "required": ["version", "managed_id", "runtime_session_id", "runtime_aliases", "identity_state", "last_event_source", "last_seen_at", "pending_forks", "cwd", "profile", "follow", "applied", "applied_hash", "lineup_generation", "lead_class", "catalog_version", "catalog_hash", "launcher_version", "created_at", "forked_from", "migrated_from_version"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": 4 }, "managed_id": {}, "runtime_session_id": {},
+        "runtime_aliases": {}, "mutation_token": {}, "launch_epoch": {},
+        "identity_state": {}, "last_event_source": {}, "last_seen_at": {},
+        "last_end_reason": {}, "observed_cwd": {}, "observed_model": {},
+        "pending_forks": {}, "cwd": {}, "profile": {}, "follow": {}, "applied": {},
+        "applied_hash": {}, "lineup_generation": {}, "lead_class": {},
+        "migration": {}, "pending": {}, "title": {}, "launch_fence": {}, "lead_target": {},
+        "scope_lead": {}, "catalog_version": {}, "catalog_hash": {}, "launcher_version": {},
+        "created_at": {}, "forked_from": {}, "migrated_from_version": {}
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "enum": [1, 2, 3, 4] },
+    "session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "managed_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "runtime_session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "mutation_token": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "launch_epoch": { "type": "integer", "minimum": 0 },
+    "runtime_aliases": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": ["session_id", "source", "observed_at"],
+        "additionalProperties": false,
+        "properties": {
+          "session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+          "source": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "observed_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+        }
+      }
+    },
+    "session_type": { "enum": ["managed-composition", "ordinary-gateway"] },
+    "identity_state": { "enum": ["authoritative", "unverified", "repair-needed", "pending-fork"] },
+    "last_event_source": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 32 },
+        { "type": "null" }
+      ]
+    },
+    "last_seen_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "last_end_reason": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "observed_cwd": { "type": "string", "pattern": "^/" },
+    "observed_model": { "type": "string", "minLength": 1 },
+    "pending_forks": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": ["session_id", "observed_at"],
+        "additionalProperties": false,
+        "properties": {
+          "session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+          "observed_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+        }
+      }
+    },
+    "cwd": { "type": "string", "pattern": "^/" },
+    "composition_name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+    "composition_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "snapshot": {
+      "type": "object",
+      "required": ["lead", "variants", "native_agents", "availability", "scalar_context_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "lead": {
+          "type": "object",
+          "required": ["model", "client_selector", "effort", "env"],
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string", "minLength": 1 },
+            "client_selector": { "type": "string", "minLength": 1 },
+            "effort": { "type": "string", "minLength": 1 },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } },
+            "client_context_tokens": { "type": "integer", "minimum": 1 },
+            "provider_context_tokens": { "type": "integer", "minimum": 1 },
+            "auto_compact_tokens": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "role", "model", "lane", "client_selector", "preferred"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^cm-[a-z0-9-]+$" },
+              "role": { "type": "string", "minLength": 1 },
+              "model": { "type": "string", "minLength": 1 },
+              "lane": { "type": "string", "minLength": 1 },
+              "client_selector": { "type": "string", "minLength": 1 },
+              "preferred": { "type": "boolean" }
+            }
+          }
+        },
+        "native_agents": {
+          "type": "object",
+          "required": ["explore", "plan", "general_purpose"],
+          "additionalProperties": false,
+          "properties": {
+            "explore": { "enum": ["replace", "native", "off"] },
+            "plan": { "enum": ["native", "off"] },
+            "general_purpose": { "enum": ["on", "off"] }
+          }
+        },
+        "availability": {
+          "type": "object",
+          "required": ["providers", "models"],
+          "additionalProperties": false,
+          "properties": {
+            "providers": { "type": "object", "additionalProperties": { "enum": ["lead+agents", "lead", "agents", "off"] } },
+            "models": { "type": "object", "additionalProperties": { "enum": ["lead+agents", "lead", "agents", "off"] } }
+          }
+        },
+        "scalar_context_tokens": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "auto_compact_window_tokens": { "type": "integer", "minimum": 1 },
+        "workflows": { "enum": ["native", "off"] }
+      }
+    },
+    "mode": { "enum": ["durable", "legacy"] },
+    "scope_generation": { "type": "integer", "minimum": 0 },
+    "workflows": { "enum": ["native", "off"] },
+    "ordinary_model": { "type": "string", "minLength": 1 },
+    "no_subagents": { "type": "boolean" },
+    "context_profile": { "oneOf": [{ "enum": ["sol", "large", "grok", "flash431"] }, { "type": "string", "pattern": "^custom-[0-9]+$" }, { "type": "null" }] },
+    "catalog_version": { "type": "integer", "minimum": 1 },
+    "catalog_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "launcher_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-dev)?$" },
+    "created_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "forked_from": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+        { "type": "null" }
+      ]
+    },
+    "migrated_from_version": {
+      "oneOf": [
+        { "enum": [1, 2, 3] },
+        { "type": "null" }
+      ]
+    },
+    "profile": { "oneOf": [ { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" }, { "type": "null" } ] },
+    "follow": { "type": "boolean" },
+    "applied_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "lineup_generation": { "type": "integer", "minimum": 0 },
+    "lead_class": { "oneOf": [ { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$" }, { "type": "null" } ] },
+    "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "launch_fence": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "lead_target": {
+      "type": "object",
+      "required": ["key", "effort", "selector"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@._-]{0,63}$" },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultracode"] },
+        "selector": { "type": "string", "minLength": 1, "maxLength": 160 }
+      }
+    },
+    "scope_lead": {
+      "type": "object",
+      "required": ["key", "effort", "selector"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@._-]{0,63}$" },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultracode"] },
+        "selector": { "type": "string", "minLength": 1, "maxLength": 160 }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "required": ["from_version", "migrated_at", "outcome", "composition_name", "session_type"],
+      "additionalProperties": false,
+      "properties": {
+        "from_version": { "enum": [1, 2, 3] },
+        "migrated_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+        "outcome": { "enum": ["needs-choice", "successor", "renamed", "unchanged"] },
+        "composition_name": { "oneOf": [ { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" }, { "type": "null" } ] },
+        "session_type": { "enum": ["managed-composition", "ordinary-gateway"] }
+      }
+    },
+    "pending": {
+      "type": "object",
+      "required": ["requested_at", "kind", "profile", "follow", "document", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "requested_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+        "kind": { "enum": ["profile", "lineup"] },
+        "profile": { "oneOf": [ { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" }, { "type": "null" } ] },
+        "follow": { "type": "boolean" },
+        "document": { "oneOf": [ { "type": "object" }, { "type": "null" } ] },
+        "reasons": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 160 } }
+      }
+    },
+    "applied": {
+      "type": "object",
+      "required": ["lead", "agents", "native_agents", "workflows", "lead_providers", "settings_overrides", "no_subagents", "settings"],
+      "additionalProperties": false,
+      "properties": {
+        "lead": {
+          "type": "object",
+          "required": ["key", "generation", "selector", "effort", "env", "compaction"],
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@._-]{0,63}$" },
+            "generation": { "oneOf": [ { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z.-]{0,15}$" }, { "type": "null" } ] },
+            "selector": { "oneOf": [ { "type": "string", "minLength": 1, "maxLength": 160 }, { "type": "null" } ] },
+            "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultracode"] },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } },
+            "compaction": {
+              "type": "object",
+              "required": ["window", "trigger", "percent", "scalar"],
+              "additionalProperties": false,
+              "properties": {
+                "window": { "oneOf": [ { "type": "integer", "minimum": 1 }, { "type": "null" } ] },
+                "trigger": { "oneOf": [ { "type": "integer", "minimum": 1 }, { "type": "null" } ] },
+                "percent": { "oneOf": [ { "type": "integer", "minimum": 1, "maximum": 100 }, { "type": "null" } ] },
+                "scalar": { "oneOf": [ { "type": "integer", "minimum": 1 }, { "type": "null" } ] },
+                "client_tokens": { "type": "integer", "minimum": 1 },
+                "provider_tokens": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        },
+        "agents": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["key", "generation", "selector", "effort"],
+            "additionalProperties": false,
+            "properties": {
+              "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@._-]{0,63}$" },
+              "generation": { "oneOf": [ { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z.-]{0,15}$" }, { "type": "null" } ] },
+              "selector": { "type": "string", "minLength": 1, "maxLength": 160 },
+              "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] }
+            }
+          }
+        },
+        "native_agents": {
+          "type": "object",
+          "required": ["explore", "plan", "general_purpose"],
+          "additionalProperties": false,
+          "properties": {
+            "explore": { "enum": ["replace", "native", "off"] },
+            "plan": { "enum": ["native", "off"] },
+            "general_purpose": { "enum": ["on", "off"] }
+          }
+        },
+        "workflows": { "enum": ["native", "off"] },
+        "lead_providers": { "oneOf": [ { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" } }, { "type": "null" } ] },
+        "primary_provider": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "settings_overrides": { "type": "object", "additionalProperties": false, "properties": { "compaction_percent": { "type": "integer", "minimum": 60, "maximum": 95 } } },
+        "no_subagents": { "type": "boolean" },
+        "settings": {
+          "type": "object",
+          "required": ["version", "providers_enabled", "admitted_lines", "compaction_percent", "explore_inherit_cap_disabled", "review_round_cap", "workflow_default_binding"],
+          "additionalProperties": false,
+          "properties": {
+            "version": { "const": 1 },
+            "providers_enabled": { "type": "object", "additionalProperties": { "type": "boolean" } },
+            "admitted_lines": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+            "compaction_percent": { "type": "integer", "minimum": 60, "maximum": 95 },
+            "explore_inherit_cap_disabled": { "type": "boolean" },
+            "review_round_cap": { "type": "integer", "minimum": 1, "maximum": 3 },
+            "workflow_default_binding": { "oneOf": [ { "type": "null" }, { "type": "object", "required": ["model", "effort"], "additionalProperties": false, "properties": { "model": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@.-]*$" }, "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] } } } ] }
+          }
+        }
+      }
+    }
+  }
+}

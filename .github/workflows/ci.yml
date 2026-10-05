@@ -1,0 +1,326 @@
+# claude-multi CI.
+#
+# fast       every push and pull request: goldens, whitespace, the secret
+#            and identifier scan of exactly the new commits, hygiene, import
+#            smoke, shell and workflow lint.
+# gateway    nightly and on demand: the gateway for this host and its
+#            diagnostic probes (tools/build.py, .github/scripts/
+#            gateway_probes.py), for the battery.
+# battery    nightly and on demand: the full Linux suite (Python 3.11 and
+#            3.14) with bubblewrap available for the isolated classes, the
+#            candidate gateway and its probes (bound to the build record),
+#            the pinned Claude Code, and the pinned setuptools for the
+#            distribution tests, which must run.
+# pty        nightly and on demand: the terminal journeys, one job per OS,
+#            run serially on their own.
+# nix        nightly and on demand: the flake checks, the Nix gateway bytes
+#            compared with the native build, and the product's indirect
+#            garbage-collector root in this disposable Nix store.
+#
+# The nightly schedule runs only while the repository variable
+# CM_SCHEDULES is "on" (every job a schedule reaches checks it); a manual
+# run is not affected.
+#
+# Scan policy (fast lane): a pull request scans BASE..HEAD of the pull
+# request; a push scans before..after; a push that creates a branch (no
+# "before") or rewrites history (its "before" is not in the clone) scans the
+# whole history. A pull request whose base or head is missing from the
+# clone fails, as does every candidate the scanner reports.
+#
+# Hardening: actions pinned by commit, no permissions unless a job grants
+# them, no privileged pull-request trigger, no credentials kept after
+# checkout, umask 077 in every step, no provider calls (the test tripwire
+# is always on through tools/test.py), and one secret only: the private
+# identifier list of the fast lane's identifier checks, when the repository
+# has it.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONPATH: src:tests
+  # The release integration tests (installer, update, journey, release
+  # tool) must run: without ssh-keygen they fail instead of skipping.
+  CLAUDE_MULTI_TEST_REQUIRE_RELEASE: "1"
+
+jobs:
+  fast:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Goldens are current
+        run: |
+          umask 077
+          python3 tests/bless.py --check
+      - name: Revision range (the scan policy above)
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          umask 077
+          if [ "$EVENT" = pull_request ]; then
+            for rev in "$PR_BASE" "$PR_HEAD"; do
+              if ! git cat-file -e "$rev^{commit}" 2>/dev/null; then
+                echo "::error::the pull request revision $rev is not in the clone"
+                exit 1
+              fi
+            done
+            echo "range=$PR_BASE..$PR_HEAD" >>"$GITHUB_OUTPUT"
+          elif [ -z "$PUSH_BEFORE" ] || [ "$PUSH_BEFORE" = 0000000000000000000000000000000000000000 ] ||
+            ! git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            echo "range=" >>"$GITHUB_OUTPUT"
+          else
+            echo "range=$PUSH_BEFORE..$PUSH_AFTER" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Whitespace
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          umask 077
+          if [ -n "$RANGE" ]; then
+            git diff --check "${RANGE%%..*}" "${RANGE##*..}"
+          else
+            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+          fi
+      - name: Private identifier list
+        # The exact identifiers of the repository's people and computers are
+        # not published: an Actions secret, when present, adds them to the
+        # scan and the hygiene gates below (a 0600 file the environment
+        # names); without it (a fork, a pull request) the generic checks run.
+        env:
+          PRIVATE_IDENTIFIERS: ${{ secrets.CLAUDE_MULTI_PRIVATE_IDENTIFIERS }}
+        run: |
+          umask 077
+          if [ -n "$PRIVATE_IDENTIFIERS" ]; then
+            list="$RUNNER_TEMP/private-identifiers.tsv"
+            printf '%s\n' "$PRIVATE_IDENTIFIERS" >"$list"
+            chmod 600 "$list"
+            echo "CLAUDE_MULTI_PRIVATE_IDENTIFIERS=$list" >>"$GITHUB_ENV"
+          else
+            echo "no private identifier list: the generic identifier checks run"
+          fi
+      - name: Secret and identifier scan of the new commits
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          umask 077
+          if [ -n "$RANGE" ]; then
+            python3 tools/history_scan.py --repo . --range "$RANGE"
+          else
+            python3 tools/history_scan.py --repo .
+          fi
+      - name: Hygiene
+        run: |
+          umask 077
+          python3 tools/test.py tests.test_hygiene tests.test_docs_vocabulary tests.test_history_scan
+      - name: Generated documentation
+        run: |
+          umask 077
+          python3 tools/docs_gen.py --check
+      - name: Import smoke
+        run: |
+          umask 077
+          python3 -I -c 'import sys; sys.path.insert(0, "src"); import claude_multi.cli.entry, claude_multi.proxy, claude_multi.trust, claude_multi.self_update, claude_multi.release_update, claude_multi.install_txn'
+          python3 bin/claude-multi --version
+      - name: Shell lint
+        run: |
+          umask 077
+          shellcheck -s sh packaging/install.sh .github/scripts/journey.sh .github/scripts/wsl_prepare.sh
+      - name: Workflow lint
+        run: |
+          umask 077
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          # zizmor by the hash of its manylinux x86_64 wheel (.github/PINS.md),
+          # the file the local lint ran. The wheel ships an executable, not a
+          # Python module.
+          printf '%s\n' 'zizmor==1.30.1 --hash=sha256:eee12266b793cb87ad4a7e3af2e72404f8a63e3de5eb099b80bf7b1cfd232a8e' >"$RUNNER_TEMP/zizmor.txt"
+          python3 -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes --target "$RUNNER_TEMP/zizmor" -r "$RUNNER_TEMP/zizmor.txt"
+          "$RUNNER_TEMP/bin/actionlint"
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --offline .github
+
+  gateway:
+    if: (github.event_name == 'schedule' && vars.CM_SCHEDULES == 'on') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: The gateway for this host and its diagnostic probes (from the same prepared tree)
+        run: |
+          umask 077
+          python3 tools/build.py gateway fetch vendor apply build inspect record --target host \
+            --work "$RUNNER_TEMP/gateway-work" --dist gateway-dist
+          python3 .github/scripts/gateway_probes.py compile --work "$RUNNER_TEMP/gateway-work" \
+            --dist gateway-dist --out gateway-probes
+      - name: No Claude Code bytes
+        run: |
+          umask 077
+          python3 tools/_build/no_bundle_guard.py gateway-dist gateway-probes
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gateway-dist
+          path: gateway-dist
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gateway-probes
+          path: gateway-probes
+          retention-days: 3
+          if-no-files-found: error
+
+  battery:
+    needs: gateway
+    if: (github.event_name == 'schedule' && vars.CM_SCHEDULES == 'on') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unprivileged user namespaces for bubblewrap
+        run: |
+          umask 077
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+      - name: The pinned build backend for the distribution tests (by hash, .github/PINS.md)
+        run: |
+          umask 077
+          printf '%s\n' 'setuptools==82.0.1 --hash=sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb' >"$RUNNER_TEMP/setuptools.txt"
+          python3 -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/setuptools.txt"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gateway-dist
+          path: ${{ runner.temp }}/gateway-dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gateway-probes
+          path: ${{ runner.temp }}/gateway-probes
+      - name: The candidate gateway and its diagnostic probes, bound to the build record
+        run: |
+          umask 077
+          python3 .github/scripts/gateway_probes.py provision --dist "$RUNNER_TEMP/gateway-dist" \
+            --probes "$RUNNER_TEMP/gateway-probes" >"$RUNNER_TEMP/gateway.env"
+          cat "$RUNNER_TEMP/gateway.env"
+          cat "$RUNNER_TEMP/gateway.env" >>"$GITHUB_ENV"
+      - name: The exact pinned Claude Code (outside the workspace; verified when the runner places it)
+        run: |
+          umask 077
+          url=$(python3 -c 'import sys; sys.path.insert(0, "src"); from claude_multi import acquire, pin, strict_json; c = strict_json.load("src/claude_multi/data/catalog/native-contract.json"); print(acquire.download_url(pin.version(c), pin.host_platform()))')
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$RUNNER_TEMP/claude" "$url"
+          chmod 755 "$RUNNER_TEMP/claude"
+      - name: Read-only interpreter for isolated probes
+        run: |
+          umask 077
+          # setup-python's toolcache executable can be group-writable;
+          # isolated probes deliberately refuse group/other-writable programs.
+          python3 -c 'import os, sys; os.chmod(os.path.realpath(sys.executable), 0o555)'
+      - name: Full suite except the terminal journeys (tests skipped for a missing boundary say so; the distribution tests must run)
+        run: |
+          umask 077
+          python3 tools/test.py --tier full --list | grep -v '^tests.test_tui_pty$' >"$RUNNER_TEMP/modules"
+          mapfile -t modules <"$RUNNER_TEMP/modules"
+          python3 tools/test.py --tier full --claude "$RUNNER_TEMP/claude" --require 'DistributionTests' "${modules[@]}"
+      - name: No Claude Code bytes in the workspace
+        if: always()
+        run: |
+          umask 077
+          rm -f "$RUNNER_TEMP/claude"
+          python3 tools/_build/no_bundle_guard.py .
+
+  pty:
+    # Load-sensitive terminal journeys: their own job, one runner at a time.
+    if: (github.event_name == 'schedule' && vars.CM_SCHEDULES == 'on') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Terminal journeys, serially
+        timeout-minutes: 20
+        run: |
+          umask 077
+          python3 tools/test.py tests.test_tui_pty
+
+  nix:
+    if: (github.event_name == 'schedule' && vars.CM_SCHEDULES == 'on') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Flake checks (the sandbox suite)
+        run: |
+          umask 077
+          nix build --no-link -L .#checks.x86_64-linux.claude-multi
+      - name: Nix and native gateway bytes are identical
+        run: |
+          umask 077
+          nix_out=$(nix build --no-link --print-out-paths .#gateway-linux-amd64)
+          python3 tools/build.py gateway --target linux-amd64 --dist "$RUNNER_TEMP/native"
+          cmp "$nix_out/bin/cli-proxy-api" "$RUNNER_TEMP/native/linux-amd64/cli-proxy-api"
+      - name: The product's indirect garbage-collector root in this disposable Nix store
+        run: |
+          umask 077
+          package=$(nix build --no-link --print-out-paths .#claude-multi)
+          python3 .github/scripts/nix_roots.py "$package"

@@ -1,0 +1,26 @@
+{
+  "aliases": {
+    "claude-multi-muse-spark-high": {
+      "context_tokens": 1000000,
+      "display": "Muse Spark 1.3",
+      "provider": "meta",
+      "proxy_contract": "output-config-high",
+      "since_catalog": 31,
+      "source": "seed:muse-spark",
+      "wire": "muse-spark-1.3"
+    },
+    "claude-multi-muse-spark-xhigh": {
+      "context_tokens": 1000000,
+      "display": "Muse Spark 1.3",
+      "provider": "meta",
+      "proxy_contract": "output-config-xhigh",
+      "since_catalog": 31,
+      "source": "seed:muse-spark",
+      "wire": "muse-spark-1.3"
+    }
+  },
+  "pruned": {},
+  "seeded_through_catalog": 31,
+  "state_root": null,
+  "version": 1
+}

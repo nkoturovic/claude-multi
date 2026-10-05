@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "providers": {
+    "zeta": {
+      "base_url": "https://api.zeta.example/anthropic",
+      "auth_kind": "header",
+      "secret_env": "ZETA_API_KEY"
+    },
+    "idle": {
+      "base_url": "https://idle.example/anthropic",
+      "auth_kind": "bearer",
+      "secret_env": "IDLE_API_KEY",
+      "display": "Idle"
+    }
+  },
+  "models": {
+    "zeta-pro": {
+      "wire_model": "zeta-pro-2",
+      "provider": "zeta",
+      "context_tokens": 300000,
+      "created_via": "manual"
+    },
+    "kimi-side": {
+      "wire_model": "kimi-fixture-side",
+      "provider": "kimi",
+      "context_tokens": 262144,
+      "created_via": "discover",
+      "display": "Kimi side"
+    }
+  }
+}

@@ -1,0 +1,2475 @@
+diff --git a/internal/runtime/executor/claude_executor_execute.go b/internal/runtime/executor/claude_executor_execute.go
+index 14b3d022..09b1503a 100644
+--- a/internal/runtime/executor/claude_executor_execute.go
++++ b/internal/runtime/executor/claude_executor_execute.go
+@@ -275,6 +275,20 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
+ 		matcher := helps.BuildSensitiveWordMatcher(wireSettings.sensitiveWords)
+ 		bodyForUpstream = helps.ObfuscateSensitiveWords(bodyForUpstream, matcher)
+ 	}
++	// Final outbound boundary for third-party Claude-compatible upstreams:
++	// strip the unsupported OpenAI-platform TTL control after translation,
++	// payload rules, cloaking, Claude-message normalization, CLI identity and
++	// sensitive-word obfuscation, and before CCH signing, so the signature
++	// covers the sanitized body and no later transformation can reintroduce
++	// retention. Official Anthropic transport (default base URL or resolved
++	// https://api.anthropic.com) is preserved untouched; a custom or malformed
++	// base URL fails closed as third-party.
++	if claudeUpstreamRequiresRetentionStrip(baseURL) {
++		bodyForUpstream, err = stripPromptCacheRetention(bodyForUpstream)
++		if err != nil {
++			return resp, fmt.Errorf("claude executor: %w", err)
++		}
++	}
+ 	cchBilling := ""
+ 	if cchSigning {
+ 		if !claudeCodeDetection.HelperProfile || claudeBodyNeedsBillingFallback(bodyForUpstream) {
+diff --git a/internal/runtime/executor/claude_executor_stream.go b/internal/runtime/executor/claude_executor_stream.go
+index 8a8e3244..988b095f 100644
+--- a/internal/runtime/executor/claude_executor_stream.go
++++ b/internal/runtime/executor/claude_executor_stream.go
+@@ -267,6 +267,20 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
+ 		matcher := helps.BuildSensitiveWordMatcher(wireSettings.sensitiveWords)
+ 		bodyForUpstream = helps.ObfuscateSensitiveWords(bodyForUpstream, matcher)
+ 	}
++	// Final outbound boundary for third-party Claude-compatible upstreams:
++	// strip the unsupported OpenAI-platform TTL control after translation,
++	// payload rules, cloaking, Claude-message normalization, CLI identity and
++	// sensitive-word obfuscation, and before CCH signing, so the signature
++	// covers the sanitized body and no later transformation can reintroduce
++	// retention. Official Anthropic transport (default base URL or resolved
++	// https://api.anthropic.com) is preserved untouched; a custom or malformed
++	// base URL fails closed as third-party.
++	if claudeUpstreamRequiresRetentionStrip(baseURL) {
++		bodyForUpstream, err = stripPromptCacheRetention(bodyForUpstream)
++		if err != nil {
++			return nil, fmt.Errorf("claude executor: %w", err)
++		}
++	}
+ 	cchBilling := ""
+ 	if cchSigning {
+ 		if !claudeCodeDetection.HelperProfile || claudeBodyNeedsBillingFallback(bodyForUpstream) {
+diff --git a/internal/runtime/executor/claude_executor_tokens.go b/internal/runtime/executor/claude_executor_tokens.go
+index 9e1d6b83..7ef0a372 100644
+--- a/internal/runtime/executor/claude_executor_tokens.go
++++ b/internal/runtime/executor/claude_executor_tokens.go
+@@ -211,6 +211,20 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
+ 	if alignCLICountTokensShape {
+ 		body = util.StripClaudeCodeAttributionSystem(body)
+ 	}
++	// Final outbound boundary for third-party Claude-compatible upstreams:
++	// keep count_tokens payloads consistent with the messages paths. This
++	// upstream count path is reached by official Anthropic transport (which is
++	// preserved untouched) and by delegated providers such as Kimi, whose base
++	// URL is third-party; a custom or malformed base URL fails closed as
++	// third-party. count_tokens has no signing step, so this runs after its
++	// final body transformation.
++	if claudeUpstreamRequiresRetentionStrip(baseURL) {
++		var errStrip error
++		body, errStrip = stripPromptCacheRetention(body)
++		if errStrip != nil {
++			return cliproxyexecutor.Response{}, fmt.Errorf("claude executor: %w", errStrip)
++		}
++	}
+ 	// Runs on the finished body: payload rules can rewrite model and messages
+ 	// long after translation, so an earlier check would not describe the request
+ 	// that is about to be sent.
+diff --git a/internal/runtime/executor/codex_executor_request.go b/internal/runtime/executor/codex_executor_request.go
+index 49f6ccbc..4f50a859 100644
+--- a/internal/runtime/executor/codex_executor_request.go
++++ b/internal/runtime/executor/codex_executor_request.go
+@@ -146,6 +146,16 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
+ 	if identityState.promptCacheKey != "" {
+ 		cache.ID = identityState.promptCacheKey
+ 	}
++	// Final outbound boundary: strip prompt_cache_retention after cache-key
++	// insertion, input-ID sanitization and identity rewriting so no earlier
++	// transformation (payload rules, replay injection, identity confusion) can
++	// leak the unsupported TTL control to the Codex backend. Covers ordinary
++	// /responses (execute and stream), /responses/compact (which has no early
++	// strip upstream) and the image paths. Fails closed.
++	rawJSON, err := stripPromptCacheRetention(rawJSON)
++	if err != nil {
++		return nil, nil, codexIdentityConfuseState{}, fmt.Errorf("codex executor: %w", err)
++	}
+ 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawJSON))
+ 	if err != nil {
+ 		return nil, nil, codexIdentityConfuseState{}, err
+diff --git a/internal/runtime/executor/codex_websockets_execute.go b/internal/runtime/executor/codex_websockets_execute.go
+index 94829bd0..72d8f145 100644
+--- a/internal/runtime/executor/codex_websockets_execute.go
++++ b/internal/runtime/executor/codex_websockets_execute.go
+@@ -86,6 +86,14 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
+ 	clientBody := body
+ 	var identityState codexIdentityConfuseState
+ 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
++	// Final outbound boundary: strip prompt_cache_retention after identity
++	// rewriting and before request logging/frame transmission. Every
++	// response.create frame of this request (first send and retries) is built
++	// from upstreamBody.
++	upstreamBody, err = stripPromptCacheRetention(upstreamBody)
++	if err != nil {
++		return resp, fmt.Errorf("codex websockets executor: %w", err)
++	}
+ 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
+ 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, nativeRequest, opts.Headers)
+ 	applyModelHeaderOverrides(wsHeaders, baseModel)
+diff --git a/internal/runtime/executor/codex_websockets_stream.go b/internal/runtime/executor/codex_websockets_stream.go
+index e42cfe11..a5a631b2 100644
+--- a/internal/runtime/executor/codex_websockets_stream.go
++++ b/internal/runtime/executor/codex_websockets_stream.go
+@@ -815,6 +815,14 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
+ 	clientBody := body
+ 	var identityState codexIdentityConfuseState
+ 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
++	// Final outbound boundary: strip prompt_cache_retention after identity
++	// rewriting and before request logging/frame transmission. The stream
++	// path, its retries, and every duplex response.create/append continuation
++	// build their frames from this prepared upstreamBody.
++	upstreamBody, err = stripPromptCacheRetention(upstreamBody)
++	if err != nil {
++		return nil, fmt.Errorf("codex websockets executor: %w", err)
++	}
+ 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
+ 	applyModelHeaderOverrides(wsHeaders, baseModel)
+ 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
+diff --git a/internal/runtime/executor/meta_executor_execute.go b/internal/runtime/executor/meta_executor_execute.go
+index 914b88a3..f7c2b50c 100644
+--- a/internal/runtime/executor/meta_executor_execute.go
++++ b/internal/runtime/executor/meta_executor_execute.go
+@@ -57,12 +57,19 @@ func (e *MetaExecutor) prepareResponsesRequest(ctx context.Context, req cliproxy
+ 	body = helps.SetStringIfDifferent(body, "model", baseModel)
+ 	body = helps.SetBoolIfDifferent(body, "stream", stream)
+ 	body, _ = sjson.DeleteBytes(body, "generate")
+-	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
+ 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
+ 	body, _ = sjson.DeleteBytes(body, "stream_options")
+ 	body, _ = sjson.DeleteBytes(body, "client_metadata")
+ 	body = normalizeCodexInstructions(body)
+ 	body = sanitizeOpenAIResponsesReasoningEncryptedContent(ctx, "meta executor", body)
++	// Final outbound boundary: the former early retention cleanup (a single
++	// sjson delete, which leaves duplicate top-level keys behind) is folded
++	// into this invariant at the end of the shared preparation used by the
++	// HTTP execute and stream paths. Fails closed.
++	body, errStrip := stripPromptCacheRetention(body)
++	if errStrip != nil {
++		return nil, fmt.Errorf("meta executor: %w", errStrip)
++	}
+ 
+ 	return &metaPreparedRequest{
+ 		baseModel:       baseModel,
+diff --git a/internal/runtime/executor/non_claude_cache_retention.go b/internal/runtime/executor/non_claude_cache_retention.go
+new file mode 100644
+index 00000000..4247bf95
+--- /dev/null
++++ b/internal/runtime/executor/non_claude_cache_retention.go
+@@ -0,0 +1,106 @@
++// Package executor provides runtime execution capabilities for various AI service providers.
++// This file implements the final outbound-boundary sanitizer for prompt_cache_retention,
++// the OpenAI Responses-platform cache TTL control that non-Claude upstreams reject.
++package executor
++
++import (
++	"encoding/json"
++	"fmt"
++	"net/url"
++	"strings"
++
++	"github.com/tidwall/gjson"
++)
++
++// stripPromptCacheRetention removes every top-level prompt_cache_retention
++// field from an outbound JSON request body.
++//
++// prompt_cache_retention is an OpenAI Responses-platform TTL control. The
++// ChatGPT/Codex subscription backend rejects it with HTTP 400
++// ("prompt_cache_retention is not supported on this model"), and the
++// third-party Claude-compatible, xAI and Meta upstreams do not support it
++// either. Historical sanitization was scattered across executor paths and ran
++// before later transformations, and it removed a single occurrence only, so a
++// reintroduced or duplicated field could still leak upstream. This helper is
++// applied at each final outbound boundary — after every transformation that
++// can mutate the body — as an invariant rather than an early cleanup.
++//
++// The helper removes only top-level occurrences, and all of them: a body
++// carrying duplicate prompt_cache_retention keys must leave sanitized as
++// well (sjson.DeleteBytes removes a single occurrence and cannot prove the
++// result). prompt_cache_key and nested prompt_cache_retention entries are
++// preserved. The helper is idempotent and fails closed — callers must not
++// send the body upstream when an error is returned — and enforces a
++// postcondition: the returned body is valid JSON and provably free of the
++// top-level field. An empty or nil body is invalid JSON and fails closed
++// with the same error; there is no body that can be proven retention-free.
++func stripPromptCacheRetention(body []byte) ([]byte, error) {
++	if !gjson.ValidBytes(body) {
++		return nil, fmt.Errorf("strip prompt_cache_retention: body is not valid JSON")
++	}
++	if !gjson.GetBytes(body, "prompt_cache_retention").Exists() {
++		return body, nil
++	}
++	// Rebuilding the top level from a map removes every duplicate occurrence
++	// of the key; re-marshaling preserves the untouched raw values.
++	var obj map[string]json.RawMessage
++	if err := json.Unmarshal(body, &obj); err != nil {
++		return nil, fmt.Errorf("strip prompt_cache_retention: body is not a JSON object: %w", err)
++	}
++	delete(obj, "prompt_cache_retention")
++	updated, err := json.Marshal(obj)
++	if err != nil {
++		return nil, fmt.Errorf("strip prompt_cache_retention: %w", err)
++	}
++	// Postcondition: no outbound body may leave sanitized unless it is valid
++	// JSON and provably free of the top-level field.
++	if !gjson.ValidBytes(updated) || gjson.GetBytes(updated, "prompt_cache_retention").Exists() {
++		return nil, fmt.Errorf("strip prompt_cache_retention: postcondition failed: field still present in sanitized body")
++	}
++	return updated, nil
++}
++
++// claudeUpstreamRequiresRetentionStrip reports whether a Claude-messages
++// request is headed to a third-party Claude-compatible upstream that does not
++// support prompt_cache_retention.
++//
++// Classification is endpoint-first: only the official Anthropic transport is
++// preserved — the empty base URL (which the Claude executors resolve to
++// https://api.anthropic.com) or a resolved HTTPS api.anthropic.com endpoint
++// with the default (or explicit 443) port and no userinfo; the hostname is
++// matched case-insensitively and any path is accepted. Every other base URL —
++// custom hosts, non-HTTPS schemes, non-default ports, userinfo-bearing URLs,
++// malformed values — fails closed as third-party regardless of token shape:
++// an OAuth-shaped token never makes a non-official endpoint official.
++func claudeUpstreamRequiresRetentionStrip(baseURL string) bool {
++	trimmed := strings.TrimSpace(baseURL)
++	if trimmed == "" {
++		// Default route: resolved by the executors to the official endpoint.
++		return false
++	}
++	parsed, err := url.Parse(trimmed)
++	if err != nil {
++		return true
++	}
++	// Userinfo never makes an endpoint official; upstream's first-party gate
++	// (helps.IsAnthropicUpstreamURL) rejects it as well.
++	if parsed.User != nil {
++		return true
++	}
++	if !strings.EqualFold(parsed.Scheme, "https") {
++		return true
++	}
++	if !strings.EqualFold(parsed.Hostname(), "api.anthropic.com") {
++		return true
++	}
++	port := parsed.Port()
++	if port != "" && port != "443" {
++		return true
++	}
++	// An explicit but invalid port (e.g. api.anthropic.com:abc) parses to an
++	// empty Port(): fail closed rather than treat the endpoint as official.
++	if port == "" && strings.Contains(parsed.Host, ":") {
++		return true
++	}
++	return false
++}
+diff --git a/internal/runtime/executor/non_claude_cache_retention_test.go b/internal/runtime/executor/non_claude_cache_retention_test.go
+new file mode 100644
+index 0000000..732f123
+--- /dev/null
++++ b/internal/runtime/executor/non_claude_cache_retention_test.go
+@@ -0,0 +1,1791 @@
++package executor
++
++import (
++	"bytes"
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gorilla/websocket"
++	"github.com/pierrec/xxHash/xxHash64"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/translator"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++	"github.com/tidwall/gjson"
++	"github.com/tidwall/sjson"
++)
++
++// These tests pin the final outbound-boundary invariant for
++// prompt_cache_retention: non-Claude upstreams (Codex, third-party
++// Claude-compatible endpoints, xAI, Meta) must never receive the OpenAI
++// Responses-platform TTL control, while official Anthropic transport and
++// supported OpenAI-compatible Responses routes must keep it. All upstreams
++// are loopback fakes or injected round-trippers; no external network access
++// is involved.
++
++func assertRetentionStripped(t *testing.T, body []byte) {
++	t.Helper()
++	if gjson.GetBytes(body, "prompt_cache_retention").Exists() {
++		t.Fatalf("upstream body still contains prompt_cache_retention: %s", string(body))
++	}
++}
++
++func assertRetentionPresent(t *testing.T, body []byte) {
++	t.Helper()
++	if !gjson.GetBytes(body, "prompt_cache_retention").Exists() {
++		t.Fatalf("upstream body lost prompt_cache_retention: %s", string(body))
++	}
++}
++
++// assertCCHMatchesSanitizedBody recomputes the CCH over the captured outbound
++// body the way the 7.3 signer defines it (the five cch digits zeroed in
++// place, the normalized hash view built, then xxHash64 with the CCH seed) and
++// fails unless the emitted cch equals it. The hash view keeps
++// prompt_cache_retention (it is not a CCH-excluded member), so a match proves
++// the signature was computed over the sanitized body that actually left —
++// i.e. the retention strip ran before signing, not after.
++func assertCCHMatchesSanitizedBody(t *testing.T, body []byte) {
++	t.Helper()
++	billingHeader := gjson.GetBytes(body, "system.0.text").String()
++	if !strings.HasPrefix(billingHeader, "x-anthropic-billing-header:") {
++		t.Fatalf("system.0.text = %q, want x-anthropic-billing-header; body=%s", billingHeader, string(body))
++	}
++	offset, ok := claudeBillingCCHDigitsOffset(body)
++	if !ok {
++		t.Fatalf("no cch=xxxxx in billing header %q; body=%s", billingHeader, string(body))
++	}
++	emitted := string(body[offset : offset+claudeCCHLength])
++	if emitted == claudeCCHZero {
++		t.Fatalf("emitted cch is still 00000, signing did not run; body=%s", string(body))
++	}
++	unsignedBody := bytes.Clone(body)
++	copy(unsignedBody[offset:offset+claudeCCHLength], claudeCCHZero)
++	hashView, err := normalizeClaudeCCHInput(unsignedBody)
++	if err != nil {
++		t.Fatalf("recompute CCH hash view: %v", err)
++	}
++	want := fmt.Sprintf("%05x", xxHash64.Checksum(hashView, claudeCCHSeed)&0xFFFFF)
++	if emitted != want {
++		t.Fatalf("emitted cch = %q, want %q (hash of the sanitized outbound body); body=%s", emitted, want, string(body))
++	}
++}
++
++// retentionTestClaudeOAuthIdentity is the minimal persisted Claude OAuth
++// identity the 7.3 executors require before they build an OAuth-shaped
++// request (account UUID plus a stable device ID); no refresh or profile call
++// is made with it.
++func retentionTestClaudeOAuthIdentity() map[string]any {
++	return map[string]any{
++		"account_uuid":      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
++		"claude_device_ids": []string{"0000000000000000000000000000000000000000000000000000000000000000"},
++	}
++}
++
++// Shared sanitizer helper.
++
++func TestStripPromptCacheRetentionRemovesOnlyTopLevelField(t *testing.T) {
++	body := []byte(`{"model":"gpt-5.6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","prompt_cache_retention":"nested"}]}`)
++	out, err := stripPromptCacheRetention(body)
++	if err != nil {
++		t.Fatalf("stripPromptCacheRetention() error = %v", err)
++	}
++	assertRetentionStripped(t, out)
++	if got := gjson.GetBytes(out, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(out))
++	}
++	if got := gjson.GetBytes(out, "input.0.prompt_cache_retention").String(); got != "nested" {
++		t.Fatalf("nested prompt_cache_retention = %q, want preserved nested; body=%s", got, string(out))
++	}
++	if got := gjson.GetBytes(out, "model").String(); got != "gpt-5.6-sol" {
++		t.Fatalf("model = %q, want gpt-5.6-sol; body=%s", got, string(out))
++	}
++}
++
++func TestStripPromptCacheRetentionRemovesAllDuplicateTopLevelFields(t *testing.T) {
++	// Duplicate top-level keys: the sanitizer must remove every occurrence,
++	// not just the first one a JSON lookup finds.
++	body := []byte(`{"prompt_cache_retention":"24h","model":"gpt-5.6-sol","prompt_cache_retention":"48h","prompt_cache_key":"cache-123","prompt_cache_retention":"72h","input":[{"type":"message","prompt_cache_retention":"nested"}]}`)
++	out, err := stripPromptCacheRetention(body)
++	if err != nil {
++		t.Fatalf("stripPromptCacheRetention() error = %v", err)
++	}
++	assertRetentionStripped(t, out)
++	if got := gjson.GetBytes(out, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(out))
++	}
++	if got := gjson.GetBytes(out, "input.0.prompt_cache_retention").String(); got != "nested" {
++		t.Fatalf("nested prompt_cache_retention = %q, want preserved nested; body=%s", got, string(out))
++	}
++	if got := gjson.GetBytes(out, "model").String(); got != "gpt-5.6-sol" {
++		t.Fatalf("model = %q, want gpt-5.6-sol; body=%s", got, string(out))
++	}
++}
++
++func TestStripPromptCacheRetentionAbsentReturnsBodyUnchanged(t *testing.T) {
++	body := []byte(`{"model":"gpt-5.6-sol","prompt_cache_key":"cache-123","input":[]}`)
++	out, err := stripPromptCacheRetention(body)
++	if err != nil {
++		t.Fatalf("stripPromptCacheRetention() error = %v", err)
++	}
++	if !bytes.Equal(out, body) {
++		t.Fatalf("body mutated when field absent: %s", string(out))
++	}
++}
++
++func TestStripPromptCacheRetentionIdempotent(t *testing.T) {
++	body := []byte(`{"prompt_cache_retention":"24h","model":"gpt-5.6-sol"}`)
++	once, err := stripPromptCacheRetention(body)
++	if err != nil {
++		t.Fatalf("stripPromptCacheRetention() error = %v", err)
++	}
++	twice, err := stripPromptCacheRetention(once)
++	if err != nil {
++		t.Fatalf("stripPromptCacheRetention() second call error = %v", err)
++	}
++	if !bytes.Equal(once, twice) {
++		t.Fatalf("strip is not idempotent: once=%s twice=%s", string(once), string(twice))
++	}
++}
++
++func TestStripPromptCacheRetentionFailsClosedOnMalformedJSON(t *testing.T) {
++	for _, body := range [][]byte{
++		[]byte(`{"prompt_cache_retention":"24h"`),
++		[]byte(`not json at all`),
++		// Empty and nil bodies are invalid JSON and must fail closed too:
++		// there is no body that can be proven retention-free.
++		[]byte{},
++		nil,
++	} {
++		if _, err := stripPromptCacheRetention(body); err == nil {
++			t.Fatalf("stripPromptCacheRetention(%q, len=%d) error = nil, want fail-closed error", string(body), len(body))
++		}
++	}
++}
++
++func TestClaudeUpstreamRequiresRetentionStripEndpointFirstClassification(t *testing.T) {
++	cases := []struct {
++		name    string
++		baseURL string
++		want    bool
++	}{
++		// Official Anthropic transport is preserved.
++		{name: "default empty base url", baseURL: "", want: false},
++		{name: "official anthropic base url", baseURL: "https://api.anthropic.com", want: false},
++		{name: "official anthropic base url with path", baseURL: "https://api.anthropic.com/v1", want: false},
++		{name: "official anthropic base url uppercase host", baseURL: "https://API.ANTHROPIC.COM/v1/messages", want: false},
++		{name: "official anthropic base url with default port", baseURL: "https://api.anthropic.com:443/v1", want: false},
++		{name: "official anthropic base url with default port only", baseURL: "https://api.anthropic.com:443", want: false},
++		// Anything else fails closed as third-party, regardless of token shape.
++		{name: "plain http scheme", baseURL: "http://api.anthropic.com", want: true},
++		{name: "non-default port", baseURL: "https://api.anthropic.com:8443", want: true},
++		{name: "invalid explicit port", baseURL: "https://api.anthropic.com:abc", want: true},
++		{name: "lookalike host", baseURL: "https://api.anthropic.com.evil.example", want: true},
++		{name: "userinfo on official host", baseURL: "https://user@api.anthropic.com", want: true},
++		{name: "userinfo with password on official host", baseURL: "https://user:pass@api.anthropic.com:443/v1", want: true},
++		{name: "official host as userinfo", baseURL: "https://api.anthropic.com@evil.example", want: true},
++		{name: "kimi coding base url", baseURL: "https://api.kimi.com/coding", want: true},
++		{name: "qwen maas base url", baseURL: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic", want: true},
++		{name: "deepseek anthropic base url", baseURL: "https://api.deepseek.com/anthropic", want: true},
++		{name: "openrouter base url", baseURL: "https://openrouter.ai/api", want: true},
++		{name: "unparseable base url fails closed", baseURL: "://not a url", want: true},
++		{name: "schemeless base url fails closed", baseURL: "api.anthropic.com/v1", want: true},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			if got := claudeUpstreamRequiresRetentionStrip(tc.baseURL); got != tc.want {
++				t.Fatalf("claudeUpstreamRequiresRetentionStrip(%q) = %v, want %v", tc.baseURL, got, tc.want)
++			}
++		})
++	}
++}
++
++func TestCodexExecutorCacheHelperFailsClosedOnMalformedBody(t *testing.T) {
++	req := cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: []byte(`{"model":"gpt-5.6-sol"}`),
++	}
++	// Malformed, empty, and nil rawJSON: no upstream request may be
++	// constructed when sanitization cannot prove the body retention-free.
++	for _, rawJSON := range [][]byte{
++		[]byte(`{"prompt_cache_retention":"24h"`),
++		[]byte{},
++		nil,
++	} {
++		executor := &CodexExecutor{}
++		_, _, _, err := executor.cacheHelper(
++			context.Background(),
++			sdktranslator.FromString("openai-response"),
++			"https://example.com/responses",
++			nil,
++			req,
++			req.Payload,
++			rawJSON,
++		)
++		if err == nil {
++			t.Fatalf("cacheHelper() error = nil, want fail-closed error on body %q (len=%d)", string(rawJSON), len(rawJSON))
++		}
++	}
++}
++
++// Codex HTTP: ordinary /responses (non-stream and stream).
++
++func TestCodexExecutorExecuteStripsRetentionFromFinalUpstreamBody(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}` + "\n\n"))
++	}))
++	defer server.Close()
++
++	executor := NewCodexExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"base_url": server.URL,
++		"api_key":  "sk-test",
++	}}
++	payload := []byte(`{"model":"gpt-5.6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("openai-response"),
++		Stream:       false,
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(gotBody))
++	}
++}
++
++func TestCodexExecutorExecuteStripsAllDuplicateRetentionKeysFromFinalUpstreamBody(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}` + "\n\n"))
++	}))
++	defer server.Close()
++
++	executor := NewCodexExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"base_url": server.URL,
++		"api_key":  "sk-test",
++	}}
++	payload := []byte(`{"model":"gpt-5.6-sol","prompt_cache_retention":"24h","prompt_cache_retention":"48h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("openai-response"),
++		Stream:       false,
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(gotBody))
++	}
++}
++
++func TestCodexExecutorExecuteStreamStripsRetentionFromFinalUpstreamBody(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}` + "\n\n"))
++	}))
++	defer server.Close()
++
++	executor := NewCodexExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"base_url": server.URL,
++		"api_key":  "sk-test",
++	}}
++	payload := []byte(`{"model":"gpt-5.6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
++	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("openai-response"),
++	})
++	if err != nil {
++		t.Fatalf("ExecuteStream() error = %v", err)
++	}
++	for chunk := range result.Chunks {
++		if chunk.Err != nil {
++			t.Fatalf("stream chunk error = %v", chunk.Err)
++		}
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(gotBody))
++	}
++}
++
++// Codex HTTP: /responses/compact. The unpatched compact path has no early
++// strip at all, so these tests fail on unpatched 7.2.80.
++
++func TestCodexExecutorExecuteCompactStripsRetentionFromFinalUpstreamBody(t *testing.T) {
++	var gotPath string
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		gotPath = r.URL.Path
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
++	}))
++	defer server.Close()
++
++	executor := NewCodexExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"base_url": server.URL,
++		"api_key":  "sk-test",
++	}}
++	payload := []byte(`{"model":"gpt-5.6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":"history"},{"type":"compaction_trigger"}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("openai-response"),
++		Alt:          "responses/compact",
++		Stream:       false,
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if gotPath != "/responses/compact" {
++		t.Fatalf("path = %q, want /responses/compact", gotPath)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(gotBody))
++	}
++}
++
++func TestCodexExecutorExecuteCompactPayloadOverrideRetentionStrippedAtBoundary(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
++	}))
++	defer server.Close()
++
++	// The override rule reintroduces prompt_cache_retention during payload
++	// rule application (after translation); the final boundary must still
++	// strip it before the request leaves.
++	executor := NewCodexExecutor(&config.Config{
++		Payload: config.PayloadConfig{
++			Override: []config.PayloadRule{{
++				Models: []config.PayloadModelRule{{Name: "*"}},
++				Params: map[string]any{"prompt_cache_retention": "24h"},
++			}},
++		},
++	})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"base_url": server.URL,
++		"api_key":  "sk-test",
++	}}
++	payload := []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":"history"},{"type":"compaction_trigger"}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("openai-response"),
++		Alt:          "responses/compact",
++		Stream:       false,
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++}
++
++// Codex HTTP: identity confusion. The boundary must run after identity
++// rewriting and must not clobber the rewritten cache key.
++
++func TestCodexExecutorExecuteIdentityConfuseStripsRetentionAtFinalBoundary(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}` + "\n\n"))
++	}))
++	defer server.Close()
++
++	executor := NewCodexExecutor(&config.Config{
++		Routing: config.RoutingConfig{Strategy: "fill-first"},
++		Codex:   config.CodexConfig{IdentityConfuse: true},
++	})
++	auth := &cliproxyauth.Auth{
++		ID: "auth-confuse-1",
++		Attributes: map[string]string{
++			"base_url": server.URL,
++			"api_key":  "sk-test",
++		},
++	}
++	payload := []byte(`{"model":"gpt-5.6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("openai-response"),
++		Stream:       false,
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	// The identity rewrite happened before the boundary and must survive it:
++	// the cache key is the confused UUID, never the client-declared one.
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got == "" || got == "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want identity-confused UUID; body=%s", got, string(gotBody))
++	}
++}
++
++// Codex WebSocket: response.create frames (non-stream and stream). The
++// unpatched stream path never strips the field, so that test fails on
++// unpatched 7.2.80.
++
++func TestCodexWebsocketsExecuteStripsRetentionFromResponseCreate(t *testing.T) {
++	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
++	capturedPayload := make(chan []byte, 1)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		conn, err := upgrader.Upgrade(w, r, nil)
++		if err != nil {
++			t.Errorf("upgrade websocket: %v", err)
++			return
++		}
++		defer func() { _ = conn.Close() }()
++
++		_, payload, errRead := conn.ReadMessage()
++		if errRead != nil {
++			t.Errorf("read upstream websocket message: %v", errRead)
++			return
++		}
++		capturedPayload <- bytes.Clone(payload)
++
++		completed := []byte(`{"type":"response.completed","response":{"id":"resp-1","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}`)
++		if errWrite := conn.WriteMessage(websocket.TextMessage, completed); errWrite != nil {
++			t.Errorf("write completed websocket message: %v", errWrite)
++		}
++	}))
++	defer server.Close()
++
++	exec := NewCodexWebsocketsExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "sk-test", "base_url": server.URL}}
++	req := cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: []byte(`{"model":"gpt-5.6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":"hello"}]}`),
++	}
++	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-response")}
++
++	if _, err := exec.Execute(context.Background(), auth, req, opts); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++
++	select {
++	case payload := <-capturedPayload:
++		if got := gjson.GetBytes(payload, "type").String(); got != "response.create" {
++			t.Fatalf("upstream type = %s, want response.create; payload=%s", got, string(payload))
++		}
++		assertRetentionStripped(t, payload)
++		if got := gjson.GetBytes(payload, "prompt_cache_key").String(); got != "cache-123" {
++			t.Fatalf("prompt_cache_key = %q, want cache-123; payload=%s", got, string(payload))
++		}
++		if !gjson.GetBytes(payload, "input").Exists() {
++			t.Fatalf("input missing from response.create frame: %s", string(payload))
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timed out waiting for upstream websocket payload")
++	}
++}
++
++func TestCodexWebsocketsExecuteStreamStripsRetentionFromResponseCreate(t *testing.T) {
++	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
++	capturedPayload := make(chan []byte, 1)
++	delta := []byte(`{"type":"response.output_text.delta","delta":"hello"}`)
++	completed := []byte(`{"type":"response.completed","response":{"id":"resp-1","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}`)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		conn, err := upgrader.Upgrade(w, r, nil)
++		if err != nil {
++			t.Errorf("upgrade websocket: %v", err)
++			return
++		}
++		defer func() { _ = conn.Close() }()
++
++		_, payload, errRead := conn.ReadMessage()
++		if errRead != nil {
++			t.Errorf("read upstream websocket message: %v", errRead)
++			return
++		}
++		capturedPayload <- bytes.Clone(payload)
++		if errWrite := conn.WriteMessage(websocket.TextMessage, delta); errWrite != nil {
++			t.Errorf("write delta websocket message: %v", errWrite)
++			return
++		}
++		if errWrite := conn.WriteMessage(websocket.TextMessage, completed); errWrite != nil {
++			t.Errorf("write completed websocket message: %v", errWrite)
++			return
++		}
++	}))
++	defer server.Close()
++
++	exec := NewCodexWebsocketsExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "sk-test", "base_url": server.URL}}
++	req := cliproxyexecutor.Request{
++		Model:   "gpt-5.6-sol",
++		Payload: []byte(`{"model":"gpt-5.6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":"hello"}]}`),
++	}
++	opts := cliproxyexecutor.Options{
++		SourceFormat:   sdktranslator.FromString("openai-response"),
++		ResponseFormat: sdktranslator.FromString("openai-response"),
++	}
++	ctx := cliproxyexecutor.WithDownstreamWebsocket(context.Background())
++
++	result, err := exec.ExecuteStream(ctx, auth, req, opts)
++	if err != nil {
++		t.Fatalf("ExecuteStream() error = %v", err)
++	}
++
++	select {
++	case payload := <-capturedPayload:
++		if got := gjson.GetBytes(payload, "type").String(); got != "response.create" {
++			t.Fatalf("upstream type = %s, want response.create; payload=%s", got, string(payload))
++		}
++		assertRetentionStripped(t, payload)
++		if got := gjson.GetBytes(payload, "prompt_cache_key").String(); got != "cache-123" {
++			t.Fatalf("prompt_cache_key = %q, want cache-123; payload=%s", got, string(payload))
++		}
++		if !gjson.GetBytes(payload, "input").Exists() {
++			t.Fatalf("input missing from response.create frame: %s", string(payload))
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timed out waiting for upstream websocket payload")
++	}
++
++	select {
++	case chunk, ok := <-result.Chunks:
++		if !ok {
++			t.Fatal("stream closed before first chunk")
++		}
++		if chunk.Err != nil {
++			t.Fatalf("first chunk error = %v", chunk.Err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timed out waiting for first stream chunk")
++	}
++}
++
++// Claude-messages routes: third-party Claude-compatible upstreams must
++// never receive the field, even with an OAuth-shaped token; only the
++// official Anthropic endpoint is preserved. The strip/classification tests
++// below fail on unpatched 7.2.80, which has no strip in the Claude executor
++// at all.
++
++func TestClaudeExecutorExecuteStripsRetentionForThirdPartyBaseURL(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","model":"kimi-k2.5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`))
++	}))
++	defer server.Close()
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"api_key":  "key-123",
++		"base_url": server.URL,
++	}}
++	payload := []byte(`{"prompt_cache_retention":"24h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "kimi-k2.5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "messages.0.role").String(); got != "user" {
++		t.Fatalf("messages.0.role = %q, want user; body=%s", got, string(gotBody))
++	}
++}
++
++func TestClaudeExecutorExecuteStripsAllDuplicateRetentionKeysForThirdPartyBaseURL(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","model":"kimi-k2.5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`))
++	}))
++	defer server.Close()
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"api_key":  "key-123",
++		"base_url": server.URL,
++	}}
++	payload := []byte(`{"prompt_cache_retention":"24h","prompt_cache_retention":"48h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "kimi-k2.5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "messages.0.role").String(); got != "user" {
++		t.Fatalf("messages.0.role = %q, want user; body=%s", got, string(gotBody))
++	}
++}
++
++func TestClaudeExecutorExecuteStripsRetentionForThirdPartyBaseURLDespiteOAuthShapedToken(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","model":"kimi-k2.5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`))
++	}))
++	defer server.Close()
++
++	// Endpoint-first: an OAuth-shaped token never upgrades a custom base URL
++	// to official transport.
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		Attributes: map[string]string{
++			"api_key":  "sk-ant-oat-test-token",
++			"base_url": server.URL,
++		},
++		Metadata: retentionTestClaudeOAuthIdentity(),
++	}
++	payload := []byte(`{"prompt_cache_retention":"24h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "kimi-k2.5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++}
++
++// CCH-signing ordering: for third-party base URLs the strip runs after
++// Claude-message normalization and before signing, so the emitted CCH is a
++// hash of the sanitized outbound body — never of a body still carrying
++// prompt_cache_retention — and no later transformation can reintroduce the
++// field. An OAuth-shaped token enables the default CCH signing path.
++
++func TestClaudeExecutorExecuteCCHMatchesSanitizedBodyForThirdPartyBaseURLWithOAuthToken(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","model":"kimi-k2.5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`))
++	}))
++	defer server.Close()
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		Attributes: map[string]string{
++			"api_key":  "sk-ant-oat-test-token",
++			"base_url": server.URL,
++		},
++		Metadata: retentionTestClaudeOAuthIdentity(),
++	}
++	payload := []byte(`{"prompt_cache_retention":"24h","system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63.0; cc_entrypoint=claude_code; cch=00000;"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "kimi-k2.5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	assertCCHMatchesSanitizedBody(t, gotBody)
++}
++
++func TestClaudeExecutorExecuteStreamCCHMatchesSanitizedBodyForThirdPartyBaseURLWithOAuthToken(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte(strings.Join([]string{
++			`event: message_start`,
++			`data: {"type":"message_start","message":{"id":"msg_123","model":"kimi-k2.5"}}`,
++			`event: content_block_delta`,
++			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
++			`event: message_delta`,
++			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":2,"output_tokens":1}}`,
++			`event: message_stop`,
++			`data: {"type":"message_stop"}`,
++			``,
++		}, "\n")))
++	}))
++	defer server.Close()
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		Attributes: map[string]string{
++			"api_key":  "sk-ant-oat-test-token",
++			"base_url": server.URL,
++		},
++		Metadata: retentionTestClaudeOAuthIdentity(),
++	}
++	payload := []byte(`{"prompt_cache_retention":"24h","system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63.0; cc_entrypoint=claude_code; cch=00000;"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "kimi-k2.5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	})
++	if err != nil {
++		t.Fatalf("ExecuteStream() error = %v", err)
++	}
++	for chunk := range result.Chunks {
++		if chunk.Err != nil {
++			t.Fatalf("stream chunk error = %v", chunk.Err)
++		}
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	assertCCHMatchesSanitizedBody(t, gotBody)
++}
++
++func TestClaudeExecutorCountTokensNeverLeaksRetentionFromMalformedThirdPartyPayload(t *testing.T) {
++	for _, payload := range [][]byte{
++		[]byte(`{"prompt_cache_retention":"24h"`),
++		// Empty payload: the boundary must fail closed (no upstream request)
++		// or the pipeline must repair it into a retention-free body — an
++		// empty or unprovable body never reaches the upstream as-is.
++		[]byte{},
++	} {
++		t.Run(string(payload), func(t *testing.T) {
++			upstreamHits := 0
++			var gotBody []byte
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				upstreamHits++
++				body, errRead := io.ReadAll(r.Body)
++				if errRead != nil {
++					t.Fatalf("read body: %v", errRead)
++				}
++				gotBody = bytes.Clone(body)
++				w.Header().Set("Content-Type", "application/json")
++				_, _ = w.Write([]byte(`{"input_tokens":5}`))
++			}))
++			defer server.Close()
++
++			executor := NewClaudeExecutor(&config.Config{})
++			auth := &cliproxyauth.Auth{Attributes: map[string]string{
++				"api_key":  "key-123",
++				"base_url": server.URL,
++			}}
++			_, err := executor.CountTokens(context.Background(), auth, cliproxyexecutor.Request{
++				Model:   "kimi-k2.5",
++				Payload: payload,
++			}, cliproxyexecutor.Options{
++				SourceFormat: sdktranslator.FromString("claude"),
++			})
++			// Two acceptable outcomes, both leak-free: fail closed at the
++			// boundary (no upstream request), or the pipeline's own repair
++			// upstream of the boundary (which drops the malformed content)
++			// followed by a retention-free upstream body.
++			if err != nil {
++				if upstreamHits != 0 {
++					t.Fatalf("upstream received %d requests despite fail-closed error: %v", upstreamHits, err)
++				}
++				return
++			}
++			if upstreamHits != 1 {
++				t.Fatalf("upstream received %d requests, want 1", upstreamHits)
++			}
++			if len(gotBody) == 0 {
++				t.Fatal("expected captured upstream body")
++			}
++			assertRetentionStripped(t, gotBody)
++		})
++	}
++}
++
++func TestClaudeExecutorExecuteStreamStripsRetentionForThirdPartyBaseURL(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte(strings.Join([]string{
++			`event: message_start`,
++			`data: {"type":"message_start","message":{"id":"msg_123","model":"kimi-k2.5"}}`,
++			`event: content_block_delta`,
++			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
++			`event: message_delta`,
++			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":2,"output_tokens":1}}`,
++			`event: message_stop`,
++			`data: {"type":"message_stop"}`,
++			``,
++		}, "\n")))
++	}))
++	defer server.Close()
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"api_key":  "key-123",
++		"base_url": server.URL,
++	}}
++	payload := []byte(`{"prompt_cache_retention":"24h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "kimi-k2.5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	})
++	if err != nil {
++		t.Fatalf("ExecuteStream() error = %v", err)
++	}
++	for chunk := range result.Chunks {
++		if chunk.Err != nil {
++			t.Fatalf("stream chunk error = %v", chunk.Err)
++		}
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++}
++
++// On 7.3 a configured third-party Claude-compatible base URL (claude-api-key
++// with a custom base-url) no longer sends count_tokens upstream: upstream
++// keeps local estimation for every non-first-party origin. No request means
++// no leak; if a later upstream re-enables the hop, the body must still be
++// retention-free, which the boundary in countTokensUpstream guarantees (the
++// delegated Kimi count_tokens test exercises that boundary directly).
++func TestClaudeExecutorCountTokensStripsRetentionForThirdPartyBaseURL(t *testing.T) {
++	upstreamHits := 0
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		upstreamHits++
++		if r.URL.Path != "/v1/messages/count_tokens" {
++			t.Errorf("path = %q, want /v1/messages/count_tokens", r.URL.Path)
++		}
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Errorf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"input_tokens":5}`))
++	}))
++	defer server.Close()
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"api_key":  "key-123",
++		"base_url": server.URL,
++	}}
++	payload := retentionDuplicatePayload(t, `{"prompt_cache_retention":"24h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	if _, err := executor.CountTokens(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "kimi-k2.5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	}); err != nil {
++		t.Fatalf("CountTokens() error = %v", err)
++	}
++	if upstreamHits == 0 {
++		return
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++}
++
++// Official Anthropic transport: the sanitizer must leave these branches
++// untouched. A loopback round-tripper substitutes the network hop, so the
++// official-looking base URL never reaches the real endpoint.
++
++func TestClaudeExecutorExecutePreservesRetentionForOfficialAnthropicEndpoint(t *testing.T) {
++	var gotBody []byte
++	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
++		body, errRead := io.ReadAll(req.Body)
++		if errRead != nil {
++			return nil, errRead
++		}
++		gotBody = bytes.Clone(body)
++		return &http.Response{
++			StatusCode: 200,
++			Header:     http.Header{"Content-Type": []string{"application/json"}},
++			Body:       io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","model":"claude-sonnet-4-5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)),
++		}, nil
++	})
++	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", rt)
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		Attributes: map[string]string{
++			"api_key":  "sk-ant-oat-test-token",
++			"base_url": "https://api.anthropic.com",
++		},
++		Metadata: retentionTestClaudeOAuthIdentity(),
++	}
++	payload := []byte(`{"prompt_cache_retention":"24h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(ctx, auth, cliproxyexecutor.Request{
++		Model:   "claude-sonnet-4-5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionPresent(t, gotBody)
++}
++
++func TestClaudeExecutorCountTokensPreservesRetentionForOfficialAnthropicEndpoint(t *testing.T) {
++	var gotBody []byte
++	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
++		body, errRead := io.ReadAll(req.Body)
++		if errRead != nil {
++			return nil, errRead
++		}
++		gotBody = bytes.Clone(body)
++		return &http.Response{
++			StatusCode: 200,
++			Header:     http.Header{"Content-Type": []string{"application/json"}},
++			Body:       io.NopCloser(strings.NewReader(`{"input_tokens":5}`)),
++		}, nil
++	})
++	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", rt)
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"api_key":  "key-123",
++		"base_url": "https://API.ANTHROPIC.COM:443",
++	}}
++	payload := []byte(`{"prompt_cache_retention":"24h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	if _, err := executor.CountTokens(ctx, auth, cliproxyexecutor.Request{
++		Model:   "claude-sonnet-4-5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	}); err != nil {
++		t.Fatalf("CountTokens() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionPresent(t, gotBody)
++}
++
++// xAI: HTTP and WebSocket preparation share prepareResponsesRequestTo. The
++// early retention cleanup was folded into the single final boundary, so the
++// field now survives every intermediate transformation and must be removed
++// exactly once at the boundary.
++
++func TestXAIExecutorExecuteStripsRetentionAtFinalBoundary(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":0,\"status\":\"completed\",\"model\":\"grok-4.3\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"))
++	}))
++	defer server.Close()
++
++	exec := NewXAIExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		ID:       "xai-auth",
++		Provider: "xai",
++		Attributes: map[string]string{
++			"base_url":  server.URL,
++			"auth_kind": "oauth",
++		},
++		Metadata: map[string]any{"access_token": "xai-token"},
++	}
++	_, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "grok-4.3",
++		Payload: []byte(`{"model":"grok-4.3","prompt_cache_retention":"24h","input":[{"role":"user","content":"hello"}]}`),
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FormatOpenAIResponse,
++		Stream:       false,
++		Metadata: map[string]any{
++			cliproxyexecutor.ExecutionSessionMetadataKey: "conv-xai-1",
++		},
++	})
++	if err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "conv-xai-1" {
++		t.Fatalf("prompt_cache_key = %q, want conv-xai-1; body=%s", got, string(gotBody))
++	}
++}
++
++func TestXAIWebsocketsExecuteStreamStripsRetentionAtFinalBoundary(t *testing.T) {
++	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
++	capturedPayload := make(chan []byte, 1)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		conn, err := upgrader.Upgrade(w, r, nil)
++		if err != nil {
++			t.Errorf("upgrade websocket: %v", err)
++			return
++		}
++		defer func() { _ = conn.Close() }()
++
++		_, payload, errRead := conn.ReadMessage()
++		if errRead != nil {
++			t.Errorf("read upstream websocket message: %v", errRead)
++			return
++		}
++		capturedPayload <- bytes.Clone(payload)
++		completed := []byte(`{"type":"response.completed","response":{"id":"resp-xai-1","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}`)
++		if errWrite := conn.WriteMessage(websocket.TextMessage, completed); errWrite != nil {
++			t.Errorf("write completed websocket message: %v", errWrite)
++		}
++	}))
++	defer server.Close()
++
++	exec := NewXAIWebsocketsExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		ID:       "xai-auth",
++		Provider: "xai",
++		Attributes: map[string]string{
++			"base_url":   server.URL,
++			"websockets": "true",
++		},
++		Metadata: map[string]any{"access_token": "xai-token"},
++	}
++	req := cliproxyexecutor.Request{
++		Model:   "grok-4.3",
++		Payload: []byte(`{"model":"grok-4.3","stream":true,"prompt_cache_retention":"24h","input":[{"type":"message","role":"user","content":"hello"}]}`),
++	}
++	opts := cliproxyexecutor.Options{
++		SourceFormat:   sdktranslator.FormatOpenAIResponse,
++		ResponseFormat: sdktranslator.FormatOpenAIResponse,
++		Metadata: map[string]any{
++			cliproxyexecutor.ExecutionSessionMetadataKey: "retention-xai-ws-session",
++		},
++	}
++	ctx := cliproxyexecutor.WithDownstreamWebsocket(context.Background())
++
++	result, err := exec.ExecuteStream(ctx, auth, req, opts)
++	if err != nil {
++		t.Fatalf("ExecuteStream() error = %v", err)
++	}
++
++	select {
++	case payload := <-capturedPayload:
++		if got := gjson.GetBytes(payload, "type").String(); got != "response.create" {
++			t.Fatalf("type = %q, want response.create; payload=%s", got, string(payload))
++		}
++		assertRetentionStripped(t, payload)
++		if got := gjson.GetBytes(payload, "prompt_cache_key").String(); got != "retention-xai-ws-session" {
++			t.Fatalf("prompt_cache_key = %q, want retention-xai-ws-session; payload=%s", got, string(payload))
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timed out waiting for upstream websocket payload")
++	}
++
++	select {
++	case chunk, ok := <-result.Chunks:
++		if !ok {
++			t.Fatal("stream closed before completed chunk")
++		}
++		if chunk.Err != nil {
++			t.Fatalf("chunk error = %v", chunk.Err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timed out waiting for completed chunk")
++	}
++}
++
++// The genuine non-stream OpenAI-compatible /responses/compact route supports
++// the field and is the negative guard against global stripping: the field must
++// survive intact there. OpenAI-compatible chat completions (non-stream, and
++// every stream, whatever its Alt) strip it at their final boundary.
++
++func TestOpenAICompatExecutorPreservesRetentionForResponsesRoute(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
++	}))
++	defer server.Close()
++
++	executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"base_url": server.URL + "/v1",
++		"api_key":  "test",
++	}}
++	payload := []byte(`{"model":"gpt-5.1-codex-max","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"role":"user","content":"hi"}]}`)
++	if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "gpt-5.1-codex-max",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("openai-response"),
++		Alt:          "responses/compact",
++		Stream:       false,
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionPresent(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(gotBody))
++	}
++}
++
++// Extensions of the non-Claude cache-retention boundary tests for the
++// CLIProxyAPI 7.3 split executors: the call sites that did not exist on
++// 7.2.80 (Meta Responses, xAI /responses/compact, Codex duplex continuation
++// frames, delegated Kimi Claude-messages paths, Codex image paths) and the
++// duplicate-key cases that upstream's own single sjson delete cannot clear.
++// All upstreams are loopback fakes or injected round-trippers; no external
++// network access is involved.
++
++// retentionDuplicatePayload returns payload with two extra top-level
++// prompt_cache_retention members appended after the existing ones, so a
++// single sjson.DeleteBytes (upstream's early cleanup) leaves one behind.
++func retentionDuplicatePayload(t *testing.T, payload string) []byte {
++	t.Helper()
++	trimmed := strings.TrimSpace(payload)
++	if !strings.HasSuffix(trimmed, "}") {
++		t.Fatalf("payload is not an object: %s", payload)
++	}
++	return []byte(trimmed[:len(trimmed)-1] + `,"prompt_cache_retention":"48h","prompt_cache_retention":"72h"}`)
++}
++
++// Meta Responses (new in 7.3): HTTP execute and stream share
++// prepareResponsesRequest; the boundary folds upstream's early single delete.
++
++func TestMetaExecutorExecuteStripsAllDuplicateRetentionKeysAtFinalBoundary(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		writeMetaResponsesOK(w, "ok")
++	}))
++	defer server.Close()
++
++	exec := NewMetaExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		Provider: "meta",
++		Attributes: map[string]string{
++			"api_key":  "test-key",
++			"base_url": server.URL,
++		},
++	}
++	payload := retentionDuplicatePayload(t, `{"model":"muse-spark-1.3","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":"hello","prompt_cache_retention":"nested"}]}`)
++	if _, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "muse-spark-1.3",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FormatOpenAIResponse,
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(gotBody))
++	}
++	if got := gjson.GetBytes(gotBody, "input.0.prompt_cache_retention").String(); got != "nested" {
++		t.Fatalf("nested prompt_cache_retention = %q, want preserved nested; body=%s", got, string(gotBody))
++	}
++}
++
++func TestMetaExecutorExecuteStreamStripsRetentionAtFinalBoundary(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		writeMetaResponsesOK(w, "ok")
++	}))
++	defer server.Close()
++
++	// The override rule reintroduces the field during payload-rule
++	// application, after upstream's early cleanup used to run.
++	exec := NewMetaExecutor(&config.Config{
++		Payload: config.PayloadConfig{
++			Override: []config.PayloadRule{{
++				Models: []config.PayloadModelRule{{Name: "*"}},
++				Params: map[string]any{"prompt_cache_retention": "24h"},
++			}},
++		},
++	})
++	auth := &cliproxyauth.Auth{
++		Provider: "meta",
++		Attributes: map[string]string{
++			"api_key":  "test-key",
++			"base_url": server.URL,
++		},
++	}
++	result, err := exec.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "muse-spark-1.3",
++		Payload: []byte(`{"model":"muse-spark-1.3","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":"hello"}]}`),
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FormatOpenAIResponse,
++	})
++	if err != nil {
++		t.Fatalf("ExecuteStream() error = %v", err)
++	}
++	for chunk := range result.Chunks {
++		if chunk.Err != nil {
++			t.Fatalf("stream chunk error = %v", chunk.Err)
++		}
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(gotBody))
++	}
++}
++
++// xAI: duplicate keys (upstream's early single delete left one behind) and
++// the /responses/compact route, which shares prepareResponsesRequestTo.
++
++func TestXAIExecutorExecuteStripsAllDuplicateRetentionKeysAtFinalBoundary(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":0,\"status\":\"completed\",\"model\":\"grok-4.3\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"))
++	}))
++	defer server.Close()
++
++	exec := NewXAIExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		ID:       "xai-auth",
++		Provider: "xai",
++		Attributes: map[string]string{
++			"base_url":  server.URL,
++			"auth_kind": "oauth",
++		},
++		Metadata: map[string]any{"access_token": "xai-token"},
++	}
++	payload := retentionDuplicatePayload(t, `{"model":"grok-4.3","prompt_cache_retention":"24h","input":[{"role":"user","content":"hello"}]}`)
++	if _, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "grok-4.3",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FormatOpenAIResponse,
++		Metadata: map[string]any{
++			cliproxyexecutor.ExecutionSessionMetadataKey: "conv-xai-dup",
++		},
++	}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "conv-xai-dup" {
++		t.Fatalf("prompt_cache_key = %q, want conv-xai-dup; body=%s", got, string(gotBody))
++	}
++}
++
++func TestXAIExecutorCompactStripsRetentionAtFinalBoundary(t *testing.T) {
++	var gotPath string
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		gotPath = r.URL.Path
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","output":[],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
++	}))
++	defer server.Close()
++
++	exec := NewXAIExecutor(&config.Config{
++		Payload: config.PayloadConfig{
++			Override: []config.PayloadRule{{
++				Models: []config.PayloadModelRule{{Name: "*"}},
++				Params: map[string]any{"prompt_cache_retention": "24h"},
++			}},
++		},
++	})
++	auth := &cliproxyauth.Auth{
++		Provider: "xai",
++		Attributes: map[string]string{
++			"base_url": server.URL,
++			"api_key":  "xai-token",
++		},
++	}
++	payload := retentionDuplicatePayload(t, `{"model":"grok-4.3","prompt_cache_retention":"24h","input":[{"role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
++	if _, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "grok-4.3",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FormatOpenAIResponse,
++		Alt:          "responses/compact",
++	}); err != nil {
++		t.Fatalf("Execute compact error = %v", err)
++	}
++	if gotPath != "/responses/compact" {
++		t.Fatalf("path = %q, want /responses/compact", gotPath)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++}
++
++// Codex HTTP: duplicate keys on the stream path (upstream's early single
++// delete left one behind), and the image path through cacheHelper.
++
++func TestCodexExecutorExecuteStreamStripsAllDuplicateRetentionKeys(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6-sol","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}` + "\n\n"))
++	}))
++	defer server.Close()
++
++	executor := NewCodexExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"base_url": server.URL,
++		"api_key":  "sk-test",
++	}}
++	payload := retentionDuplicatePayload(t, `{"model":"gpt-6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
++	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
++		Model:   "gpt-6-sol",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("openai-response"),
++	})
++	if err != nil {
++		t.Fatalf("ExecuteStream() error = %v", err)
++	}
++	for chunk := range result.Chunks {
++		if chunk.Err != nil {
++			t.Fatalf("stream chunk error = %v", chunk.Err)
++		}
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++	if got := gjson.GetBytes(gotBody, "prompt_cache_key").String(); got != "cache-123" {
++		t.Fatalf("prompt_cache_key = %q, want cache-123; body=%s", got, string(gotBody))
++	}
++}
++
++func TestCodexExecutorImageGenerationStripsRetentionAtCacheHelperBoundary(t *testing.T) {
++	var gotBody []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, errRead := io.ReadAll(r.Body)
++		if errRead != nil {
++			t.Fatalf("read body: %v", errRead)
++		}
++		gotBody = bytes.Clone(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"created":1713833628,"data":[{"b64_json":"AA=="}],"usage":{"total_tokens":100,"input_tokens":50,"output_tokens":50}}`))
++	}))
++	defer server.Close()
++
++	executor := NewCodexExecutor(&config.Config{})
++	payload := retentionDuplicatePayload(t, `{"model":"codex/gpt-image-1.5","prompt":"A cute baby sea otter","n":1,"size":"1024x1024","prompt_cache_retention":"24h","stream":false}`)
++	if _, err := executor.Execute(context.Background(), newCodexOpenAIImageTestAuth(server.URL), cliproxyexecutor.Request{
++		Model:   "codex/gpt-image-1.5",
++		Payload: payload,
++	}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, false)); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionStripped(t, gotBody)
++}
++
++// Codex WebSocket: duplicate keys on the first response.create frame, and a
++// duplex follow-up response.create continuation that reintroduces the field
++// (7.3 duplex streaming re-prepares every continuation through
++// prepareCodexWebsocketStream; the boundary must hold on each frame).
++
++func TestCodexWebsocketsExecuteStripsAllDuplicateRetentionKeysFromResponseCreate(t *testing.T) {
++	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
++	capturedPayload := make(chan []byte, 1)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		conn, err := upgrader.Upgrade(w, r, nil)
++		if err != nil {
++			t.Errorf("upgrade websocket: %v", err)
++			return
++		}
++		defer func() { _ = conn.Close() }()
++		_, payload, errRead := conn.ReadMessage()
++		if errRead != nil {
++			t.Errorf("read upstream websocket message: %v", errRead)
++			return
++		}
++		capturedPayload <- bytes.Clone(payload)
++		completed := []byte(`{"type":"response.completed","response":{"id":"resp-1","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}`)
++		if errWrite := conn.WriteMessage(websocket.TextMessage, completed); errWrite != nil {
++			t.Errorf("write completed websocket message: %v", errWrite)
++		}
++	}))
++	defer server.Close()
++
++	exec := NewCodexWebsocketsExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "sk-test", "base_url": server.URL}}
++	req := cliproxyexecutor.Request{
++		Model:   "gpt-6-sol",
++		Payload: retentionDuplicatePayload(t, `{"model":"gpt-6-sol","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"type":"message","role":"user","content":"hello"}]}`),
++	}
++	if _, err := exec.Execute(context.Background(), auth, req, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-response")}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	select {
++	case payload := <-capturedPayload:
++		if got := gjson.GetBytes(payload, "type").String(); got != "response.create" {
++			t.Fatalf("upstream type = %s, want response.create; payload=%s", got, string(payload))
++		}
++		assertRetentionStripped(t, payload)
++		if got := gjson.GetBytes(payload, "prompt_cache_key").String(); got != "cache-123" {
++			t.Fatalf("prompt_cache_key = %q, want cache-123; payload=%s", got, string(payload))
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timed out waiting for upstream websocket payload")
++	}
++}
++
++func TestCodexWebsocketsDuplexContinuationStripsRetentionFromEveryResponseCreate(t *testing.T) {
++	frames := make(chan []byte, 2)
++	serverDone := make(chan struct{})
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		defer close(serverDone)
++		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
++		if err != nil {
++			t.Error(err)
++			return
++		}
++		defer func() { _ = conn.Close() }()
++		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
++
++		_, first, err := conn.ReadMessage()
++		if err != nil {
++			t.Errorf("read first create: %v", err)
++			return
++		}
++		frames <- bytes.Clone(first)
++		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp-1","output":[]}}`))
++		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp-1","output":[]}}`))
++
++		_, second, err := conn.ReadMessage()
++		if err != nil {
++			t.Errorf("read continuation create: %v", err)
++			return
++		}
++		frames <- bytes.Clone(second)
++		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp-2","output":[]}}`))
++		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp-2","output":[]}}`))
++		_, _, _ = conn.ReadMessage()
++	}))
++	defer server.Close()
++
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	input := make(chan cliproxyexecutor.WebsocketInput, 4)
++	ctx = cliproxyexecutor.WithWebsocketInput(cliproxyexecutor.WithDownstreamWebsocket(ctx), input)
++
++	exec := NewCodexWebsocketsExecutor(&config.Config{Codex: config.CodexConfig{ResponseSteering: true}})
++	exec.store = &codexWebsocketSessionStore{sessions: make(map[string]*codexWebsocketSession)}
++	auth := &cliproxyauth.Auth{ID: "retention-duplex-test", Provider: "codex", Attributes: map[string]string{"api_key": "test-key", "base_url": server.URL, "websockets": "true"}}
++	req := cliproxyexecutor.Request{
++		Model:   "gpt-6-astra",
++		Payload: []byte(`{"model":"gpt-6-astra","prompt_cache_retention":"24h","prompt_cache_key":"cache-123","input":[{"role":"user","content":"turn 1"}]}`),
++	}
++	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("codex"), Metadata: map[string]any{cliproxyexecutor.ExecutionSessionMetadataKey: "retention-duplex"}}
++
++	result, err := exec.ExecuteStream(ctx, auth, req, opts)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for chunk := range result.Chunks {
++		if chunk.Err != nil {
++			t.Fatal(chunk.Err)
++		}
++		eventType := gjson.GetBytes(chunk.Payload, "type").String()
++		eventID := gjson.GetBytes(chunk.Payload, "response.id").String()
++		if eventType == "response.completed" && eventID == "resp-1" {
++			continuation, errSet := sjson.SetBytes([]byte(`{"type":"response.create","model":"gpt-6-astra","prompt_cache_key":"cache-123","input":[{"role":"user","content":"turn 2"}]}`), "prompt_cache_retention", "24h")
++			if errSet != nil {
++				t.Fatalf("build continuation: %v", errSet)
++			}
++			input <- cliproxyexecutor.WebsocketInput{Payload: retentionDuplicatePayload(t, string(continuation))}
++		}
++		if eventType == "response.completed" && eventID == "resp-2" {
++			cancel()
++			break
++		}
++	}
++	select {
++	case <-serverDone:
++	case <-time.After(3 * time.Second):
++		t.Fatal("server did not finish")
++	}
++
++	close(frames)
++	count := 0
++	for frame := range frames {
++		count++
++		if got := gjson.GetBytes(frame, "type").String(); got != "response.create" {
++			t.Fatalf("frame %d type = %q, want response.create; frame=%s", count, got, string(frame))
++		}
++		assertRetentionStripped(t, frame)
++	}
++	if count != 2 {
++		t.Fatalf("captured %d response.create frames, want 2", count)
++	}
++}
++
++// Delegated Kimi Claude-messages paths: the Kimi OAuth executor rewrites the
++// base URL to the Kimi Anthropic endpoint and delegates to the Claude
++// executor, so the third-party boundary (including count_tokens, which this
++// provider sends upstream) must apply.
++
++func TestKimiExecutorClaudeMessagesStripsRetentionAtThirdPartyBoundary(t *testing.T) {
++	var gotURL string
++	var gotBody []byte
++	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", kimiRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
++		gotURL = req.URL.String()
++		var errRead error
++		gotBody, errRead = io.ReadAll(req.Body)
++		if errRead != nil {
++			return nil, errRead
++		}
++		return &http.Response{
++			StatusCode: http.StatusOK,
++			Header:     http.Header{"Content-Type": []string{"application/json"}},
++			Body:       io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","model":"k3","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)),
++		}, nil
++	}))
++
++	executor := NewKimiExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		Attributes: map[string]string{},
++		Metadata:   map[string]any{"access_token": "test-token"},
++	}
++	payload := retentionDuplicatePayload(t, `{"model":"kimi-k3","prompt_cache_retention":"24h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	if _, err := executor.Execute(ctx, auth, cliproxyexecutor.Request{
++		Model:   "kimi-k3",
++		Payload: payload,
++	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude}); err != nil {
++		t.Fatalf("Execute() error = %v", err)
++	}
++	if !strings.HasPrefix(gotURL, "https://api.kimi.com/coding/v1/messages") {
++		t.Fatalf("upstream URL = %q, want Kimi messages endpoint", gotURL)
++	}
++	assertRetentionStripped(t, gotBody)
++}
++
++func TestKimiExecutorCountTokensStripsRetentionAtThirdPartyBoundary(t *testing.T) {
++	var gotURL string
++	var gotBody []byte
++	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", kimiRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
++		gotURL = req.URL.String()
++		var errRead error
++		gotBody, errRead = io.ReadAll(req.Body)
++		if errRead != nil {
++			return nil, errRead
++		}
++		return &http.Response{
++			StatusCode: http.StatusOK,
++			Header:     http.Header{"Content-Type": []string{"application/json"}},
++			Body:       io.NopCloser(strings.NewReader(`{"input_tokens":42}`)),
++		}, nil
++	}))
++
++	executor := NewKimiExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{
++		Attributes: map[string]string{},
++		Metadata:   map[string]any{"access_token": "test-token"},
++	}
++	payload := retentionDuplicatePayload(t, `{"model":"kimi-k3","prompt_cache_retention":"24h","messages":[{"role":"user","content":"hello"}]}`)
++	if _, err := executor.CountTokens(ctx, auth, cliproxyexecutor.Request{
++		Model:   "kimi-k3",
++		Payload: payload,
++	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude}); err != nil {
++		t.Fatalf("CountTokens() error = %v", err)
++	}
++	if got := gotURL; got != "https://api.kimi.com/coding/v1/messages/count_tokens?beta=true" {
++		t.Fatalf("upstream URL = %q, want Kimi count tokens endpoint", got)
++	}
++	assertRetentionStripped(t, gotBody)
++}
++
++// Official Anthropic streaming transport keeps the field (negative guard for
++// the stream path, complementing the execute/count_tokens guards).
++
++func TestClaudeExecutorExecuteStreamPreservesRetentionForOfficialAnthropicEndpoint(t *testing.T) {
++	var gotBody []byte
++	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
++		body, errRead := io.ReadAll(req.Body)
++		if errRead != nil {
++			return nil, errRead
++		}
++		gotBody = bytes.Clone(body)
++		return &http.Response{
++			StatusCode: 200,
++			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
++			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
++				`event: message_start`,
++				`data: {"type":"message_start","message":{"id":"msg_123","model":"claude-sonnet-4-5"}}`,
++				`event: message_delta`,
++				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":2,"output_tokens":1}}`,
++				`event: message_stop`,
++				`data: {"type":"message_stop"}`,
++				``,
++			}, "\n"))),
++		}, nil
++	})
++	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", rt)
++
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"api_key": "key-123",
++	}}
++	payload := []byte(`{"prompt_cache_retention":"24h","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
++	result, err := executor.ExecuteStream(ctx, auth, cliproxyexecutor.Request{
++		Model:   "claude-sonnet-4-5",
++		Payload: payload,
++	}, cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString("claude"),
++	})
++	if err != nil {
++		t.Fatalf("ExecuteStream() error = %v", err)
++	}
++	for chunk := range result.Chunks {
++		if chunk.Err != nil {
++			t.Fatalf("stream chunk error = %v", chunk.Err)
++		}
++	}
++	if len(gotBody) == 0 {
++		t.Fatal("expected captured upstream body")
++	}
++	assertRetentionPresent(t, gotBody)
++}
+diff --git a/internal/runtime/executor/openai_compat_chat_retention_cm053_test.go b/internal/runtime/executor/openai_compat_chat_retention_cm053_test.go
+new file mode 100644
+index 0000000..109d54c
+--- /dev/null
++++ b/internal/runtime/executor/openai_compat_chat_retention_cm053_test.go
+@@ -0,0 +1,335 @@
++package executor
++
++import (
++	"bytes"
++	"context"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync"
++	"testing"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++	"github.com/tidwall/gjson"
++)
++
++// The OpenAI-compatible chat completions
++// boundary. The compatibility executor applies payload rules, tool-result and
++// max-tokens normalization, prompt-cache-key insertion and (stream)
++// include_usage after translation, so a late payload override could put
++// prompt_cache_retention back on a chat request. Two final strips close it:
++// non-stream Execute (chat branch only) and ExecuteStream (unconditional:
++// the stream always targets /chat/completions, even under the
++// "responses/compact" Alt). Keyed and keyless chat alike; the genuine
++// non-stream /responses/compact request keeps the field. Every upstream is a
++// loopback httptest server; no external network access is involved.
++
++type cm053CompatUpstream struct {
++	mu       sync.Mutex
++	requests int
++	paths    []string
++	bodies   [][]byte
++	auths    []string
++}
++
++func (u *cm053CompatUpstream) snapshot() (int, []string, [][]byte, []string) {
++	u.mu.Lock()
++	defer u.mu.Unlock()
++	return u.requests, append([]string(nil), u.paths...), append([][]byte(nil), u.bodies...), append([]string(nil), u.auths...)
++}
++
++func newCM053CompatUpstream(t *testing.T) (*cm053CompatUpstream, *httptest.Server) {
++	t.Helper()
++	upstream := &cm053CompatUpstream{}
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, _ := io.ReadAll(r.Body)
++		upstream.mu.Lock()
++		upstream.requests++
++		upstream.paths = append(upstream.paths, r.URL.Path)
++		upstream.bodies = append(upstream.bodies, bytes.Clone(body))
++		upstream.auths = append(upstream.auths, r.Header.Get("Authorization"))
++		upstream.mu.Unlock()
++		switch {
++		case strings.HasSuffix(r.URL.Path, "/responses/compact"):
++			w.Header().Set("Content-Type", "application/json")
++			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
++		case r.Header.Get("Accept") == "text/event-stream":
++			w.Header().Set("Content-Type", "text/event-stream")
++			_, _ = w.Write([]byte(`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"cm053-chat","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}` + "\n\n"))
++			_, _ = w.Write([]byte(`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"cm053-chat","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}` + "\n\n"))
++			_, _ = w.Write([]byte("data: [DONE]\n\n"))
++		default:
++			w.Header().Set("Content-Type", "application/json")
++			_, _ = w.Write([]byte(`{"id":"chatcmpl_1","object":"chat.completion","model":"cm053-chat","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
++		}
++	}))
++	t.Cleanup(server.Close)
++	return upstream, server
++}
++
++// cm053CompatAuth returns a compat auth for server; keyed attaches a synthetic
++// bearer credential, keyless attaches none.
++func cm053CompatAuth(server *httptest.Server, keyed bool) *cliproxyauth.Auth {
++	attrs := map[string]string{
++		"base_url":     server.URL + "/v1",
++		"compat_name":  "cm053",
++		"provider_key": "cm053",
++	}
++	if keyed {
++		attrs["api_key"] = "cm053-dummy-key"
++	}
++	return &cliproxyauth.Auth{Provider: "openai-compatibility", Attributes: attrs}
++}
++
++func cm053CompatConfig(payload config.PayloadConfig) *config.Config {
++	return &config.Config{
++		OpenAICompatibility: []config.OpenAICompatibility{{
++			Name:                  "cm053",
++			SupportPromptCacheKey: true,
++		}},
++		Payload: payload,
++	}
++}
++
++// cm053RunCompat sends one request through Execute or ExecuteStream (draining
++// the stream) and returns the executor error, or the first chunk error.
++func cm053RunCompat(t *testing.T, exec *OpenAICompatExecutor, auth *cliproxyauth.Auth, stream bool, source string, alt string, payload []byte) error {
++	t.Helper()
++	req := cliproxyexecutor.Request{Model: "cm053-chat", Payload: payload}
++	opts := cliproxyexecutor.Options{
++		SourceFormat: sdktranslator.FromString(source),
++		Alt:          alt,
++		Stream:       stream,
++	}
++	if !stream {
++		_, err := exec.Execute(context.Background(), auth, req, opts)
++		return err
++	}
++	result, err := exec.ExecuteStream(context.Background(), auth, req, opts)
++	if err != nil {
++		return err
++	}
++	var chunkErr error
++	for chunk := range result.Chunks {
++		if chunk.Err != nil && chunkErr == nil {
++			chunkErr = chunk.Err
++		}
++	}
++	return chunkErr
++}
++
++func cm053Mode(stream bool) string {
++	if stream {
++		return "stream"
++	}
++	return "execute"
++}
++
++func cm053KeyMode(keyed bool) string {
++	if keyed {
++		return "keyed"
++	}
++	return "keyless"
++}
++
++// cm053AssertOneChatRequest checks that exactly one request reached the chat
++// endpoint with the expected credential shape, and returns its body.
++func cm053AssertOneChatRequest(t *testing.T, upstream *cm053CompatUpstream, keyed bool) []byte {
++	t.Helper()
++	count, paths, bodies, auths := upstream.snapshot()
++	if count != 1 {
++		t.Fatalf("upstream requests = %d, want 1", count)
++	}
++	if paths[0] != "/v1/chat/completions" {
++		t.Fatalf("upstream path = %q, want /v1/chat/completions", paths[0])
++	}
++	if keyed && auths[0] != "Bearer cm053-dummy-key" {
++		t.Fatalf("keyed request carried Authorization %q, want the synthetic bearer", auths[0])
++	}
++	if !keyed && auths[0] != "" {
++		t.Fatalf("keyless request carried Authorization %q, want none", auths[0])
++	}
++	if !gjson.ValidBytes(bodies[0]) {
++		t.Fatalf("upstream body is not valid JSON: %s", string(bodies[0]))
++	}
++	return bodies[0]
++}
++
++// TestCM053CompatChatRetentionFinalBoundary: an OpenAI-format chat request
++// carrying prompt_cache_retention leaves the compat executor without it, keyed
++// and keyless, non-stream and stream; prompt_cache_key and nested entries are
++// preserved.
++func TestCM053CompatChatRetentionFinalBoundary(t *testing.T) {
++	for _, keyed := range []bool{true, false} {
++		for _, stream := range []bool{false, true} {
++			keyed, stream := keyed, stream
++			t.Run(cm053KeyMode(keyed)+"/"+cm053Mode(stream), func(t *testing.T) {
++				upstream, server := newCM053CompatUpstream(t)
++				exec := NewOpenAICompatExecutor("openai-compatibility", cm053CompatConfig(config.PayloadConfig{}))
++				payload := []byte(`{"model":"cm053-chat","prompt_cache_retention":"24h","prompt_cache_key":"cache-cm053","metadata":{"prompt_cache_retention":"nested"},"messages":[{"role":"user","content":"hi"}]}`)
++				if err := cm053RunCompat(t, exec, cm053CompatAuth(server, keyed), stream, "openai", "", payload); err != nil {
++					t.Fatalf("request error: %v", err)
++				}
++				body := cm053AssertOneChatRequest(t, upstream, keyed)
++				assertRetentionStripped(t, body)
++				if got := gjson.GetBytes(body, "prompt_cache_key").String(); got != "cache-cm053" {
++					t.Fatalf("prompt_cache_key = %q, want cache-cm053; body=%s", got, string(body))
++				}
++				if got := gjson.GetBytes(body, "metadata.prompt_cache_retention").String(); got != "nested" {
++					t.Fatalf("nested metadata.prompt_cache_retention = %q, want nested; body=%s", got, string(body))
++				}
++			})
++		}
++	}
++}
++
++// TestCM053CompatChatRetentionLateOverride: a payload rule (override and
++// override-raw) that injects prompt_cache_retention after translation of a
++// Claude-format request — the reviewed Claude /v1/messages -> chat route,
++// whose translator drops the inbound field — is still stripped. A marker set
++// by the same rule proves the late injection ran.
++func TestCM053CompatChatRetentionLateOverride(t *testing.T) {
++	rules := map[string]config.PayloadConfig{
++		"override": {Override: []config.PayloadRule{{
++			Models: []config.PayloadModelRule{{Name: "*", Protocol: "openai"}},
++			Params: map[string]any{"prompt_cache_retention": "24h", "cm053_late_marker": "late"},
++		}}},
++		"override-raw": {OverrideRaw: []config.PayloadRule{{
++			Models: []config.PayloadModelRule{{Name: "*", Protocol: "openai"}},
++			Params: map[string]any{"prompt_cache_retention": `"24h"`, "cm053_late_marker": `"late"`},
++		}}},
++	}
++	for name, rule := range rules {
++		for _, keyed := range []bool{true, false} {
++			for _, stream := range []bool{false, true} {
++				name, rule, keyed, stream := name, rule, keyed, stream
++				t.Run(name+"/"+cm053KeyMode(keyed)+"/"+cm053Mode(stream), func(t *testing.T) {
++					upstream, server := newCM053CompatUpstream(t)
++					exec := NewOpenAICompatExecutor("openai-compatibility", cm053CompatConfig(rule))
++					payload := []byte(`{"model":"cm053-chat","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`)
++					if err := cm053RunCompat(t, exec, cm053CompatAuth(server, keyed), stream, "claude", "", payload); err != nil {
++						t.Fatalf("request error: %v", err)
++					}
++					body := cm053AssertOneChatRequest(t, upstream, keyed)
++					if got := gjson.GetBytes(body, "cm053_late_marker").String(); got != "late" {
++						t.Fatalf("late payload rule did not run (marker %q); body=%s", got, string(body))
++					}
++					assertRetentionStripped(t, body)
++				})
++			}
++		}
++	}
++}
++
++// TestCM053CompatChatRetentionDuplicateKeys: duplicate top-level
++// prompt_cache_retention members (which a single sjson delete cannot clear)
++// are all removed at the chat boundary; prompt_cache_key survives.
++func TestCM053CompatChatRetentionDuplicateKeys(t *testing.T) {
++	for _, keyed := range []bool{true, false} {
++		for _, stream := range []bool{false, true} {
++			keyed, stream := keyed, stream
++			t.Run(cm053KeyMode(keyed)+"/"+cm053Mode(stream), func(t *testing.T) {
++				upstream, server := newCM053CompatUpstream(t)
++				exec := NewOpenAICompatExecutor("openai-compatibility", cm053CompatConfig(config.PayloadConfig{}))
++				payload := retentionDuplicatePayload(t, `{"model":"cm053-chat","prompt_cache_retention":"24h","prompt_cache_key":"cache-cm053","messages":[{"role":"user","content":"hi"}]}`)
++				if err := cm053RunCompat(t, exec, cm053CompatAuth(server, keyed), stream, "openai", "", payload); err != nil {
++					t.Fatalf("request error: %v", err)
++				}
++				body := cm053AssertOneChatRequest(t, upstream, keyed)
++				if n := bytes.Count(body, []byte(`"prompt_cache_retention"`)); n != 0 {
++					t.Fatalf("upstream body carries %d prompt_cache_retention members, want 0: %s", n, string(body))
++				}
++				if got := gjson.GetBytes(body, "prompt_cache_key").String(); got != "cache-cm053" {
++					t.Fatalf("prompt_cache_key = %q, want cache-cm053; body=%s", got, string(body))
++				}
++			})
++		}
++	}
++}
++
++// TestCM053CompatChatRetentionFailureSendsNothing: when the final chat body
++// cannot be proven free of the field (a late raw rule leaves it invalid JSON),
++// the executor fails closed and the upstream receives zero requests.
++func TestCM053CompatChatRetentionFailureSendsNothing(t *testing.T) {
++	broken := config.PayloadConfig{OverrideRaw: []config.PayloadRule{{
++		Models: []config.PayloadModelRule{{Name: "*", Protocol: "openai"}},
++		Params: map[string]any{"cm053_broken": "{"},
++	}}}
++	for _, keyed := range []bool{true, false} {
++		for _, stream := range []bool{false, true} {
++			keyed, stream := keyed, stream
++			t.Run(cm053KeyMode(keyed)+"/"+cm053Mode(stream), func(t *testing.T) {
++				upstream, server := newCM053CompatUpstream(t)
++				exec := NewOpenAICompatExecutor("openai-compatibility", cm053CompatConfig(broken))
++				payload := []byte(`{"model":"cm053-chat","prompt_cache_retention":"24h","messages":[{"role":"user","content":"hi"}]}`)
++				err := cm053RunCompat(t, exec, cm053CompatAuth(server, keyed), stream, "openai", "", payload)
++				if err == nil {
++					t.Fatal("request succeeded, want a fail-closed boundary error")
++				}
++				if !strings.Contains(err.Error(), "strip prompt_cache_retention") {
++					t.Fatalf("error = %v, want the retention boundary error", err)
++				}
++				if count, _, _, _ := upstream.snapshot(); count != 0 {
++					t.Fatalf("upstream requests = %d, want 0 (nothing may leave)", count)
++				}
++			})
++		}
++	}
++}
++
++// TestCM053CompatStreamAltStillSanitized: a stream under the
++// "responses/compact" Alt still targets /chat/completions and is stripped —
++// from the inbound payload, from duplicates and from a late override — while
++// the genuine non-stream /responses/compact request keeps the field.
++func TestCM053CompatStreamAltStillSanitized(t *testing.T) {
++	late := config.PayloadConfig{Override: []config.PayloadRule{{
++		Models: []config.PayloadModelRule{{Name: "*", Protocol: "openai"}},
++		Params: map[string]any{"prompt_cache_retention": "24h", "cm053_late_marker": "late"},
++	}}}
++	cases := map[string]struct {
++		cfg     config.PayloadConfig
++		payload []byte
++		marker  bool
++	}{
++		"inbound":   {payload: []byte(`{"model":"cm053-chat","prompt_cache_retention":"24h","messages":[{"role":"user","content":"hi"}]}`)},
++		"duplicate": {payload: retentionDuplicatePayload(t, `{"model":"cm053-chat","prompt_cache_retention":"24h","messages":[{"role":"user","content":"hi"}]}`)},
++		"late":      {cfg: late, payload: []byte(`{"model":"cm053-chat","messages":[{"role":"user","content":"hi"}]}`), marker: true},
++	}
++	for name, tc := range cases {
++		for _, keyed := range []bool{true, false} {
++			name, tc, keyed := name, tc, keyed
++			t.Run(name+"/"+cm053KeyMode(keyed), func(t *testing.T) {
++				upstream, server := newCM053CompatUpstream(t)
++				exec := NewOpenAICompatExecutor("openai-compatibility", cm053CompatConfig(tc.cfg))
++				if err := cm053RunCompat(t, exec, cm053CompatAuth(server, keyed), true, "openai", "responses/compact", tc.payload); err != nil {
++					t.Fatalf("stream error: %v", err)
++				}
++				body := cm053AssertOneChatRequest(t, upstream, keyed)
++				if tc.marker && gjson.GetBytes(body, "cm053_late_marker").String() != "late" {
++					t.Fatalf("late payload rule did not run; body=%s", string(body))
++				}
++				if n := bytes.Count(body, []byte(`"prompt_cache_retention"`)); n != 0 {
++					t.Fatalf("stream under the compact Alt carries %d prompt_cache_retention members, want 0: %s", n, string(body))
++				}
++			})
++		}
++	}
++
++	t.Run("genuine-compact-exception", func(t *testing.T) {
++		upstream, server := newCM053CompatUpstream(t)
++		exec := NewOpenAICompatExecutor("openai-compatibility", cm053CompatConfig(config.PayloadConfig{}))
++		payload := []byte(`{"model":"cm053-chat","prompt_cache_retention":"24h","input":[{"role":"user","content":"hi"}]}`)
++		if err := cm053RunCompat(t, exec, cm053CompatAuth(server, true), false, "openai-response", "responses/compact", payload); err != nil {
++			t.Fatalf("compact error: %v", err)
++		}
++		count, paths, bodies, _ := upstream.snapshot()
++		if count != 1 || paths[0] != "/v1/responses/compact" {
++			t.Fatalf("compact requests = %d paths = %v, want one /v1/responses/compact", count, paths)
++		}
++		assertRetentionPresent(t, bodies[0])
++	})
++}
+diff --git a/internal/runtime/executor/openai_compat_executor.go b/internal/runtime/executor/openai_compat_executor.go
+index 7dc4a02..de57044 100644
+--- a/internal/runtime/executor/openai_compat_executor.go
++++ b/internal/runtime/executor/openai_compat_executor.go
+@@ -136,6 +136,16 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
+ 		if err != nil {
+ 			return resp, err
+ 		}
++		// Final outbound boundary for OpenAI-compatible chat completions: strip
++		// prompt_cache_retention after translation, payload rules, tool-result and
++		// max-tokens normalization and prompt-cache-key insertion, and before the
++		// request is built, so a late payload override cannot send it upstream.
++		// Keyed and keyless chat alike; only the genuine non-stream
++		// /responses/compact request (the branch below) keeps the field.
++		translated, err = stripPromptCacheRetention(translated)
++		if err != nil {
++			return resp, fmt.Errorf("openai compat executor: %w", err)
++		}
+ 	}
+ 	if opts.Alt == "responses/compact" {
+ 		if updated, errDelete := sjson.DeleteBytes(translated, "stream"); errDelete == nil {
+@@ -359,6 +369,15 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
+ 	// Request usage data in the final streaming chunk so that token statistics
+ 	// are captured even when the upstream is an OpenAI-compatible provider.
+ 	translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
++	// Final outbound boundary for OpenAI-compatible streaming chat: the stream
++	// always targets /chat/completions, including when its Alt is
++	// "responses/compact", so this strip is unconditional. It runs after every
++	// body mutation (translation, payload rules, normalization, prompt-cache-key
++	// insertion, include_usage) and before the request is built.
++	translated, err = stripPromptCacheRetention(translated)
++	if err != nil {
++		return nil, fmt.Errorf("openai compat executor: %w", err)
++	}
+ 	reporter.SetTranslatedReasoningEffort(translated, to.String())
+ 
+ 	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
+diff --git a/internal/runtime/executor/xai_executor_request.go b/internal/runtime/executor/xai_executor_request.go
+index 7eeb96c3..738454e3 100644
+--- a/internal/runtime/executor/xai_executor_request.go
++++ b/internal/runtime/executor/xai_executor_request.go
+@@ -86,7 +86,6 @@ func (e *XAIExecutor) prepareResponsesRequestTo(ctx context.Context, req cliprox
+ 	body = helps.SetStringIfDifferent(body, "model", baseModel)
+ 	body = helps.SetBoolIfDifferent(body, "stream", stream)
+ 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
+-	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
+ 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
+ 	body, _ = sjson.DeleteBytes(body, "stream_options")
+ 	body = helps.RewriteCodexMultiAgentV2Input(ctx, opts.Headers, body, e.cfg)
+@@ -143,6 +142,16 @@ func (e *XAIExecutor) prepareResponsesRequestTo(ctx context.Context, req cliprox
+ 		body = helps.SetStringIfDifferent(body, "prompt_cache_key", sessionID)
+ 	}
+ 
++	// Final outbound boundary: the former early retention cleanup is folded
++	// into this single invariant at the end of the shared final preparation,
++	// so any transformation reintroducing the field is still caught (and every
++	// duplicate top-level occurrence removed) before HTTP request construction,
++	// /responses/compact, or WebSocket frame transmission. Fails closed.
++	body, err = stripPromptCacheRetention(body)
++	if err != nil {
++		return nil, fmt.Errorf("xai executor: %w", err)
++	}
++
+ 	return &xaiPreparedRequest{
+ 		baseModel:             baseModel,
+ 		from:                  from,

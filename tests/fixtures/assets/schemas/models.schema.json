@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": ["version", "models"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 2 },
+    "models": {
+      "type": "object",
+      "minItems": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["provider", "display", "generation", "wire_model", "efforts", "default_effort", "lead", "capabilities", "roles", "context", "routing_note", "minimum_tested", "status", "registry_overlay"],
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "display": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "family": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "generation": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z.-]{0,15}$" },
+          "wire_model": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$" },
+          "selector": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*(\\[1m\\])?$" },
+          "efforts": {
+            "oneOf": [
+              {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["selector", "proxy_contract"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "selector": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*(\\[1m\\])?$" },
+                    "proxy_contract": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+                  }
+                }
+              }
+            ]
+          },
+          "default_effort": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "capabilities": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "enum": ["lead", "agents"] }
+          },
+          "roles": {
+            "oneOf": [
+              { "const": "all" },
+              {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^cm-[a-z][a-z0-9-]*$" }
+              }
+            ]
+          },
+          "status": { "enum": ["new", "active"] },
+          "output": {
+            "type": "object",
+            "required": ["declared_tokens", "source"],
+            "additionalProperties": false,
+            "properties": {
+              "declared_tokens": { "type": "integer", "minimum": 1, "maximum": 2097152 },
+              "source": { "enum": ["listing", "docs", "operator", "registry"] },
+              "source_ref": { "type": "string", "minLength": 1, "maxLength": 256 }
+            }
+          },
+          "registry_overlay": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "required": ["channel"],
+                "additionalProperties": false,
+                "properties": { "channel": { "enum": ["claude", "codex"] } }
+              }
+            ]
+          },
+          "key_route": {
+            "type": "object",
+            "required": ["efforts", "context_tokens", "input_tokens", "source", "source_ref", "checked"],
+            "additionalProperties": false,
+            "properties": {
+              "efforts": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+              },
+              "context_tokens": { "type": "integer", "minimum": 1 },
+              "input_tokens": { "type": "integer", "minimum": 1 },
+              "output_tokens": { "type": "integer", "minimum": 1, "maximum": 2097152 },
+              "source": { "enum": ["docs"] },
+              "source_ref": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "checked": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+            }
+          },
+          "context": {
+            "type": "object",
+            "required": ["client_tokens", "provider_tokens", "scalar_tokens", "ordinary_profile", "declared_tokens", "validated_tokens", "qualification"],
+            "additionalProperties": false,
+            "properties": {
+              "client_tokens": { "type": "integer", "minimum": 1 },
+              "provider_tokens": { "type": "integer", "minimum": 1 },
+              "scalar_tokens": {
+                "oneOf": [
+                  { "type": "integer", "minimum": 1 },
+                  { "type": "null" }
+                ]
+              },
+              "ordinary_profile": {
+                "oneOf": [
+                  { "enum": ["sol", "large", "grok", "flash431"] },
+                  { "type": "null" }
+                ]
+              },
+              "declared_tokens": { "type": "integer", "minimum": 1 },
+              "validated_tokens": { "type": "integer", "minimum": 1 },
+              "provider_stated_limit_tokens": { "type": "integer", "minimum": 1 },
+              "user_reported_tokens": { "type": "integer", "minimum": 1 },
+              "qualification": { "type": "string", "minLength": 1, "maxLength": 768 }
+            }
+          },
+          "lead": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["effort", "env"],
+                "additionalProperties": false,
+                "properties": {
+                  "effort": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                  "env": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string", "pattern": "^[0-9]+$" }
+                  }
+                }
+              },
+              { "type": "null" }
+            ]
+          },
+          "routing_note": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "minimum_tested": {
+            "type": "object",
+            "required": ["claude_code", "cliproxyapi"],
+            "additionalProperties": false,
+            "properties": {
+              "claude_code": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+              "cliproxyapi": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

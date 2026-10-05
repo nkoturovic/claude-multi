@@ -1,0 +1,16 @@
+# The recorded class of each real-binary probe (tests/test_scope_probe_client.py).
+# A diagnostic probe whose new run differs reports 'changed recorded=<class>';
+# the correctness-essential classes are asserted by the probes themselves.
+client probe CE: PASS class=CE-A
+client probe DAH: PASS class=DAH-override
+client probe U1: PASS class=U1-proc
+client probe X5: PASS class=X5-silent-hours
+client probe SC: PASS class=SC-caps
+client probe SX: PASS class=SX-open-continue-dies
+client probe SF: PASS class=SF-lead-heavy
+client probe RL: PASS class=RL-none
+client probe RET: PASS class=RET-ok
+client probe R19: PASS class=R19-open
+client probe SK: PASS class=SK-kept
+client probe OC: PASS class=OC-untouched
+client probe FL: PASS class=FL-ok

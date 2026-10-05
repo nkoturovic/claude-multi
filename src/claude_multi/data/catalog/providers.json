@@ -1,0 +1,176 @@
+{
+  "providers": {
+    "anthropic": {
+      "adapter": "cliproxy-oauth-claude-v1",
+      "display": "Anthropic",
+      "independence_family": "anthropic",
+      "passthrough_routes": [
+        {
+          "fork": true,
+          "name": "claude-fable-5"
+        },
+        {
+          "fork": true,
+          "name": "claude-fable-5-1"
+        },
+        {
+          "fork": true,
+          "name": "claude-opus-5"
+        },
+        {
+          "fork": true,
+          "name": "claude-opus-5-5"
+        },
+        {
+          "fork": true,
+          "name": "claude-opus-4-8"
+        },
+        {
+          "fork": true,
+          "name": "claude-sonnet-5"
+        },
+        {
+          "fork": true,
+          "name": "claude-sonnet-5-5"
+        }
+      ],
+      "payload_contracts": [],
+      "support": "anthropic-supported",
+      "support_note": "First-party Anthropic models routed through the locally managed CLIProxyAPI OAuth gateway; this transport path is not officially supported by Anthropic.",
+      "transport": {
+        "kind": "oauth-pool",
+        "pool": "claude"
+      }
+    },
+    "deepseek": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "DeepSeek",
+      "independence_family": "deepseek",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-high",
+        "output-config-max"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "DeepSeek Anthropic endpoint (Flash probes 2026-08-12; Pro GA 2026-08-19; docs re-verified 2026-09-10): x-api-key, 1M, thinking default-on. Max thinking + model-selected tool use work when tool_choice is omitted; named forced tool_choice returns 400. Flash documents Anthropic image blocks (Pro: none) - unverified here; cache_control ignored; MCP blocks unsupported. deepseek-v4-flash redirects here; from 2026-09-14 04:00 UTC deepseek-v4-pro does too. Listing: Bearer GET /models (Anthropic 404); China-based.",
+      "transport": {
+        "auth": {
+          "header": "x-api-key",
+          "kind": "header",
+          "secret_ref": "env:DEEPSEEK_CLAUDE_API_KEY"
+        },
+        "base_url": "https://api.deepseek.com/anthropic",
+        "kind": "direct"
+      }
+    },
+    "kimi": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "Kimi",
+      "independence_family": "moonshot",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-low",
+        "output-config-high",
+        "output-config-max",
+        "filter-thinking"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Third-party Claude-compatible route through the local gateway; locally validated experimental transport, not officially supported by Anthropic.",
+      "transport": {
+        "auth": {
+          "header": "x-api-key",
+          "kind": "header",
+          "secret_ref": "env:KIMI_CLAUDE_API_KEY"
+        },
+        "base_url": "https://api.kimi.com/coding",
+        "kind": "direct"
+      }
+    },
+    "meta": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "Meta",
+      "independence_family": "meta",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-low",
+        "output-config-medium",
+        "output-config-high",
+        "output-config-xhigh"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Meta Model API Anthropic Messages adapter: the SDK appends /v1/messages to https://api.meta.ai; Bearer META_CLAUDE_API_KEY. Effort via output_config.effort low/medium/high/xhigh (NO max); thinking always on (disabled -> 400); rejects stop_sequences/top_k/unknown top-level fields; named forced tool_choice -> 400; extra stop_reason 'refusal'. Contributor variant: outputs may train Meta products (privacy), 100 RPM cap. Route acceptance live-probe-gated.",
+      "transport": {
+        "auth": {
+          "kind": "bearer",
+          "secret_ref": "env:META_CLAUDE_API_KEY"
+        },
+        "base_url": "https://api.meta.ai",
+        "kind": "direct"
+      }
+    },
+    "openai": {
+      "adapter": "cliproxy-oauth-codex-v1",
+      "display": "OpenAI",
+      "independence_family": "openai",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "reasoning-effort-low",
+        "reasoning-effort-medium",
+        "reasoning-effort-high",
+        "reasoning-effort-xhigh",
+        "reasoning-effort-max"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Third-party Codex route through the local OAuth gateway; locally validated experimental transport, not officially supported by Anthropic or OpenAI.",
+      "transport": {
+        "kind": "oauth-pool",
+        "pool": "codex"
+      }
+    },
+    "openrouter": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "OpenRouter",
+      "independence_family": "unknown",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-high",
+        "output-config-xhigh"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "OpenRouter's Anthropic-compatible route (an aggregator: each model line declares its family). Model list: public GET /api/v1/models (no key).",
+      "transport": {
+        "auth": {
+          "header": "x-api-key",
+          "kind": "header",
+          "secret_ref": "env:OPENROUTER_CLAUDE_API_KEY"
+        },
+        "base_url": "https://openrouter.ai/api",
+        "kind": "direct"
+      }
+    },
+    "qwen": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "Qwen",
+      "independence_family": "alibaba",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-low",
+        "output-config-medium",
+        "output-config-xhigh",
+        "reasoning-effort-xhigh",
+        "reasoning-effort-max"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Third-party Claude-compatible route through the local gateway; locally validated experimental transport, not officially supported by Anthropic or Alibaba.",
+      "transport": {
+        "auth": {
+          "kind": "bearer",
+          "secret_ref": "env:QWEN_CLAUDE_API_KEY"
+        },
+        "base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+        "kind": "direct"
+      }
+    }
+  },
+  "version": 1
+}

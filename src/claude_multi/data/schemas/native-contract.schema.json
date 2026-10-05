@@ -1,0 +1,548 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": [
+    "version",
+    "verified",
+    "agent_efforts",
+    "lead_efforts",
+    "generic_agent_aliases",
+    "capabilities",
+    "nested_subagents",
+    "acceptance",
+    "lifecycle_evidence",
+    "evidence_version",
+    "recorded_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "verified": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "version",
+          "platforms",
+          "manifest_sha256",
+          "signature_sha256",
+          "key_fingerprint",
+          "verified_at",
+          "evidence"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          },
+          "platforms": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "darwin-arm64": {
+                "type": "object",
+                "required": [
+                  "sha256",
+                  "size"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "darwin-x64": {
+                "type": "object",
+                "required": [
+                  "sha256",
+                  "size"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "linux-arm64": {
+                "type": "object",
+                "required": [
+                  "sha256",
+                  "size"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "linux-x64": {
+                "type": "object",
+                "required": [
+                  "sha256",
+                  "size"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "linux-arm64-musl": {
+                "type": "object",
+                "required": [
+                  "sha256",
+                  "size"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "linux-x64-musl": {
+                "type": "object",
+                "required": [
+                  "sha256",
+                  "size"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "win32-x64": {
+                "type": "object",
+                "required": [
+                  "sha256",
+                  "size"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "win32-arm64": {
+                "type": "object",
+                "required": [
+                  "sha256",
+                  "size"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          },
+          "manifest_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "signature_sha256": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9A-F]{40}$"
+          },
+          "verified_at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "settings_keys": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[$A-Za-z_][$A-Za-z0-9_]*$"
+            }
+          },
+          "evidence": {
+            "type": "object",
+            "required": [
+              "receipt_sha256"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "darwin-arm64": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "darwin-x64": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "linux-arm64": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "linux-x64": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "linux-arm64-musl": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "linux-x64-musl": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "win32-x64": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "win32-arm64": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "others": {
+                "enum": [
+                  "battery",
+                  "identity+smoke"
+                ]
+              },
+              "receipt_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "agent_efforts": {
+      "type": "object",
+      "required": [
+        "values",
+        "status",
+        "evidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        "status": {
+          "enum": [
+            "provisionally-trusted",
+            "verified",
+            "unverified"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "lead_efforts": {
+      "type": "object",
+      "required": [
+        "values",
+        "status",
+        "evidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultracode"
+            ]
+          }
+        },
+        "status": {
+          "enum": [
+            "provisionally-trusted",
+            "verified",
+            "unverified"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "generic_agent_aliases": {
+      "type": "object",
+      "required": [
+        "values",
+        "status",
+        "evidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          }
+        },
+        "status": {
+          "enum": [
+            "provisionally-trusted",
+            "verified",
+            "unverified"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "pending",
+              "verified",
+              "failed"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    "nested_subagents": {
+      "type": "object",
+      "required": [
+        "decision",
+        "depth_key",
+        "concurrency_key",
+        "probe",
+        "evidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "enum": [
+            "pending",
+            "compile-verified-keys",
+            "amend-prompts"
+          ]
+        },
+        "depth_key": {
+          "type": "object",
+          "required": [
+            "name",
+            "status"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "const": "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"
+            },
+            "status": {
+              "enum": [
+                "unverified",
+                "verified",
+                "failed"
+              ]
+            }
+          }
+        },
+        "concurrency_key": {
+          "type": "object",
+          "required": [
+            "name",
+            "status"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "const": "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
+            },
+            "status": {
+              "enum": [
+                "unverified",
+                "verified",
+                "failed"
+              ]
+            }
+          }
+        },
+        "probe": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "unverified",
+              "verified",
+              "failed"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    "lifecycle_evidence": {
+      "type": "object",
+      "required": [
+        "inspected_version",
+        "evidence_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "inspected_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "evidence_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9.-]*$"
+        }
+      }
+    },
+    "evidence_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "recorded_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    }
+  }
+}

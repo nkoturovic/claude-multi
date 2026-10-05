@@ -1,0 +1,11 @@
+# The keys that sign claude-multi releases, in the ssh-keygen ALLOWED SIGNERS
+# format: one line per key, naming the principal release@claude-multi, the
+# namespace claude-multi-release, the key type ssh-ed25519 and the public key.
+# Installers and updates verify a release's SHA256SUMS.sshsig against these
+# lines.
+#
+# This copy names the production release key. A key rotation is stated in
+# this file: a new line for the new key with valid-after="YYYYMMDD", the day
+# it starts signing, and the old key's line given valid-before= the same
+# day.
+release@claude-multi namespaces="claude-multi-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJmVeafPpudkejVTvnbP7S31hPCGEsXK6HrAilRzRZai

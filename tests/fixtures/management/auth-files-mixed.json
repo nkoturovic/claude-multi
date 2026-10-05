@@ -1,0 +1,224 @@
+{
+  "files": [
+    {
+      "provider": "claude",
+      "status": "active",
+      "success": 41,
+      "failed": 2,
+      "status_message": "",
+      "quota": {
+        "observed_at": "2026-10-01T11:47:59.123456789Z",
+        "signals": {
+          "Anthropic-Ratelimit-Unified-5h-Utilization": "0.42",
+          "Anthropic-Ratelimit-Unified-5h-Reset": "1790870400",
+          "Anthropic-Ratelimit-Unified-7d-Utilization": "0.18",
+          "Anthropic-Ratelimit-Unified-7d-Reset": "2026-10-02T09:00:00Z",
+          "Anthropic-Ratelimit-Unified-Representative-Claim": "claim-SENTINEL",
+          "Retry-After": "7"
+        }
+      },
+      "id": "id-SENTINEL",
+      "auth_index": "id-SENTINEL",
+      "name": "name-SENTINEL",
+      "type": "future-SENTINEL",
+      "label": "label-SENTINEL",
+      "email": "pii-email@example.invalid",
+      "account_type": "plan-SENTINEL",
+      "account": "acct-SENTINEL",
+      "path": "/home/sentinel/",
+      "id_token": {
+        "chatgpt_account_id": "acct-SENTINEL",
+        "plan_type": "plan-SENTINEL",
+        "token": "sk-ant-api03-SENTINEL"
+      },
+      "note": "note-SENTINEL",
+      "project_id": "project-SENTINEL",
+      "priority": "future-SENTINEL",
+      "quota_probe": "probe-SENTINEL",
+      "recent_requests": [
+        "private upstream body SENTINEL"
+      ],
+      "model_quotas": {
+        "model-SENTINEL": {}
+      },
+      "cooldowns": "cooldown-SENTINEL",
+      "runtime_only": "future-SENTINEL",
+      "source": "future-SENTINEL",
+      "size": "future-SENTINEL",
+      "created_at": "future-SENTINEL",
+      "modtime": "future-SENTINEL",
+      "last_refresh": "future-SENTINEL",
+      "unexpected_future_field": "future-SENTINEL"
+    },
+    {
+      "provider": "claude",
+      "status": "error",
+      "unavailable": true,
+      "status_message": "unauthorized",
+      "quota": {
+        "signals": {}
+      },
+      "id": "id-SENTINEL",
+      "auth_index": "id-SENTINEL",
+      "name": "name-SENTINEL",
+      "type": "future-SENTINEL",
+      "label": "label-SENTINEL",
+      "email": "pii-email@example.invalid",
+      "account_type": "plan-SENTINEL",
+      "account": "acct-SENTINEL",
+      "path": "/home/sentinel/",
+      "id_token": {
+        "chatgpt_account_id": "acct-SENTINEL",
+        "plan_type": "plan-SENTINEL",
+        "token": "sk-ant-api03-SENTINEL"
+      },
+      "note": "note-SENTINEL",
+      "project_id": "project-SENTINEL",
+      "priority": "future-SENTINEL",
+      "quota_probe": "probe-SENTINEL",
+      "recent_requests": [
+        "private upstream body SENTINEL"
+      ],
+      "model_quotas": {
+        "model-SENTINEL": {}
+      },
+      "cooldowns": "cooldown-SENTINEL",
+      "runtime_only": "future-SENTINEL",
+      "source": "future-SENTINEL",
+      "size": "future-SENTINEL",
+      "created_at": "future-SENTINEL",
+      "modtime": "future-SENTINEL",
+      "last_refresh": "future-SENTINEL",
+      "unexpected_future_field": "future-SENTINEL"
+    },
+    {
+      "provider": "codex",
+      "status": "active",
+      "status_message": "",
+      "quota": {
+        "observed_at": "2026-10-01T09:00:00Z",
+        "signals": {
+          "X-Codex-Primary-Used-Percent": "93",
+          "X-Codex-Primary-Window-Minutes": "10080",
+          "X-Codex-Primary-Reset-At": "1791195120",
+          "X-Codex-Plan-Type": "plan-SENTINEL"
+        }
+      },
+      "id": "id-SENTINEL",
+      "auth_index": "id-SENTINEL",
+      "name": "name-SENTINEL",
+      "type": "future-SENTINEL",
+      "label": "label-SENTINEL",
+      "email": "pii-email@example.invalid",
+      "account_type": "plan-SENTINEL",
+      "account": "acct-SENTINEL",
+      "path": "/home/sentinel/",
+      "id_token": {
+        "chatgpt_account_id": "acct-SENTINEL",
+        "plan_type": "plan-SENTINEL",
+        "token": "sk-ant-api03-SENTINEL"
+      },
+      "note": "note-SENTINEL",
+      "project_id": "project-SENTINEL",
+      "priority": "future-SENTINEL",
+      "quota_probe": "probe-SENTINEL",
+      "recent_requests": [
+        "private upstream body SENTINEL"
+      ],
+      "model_quotas": {
+        "model-SENTINEL": {}
+      },
+      "cooldowns": "cooldown-SENTINEL",
+      "runtime_only": "future-SENTINEL",
+      "source": "future-SENTINEL",
+      "size": "future-SENTINEL",
+      "created_at": "future-SENTINEL",
+      "modtime": "future-SENTINEL",
+      "last_refresh": "future-SENTINEL",
+      "unexpected_future_field": "future-SENTINEL"
+    },
+    {
+      "provider": "codex",
+      "status": "active",
+      "status_message": "",
+      "quota": {
+        "observed_at": "2026-10-01T05:00:00Z",
+        "signals": {
+          "x-codex-primary-used-percent": "97",
+          "x-codex-primary-window-minutes": "300",
+          "x-codex-primary-reset-after-seconds": "3600"
+        }
+      },
+      "id": "id-SENTINEL",
+      "auth_index": "id-SENTINEL",
+      "name": "name-SENTINEL",
+      "type": "future-SENTINEL",
+      "label": "label-SENTINEL",
+      "email": "pii-email@example.invalid",
+      "account_type": "plan-SENTINEL",
+      "account": "acct-SENTINEL",
+      "path": "/home/sentinel/",
+      "id_token": {
+        "chatgpt_account_id": "acct-SENTINEL",
+        "plan_type": "plan-SENTINEL",
+        "token": "sk-ant-api03-SENTINEL"
+      },
+      "note": "note-SENTINEL",
+      "project_id": "project-SENTINEL",
+      "priority": "future-SENTINEL",
+      "quota_probe": "probe-SENTINEL",
+      "recent_requests": [
+        "private upstream body SENTINEL"
+      ],
+      "model_quotas": {
+        "model-SENTINEL": {}
+      },
+      "cooldowns": "cooldown-SENTINEL",
+      "runtime_only": "future-SENTINEL",
+      "source": "future-SENTINEL",
+      "size": "future-SENTINEL",
+      "created_at": "future-SENTINEL",
+      "modtime": "future-SENTINEL",
+      "last_refresh": "future-SENTINEL",
+      "unexpected_future_field": "future-SENTINEL"
+    },
+    {
+      "provider": "gemini-cli",
+      "status": "active",
+      "status_message": "private upstream body SENTINEL",
+      "quota": {},
+      "id": "id-SENTINEL",
+      "auth_index": "id-SENTINEL",
+      "name": "name-SENTINEL",
+      "type": "future-SENTINEL",
+      "label": "label-SENTINEL",
+      "email": "pii-email@example.invalid",
+      "account_type": "plan-SENTINEL",
+      "account": "acct-SENTINEL",
+      "path": "/home/sentinel/",
+      "id_token": {
+        "chatgpt_account_id": "acct-SENTINEL",
+        "plan_type": "plan-SENTINEL",
+        "token": "sk-ant-api03-SENTINEL"
+      },
+      "note": "note-SENTINEL",
+      "project_id": "project-SENTINEL",
+      "priority": "future-SENTINEL",
+      "quota_probe": "probe-SENTINEL",
+      "recent_requests": [
+        "private upstream body SENTINEL"
+      ],
+      "model_quotas": {
+        "model-SENTINEL": {}
+      },
+      "cooldowns": "cooldown-SENTINEL",
+      "runtime_only": "future-SENTINEL",
+      "source": "future-SENTINEL",
+      "size": "future-SENTINEL",
+      "created_at": "future-SENTINEL",
+      "modtime": "future-SENTINEL",
+      "last_refresh": "future-SENTINEL",
+      "unexpected_future_field": "future-SENTINEL"
+    }
+  ]
+}

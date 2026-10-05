@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "providers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": { "enabled": { "type": "boolean" } }
+      }
+    },
+    "admitted_lines": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" }
+    },
+    "compaction_percent": { "type": "integer", "minimum": 60, "maximum": 95 },
+    "explore_inherit_cap_disabled": { "type": "boolean" },
+    "review_round_cap": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "workflow_default_binding": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["model", "effort"],
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@.-]*$" },
+            "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] }
+          }
+        }
+      ]
+    }
+  }
+}

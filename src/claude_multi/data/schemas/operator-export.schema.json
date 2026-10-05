@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": ["format", "version", "exported_by", "profiles", "bindings", "settings", "providers", "trust_requests"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "claude-multi-operator-export" },
+    "version": { "const": 1 },
+    "exported_by": {
+      "type": "object",
+      "required": ["launcher_version", "catalog_version"],
+      "additionalProperties": false,
+      "properties": {
+        "launcher_version": { "type": "string", "maxLength": 32, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-dev)?$" },
+        "catalog_version": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["document"],
+            "additionalProperties": false,
+            "properties": { "document": { "type": "object" } }
+          },
+          {
+            "type": "object",
+            "required": ["seed"],
+            "additionalProperties": false,
+            "properties": {
+              "seed": {
+                "type": "object",
+                "required": ["id", "version"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+                  "version": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["model", "effort"],
+        "additionalProperties": false,
+        "properties": {
+          "model": { "type": "string", "maxLength": 200 },
+          "effort": { "type": "string", "maxLength": 32 }
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "providers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "enabled": { "type": "boolean" } }
+          }
+        },
+        "compaction_percent": { "type": "integer", "minimum": 60, "maximum": 95 },
+        "explore_inherit_cap_disabled": { "type": "boolean" },
+        "review_round_cap": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "workflow_default_binding": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["model", "effort"],
+              "additionalProperties": false,
+              "properties": {
+                "model": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@.-]*$" },
+                "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": { "type": "object" }
+    },
+    "trust_requests": {
+      "type": "object",
+      "required": ["routes", "admissions", "transport_choices"],
+      "additionalProperties": false,
+      "properties": {
+        "routes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        },
+        "admissions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@.-]*$" }
+        },
+        "transport_choices": {
+          "type": "object",
+          "additionalProperties": { "enum": ["oauth-pool", "api-key"] }
+        }
+      }
+    },
+    "reconnect": {
+      "type": "object",
+      "required": ["api_keys", "sign_ins"],
+      "additionalProperties": false,
+      "properties": {
+        "api_keys": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$" }
+        },
+        "sign_ins": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "enum": ["anthropic", "openai"] }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": ["version", "kind", "entry", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 2 },
+    "kind": { "enum": ["model", "provider"] },
+    "provider": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "entry": { "type": "object" },
+    "fixtures": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9._/-]+$" }
+    },
+    "notes": { "type": "string", "maxLength": 1024 },
+    "created_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+  }
+}

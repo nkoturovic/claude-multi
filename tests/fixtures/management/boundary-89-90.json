@@ -1,0 +1,24 @@
+{
+  "files": [
+    {
+      "provider": "claude",
+      "status": "active",
+      "quota": {
+        "observed_at": "2026-10-01T12:00:00Z",
+        "signals": {
+          "anthropic-ratelimit-unified-5h-utilization": "0.899"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "status": "active",
+      "quota": {
+        "observed_at": "2026-10-01T12:00:00Z",
+        "signals": {
+          "anthropic-ratelimit-unified-5h-utilization": "0.90"
+        }
+      }
+    }
+  ]
+}

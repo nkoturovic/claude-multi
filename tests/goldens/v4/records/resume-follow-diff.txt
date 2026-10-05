@@ -1,0 +1,2 @@
+session 11111111 follows profile mine; applying its changes at this resume:
+  analyst              GPT-5.6 Sol · high → Opus 5.5 · 1M selector · xhigh

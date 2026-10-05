@@ -1,0 +1,23 @@
+{
+  "retired": {
+    "muse-spark": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Muse Spark 1.3",
+      "last_wire": "muse-spark-1.3",
+      "provider": "meta",
+      "reason": "Fixture retired line: frozen test data.",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-muse-spark-high[1m]": "output-config-high",
+        "claude-multi-muse-spark-xhigh[1m]": "output-config-xhigh"
+      },
+      "since_catalog": 31,
+      "successor": null
+    }
+  },
+  "version": 1
+}

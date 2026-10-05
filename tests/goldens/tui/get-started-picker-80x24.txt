@@ -1,0 +1,24 @@
+
+  connect a provider — more can follow
+  ─────────────────────────────────────────────────────────────────────────────
+    Anthropic                                        family anthropic
+  ›   Claude account — sign in (personal use)        not signed in · in use
+      Anthropic API key — billed per token           key missing
+    OpenAI                                           family openai
+      ChatGPT account — sign in (personal use)       not signed in · in use
+      OpenAI API key — not available yet             no model is reviewed for …
+    OpenRouter                                       family per model
+      OpenRouter API key — models from many vendors  key missing
+    DeepSeek                                         family deepseek
+      DeepSeek API key — no models yet               key missing
+    Kimi                                             family moonshot
+      Kimi API key                                   key set
+    Meta                                             family meta
+      Meta API key — no models yet                   key missing
+    Qwen                                             family alibaba
+      Qwen API key                                   key missing
+  ─
+  Opens a sign-in in your browser, or prints an address to open on any device.
+  Personal use of your own account only; you confirm that first.
+
+  Enter connect · ? help · Esc back

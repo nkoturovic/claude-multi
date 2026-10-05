@@ -1,0 +1,7 @@
+lineup gen 2:
+  analyst-strong Opus 5.5 · 1M selector · xhigh → GPT-5.6 Sol · xhigh
+  implementer-strong GPT-5.6 Sol · xhigh → Opus 5 · 1M selector · xhigh
+session now follows profile quality
+Running agents keep their current model; do not SendMessage-continue an agent spawned before this change — spawn it fresh.
+Forks sharing this scope see the change too.
+next: type /reload-plugins (a model cannot run it for you; it also applies any pending plugin updates)

@@ -1,0 +1,23 @@
+{
+  "lines": {},
+  "notes": "Preset: a keyless OpenAI-compatible server on your LAN. Declaration only: add lines with claude-multi models add <id> <wire> ..., then admit them.",
+  "preset": {
+    "source": "generic",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "none"
+    },
+    "base_url": "http://llm.lan:8000/v1",
+    "display": "LAN OpenAI-compatible server",
+    "independence_family": "local",
+    "kind": "openai-compatible-lan",
+    "listing": {
+      "auth": "none",
+      "shape": "openai",
+      "url": "http://llm.lan:8000/v1/models"
+    }
+  },
+  "version": 1
+}

@@ -1,0 +1,135 @@
+diff --git a/sdk/auth/antigravity.go b/sdk/auth/antigravity.go
+--- a/sdk/auth/antigravity.go
++++ b/sdk/auth/antigravity.go
+@@ -209,7 +209,9 @@ func startAntigravityCallbackServer(port int) (*http.Server, int, <-chan callbac
+ 	if port <= 0 {
+ 		port = antigravity.CallbackPort
+ 	}
+-	addr := fmt.Sprintf(":%d", port)
++	// The browser redirect only ever comes from this machine: listen on the
++	// IPv4 loopback address, never on every interface.
++	addr := fmt.Sprintf("127.0.0.1:%d", port)
+ 	listener, err := net.Listen("tcp", addr)
+ 	if err != nil {
+ 		return nil, 0, nil, err
+@@ -233,7 +235,8 @@ func startAntigravityCallbackServer(port int) (*http.Server, int, <-chan callbac
+ 		}
+ 	})
+ 
+-	srv := &http.Server{Handler: mux}
++	// Addr records the bound address; Serve uses the listener above.
++	srv := &http.Server{Addr: listener.Addr().String(), Handler: mux}
+ 	go func() {
+ 		if errServe := srv.Serve(listener); errServe != nil && !strings.Contains(errServe.Error(), "Server closed") {
+ 			log.Warnf("antigravity callback server error: %v", errServe)
+diff --git a/sdk/auth/antigravity_callback_loopback_test.go b/sdk/auth/antigravity_callback_loopback_test.go
+new file mode 100644
+--- /dev/null
++++ b/sdk/auth/antigravity_callback_loopback_test.go
+@@ -0,0 +1,106 @@
++package auth
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"strconv"
++	"testing"
++	"time"
++)
++
++// freeLoopbackPort returns a TCP port that was free on 127.0.0.1 a moment ago.
++func freeLoopbackPort(t *testing.T) int {
++	t.Helper()
++	probe, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatalf("no free loopback port: %v", err)
++	}
++	port := probe.Addr().(*net.TCPAddr).Port
++	if errClose := probe.Close(); errClose != nil {
++		t.Fatalf("close the port probe: %v", errClose)
++	}
++	return port
++}
++
++func startTestCallbackServer(t *testing.T) (*http.Server, int, <-chan callbackResult) {
++	t.Helper()
++	srv, port, results, err := startAntigravityCallbackServer(freeLoopbackPort(t))
++	if err != nil {
++		t.Fatalf("start the callback server: %v", err)
++	}
++	t.Cleanup(func() {
++		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
++		defer cancel()
++		_ = srv.Shutdown(ctx)
++	})
++	return srv, port, results
++}
++
++// The --antigravity-login callback listener is bound to 127.0.0.1, never to
++// an unspecified (every-interface) address, and serves the callback there.
++func TestAntigravityCallbackListenerBindsLoopback(t *testing.T) {
++	srv, port, results := startTestCallbackServer(t)
++	host, bound, err := net.SplitHostPort(srv.Addr)
++	if err != nil {
++		t.Fatalf("the callback server does not record its bound address (%q): %v", srv.Addr, err)
++	}
++	if ip := net.ParseIP(host); ip == nil || !ip.Equal(net.IPv4(127, 0, 0, 1)) {
++		t.Fatalf("the callback listener is bound to %q, want 127.0.0.1", srv.Addr)
++	}
++	if bound != strconv.Itoa(port) {
++		t.Fatalf("bound port %s differs from the reported port %d", bound, port)
++	}
++
++	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
++	response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/oauth-callback?code=loopback-code&state=loopback-state", port))
++	if err != nil {
++		t.Fatalf("the callback is not served on 127.0.0.1:%d: %v", port, err)
++	}
++	_, _ = io.Copy(io.Discard, response.Body)
++	_ = response.Body.Close()
++	if response.StatusCode != http.StatusOK {
++		t.Fatalf("callback answered HTTP %d", response.StatusCode)
++	}
++	select {
++	case result := <-results:
++		if result.Code != "loopback-code" || result.State != "loopback-state" || result.Error != "" {
++			t.Fatalf("unexpected callback result %+v", result)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("the callback result never arrived")
++	}
++}
++
++// Go's every-interface listener is dual-stack, so it also answers on the IPv6
++// loopback address; the loopback-only callback listener does not.
++func TestAntigravityCallbackUnreachableOutsideIPv4Loopback(t *testing.T) {
++	control, err := net.Listen("tcp", "[::1]:0")
++	if err != nil {
++		t.Skipf("no IPv6 loopback on this host: %v", err)
++	}
++	accepted := make(chan struct{})
++	go func() {
++		defer close(accepted)
++		if conn, errAccept := control.Accept(); errAccept == nil {
++			_ = conn.Close()
++		}
++	}()
++	conn, err := net.DialTimeout("tcp", control.Addr().String(), 2*time.Second)
++	if err != nil {
++		_ = control.Close()
++		t.Skipf("the IPv6 loopback does not connect on this host: %v", err)
++	}
++	_ = conn.Close()
++	<-accepted
++	_ = control.Close()
++
++	_, port, _ := startTestCallbackServer(t)
++	conn, err = net.DialTimeout("tcp", net.JoinHostPort("::1", strconv.Itoa(port)), 2*time.Second)
++	if err == nil {
++		_ = conn.Close()
++		t.Fatalf("the callback on port %d also answers on [::1]: it listens beyond 127.0.0.1", port)
++	}
++}

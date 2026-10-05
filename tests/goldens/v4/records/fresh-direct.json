@@ -1,0 +1,74 @@
+{
+  "applied": {
+    "agents": {},
+    "lead": {
+      "compaction": {
+        "client_tokens": 1000000,
+        "percent": 90,
+        "provider_tokens": 1000000,
+        "scalar": null,
+        "trigger": 702000,
+        "window": 800000
+      },
+      "effort": "ultracode",
+      "env": {},
+      "generation": "5.6",
+      "key": "sol",
+      "selector": "gpt-multi-sol-high[1m]"
+    },
+    "lead_providers": null,
+    "native_agents": {
+      "explore": "native",
+      "general_purpose": "on",
+      "plan": "native"
+    },
+    "no_subagents": false,
+    "settings": {
+      "admitted_lines": [],
+      "compaction_percent": 90,
+      "explore_inherit_cap_disabled": true,
+      "providers_enabled": {
+        "anthropic": true,
+        "deepseek": true,
+        "kimi": true,
+        "llm-local": true,
+        "meta": true,
+        "openai": true,
+        "openrouter": true,
+        "qwen": true
+      },
+      "review_round_cap": 2,
+      "version": 1,
+      "workflow_default_binding": null
+    },
+    "settings_overrides": {},
+    "workflows": "native"
+  },
+  "applied_hash": "sha256:5c57fe01eeeb72b8c51a0b606b3a04a2d6ea1bd1a2270e9bd4b9c3e28483a90a",
+  "catalog_hash": "sha256:ba572bfe05f9ce9c371e8911a8172f3374e40acfa650f7fa57f63923ce645f4a",
+  "catalog_version": 31,
+  "created_at": "2026-09-25T00:00:00Z",
+  "cwd": "/project",
+  "follow": false,
+  "forked_from": null,
+  "identity_state": "unverified",
+  "last_event_source": null,
+  "last_seen_at": "2026-09-25T00:00:00Z",
+  "launch_epoch": 1,
+  "launch_fence": "sha256:ed73010388ece998cad14a830eb42aa22bfdc034819d3518ebccd6109521adf7",
+  "launcher_version": "2.25.1",
+  "lead_class": "large",
+  "lineup_generation": 1,
+  "managed_id": "11111111-1111-4111-8111-111111111111",
+  "migrated_from_version": null,
+  "pending_forks": [],
+  "profile": null,
+  "runtime_aliases": [],
+  "runtime_session_id": "11111111-1111-4111-8111-111111111111",
+  "scope_lead": {
+    "effort": "ultracode",
+    "key": "sol",
+    "selector": "gpt-multi-sol-high[1m]"
+  },
+  "version": 4
+}

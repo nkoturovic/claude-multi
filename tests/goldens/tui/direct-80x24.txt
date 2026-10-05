@@ -1,0 +1,24 @@
+
+  direct session — lead only, no profile
+  ─────────────────────────────────────────────────────────────────────────────
+    anthropic  Fable 5                1M     (not signed in)
+    anthropic  Opus 4.8               1M     (not signed in)
+    anthropic  Opus 5                 1M     (not signed in)
+  › anthropic  Opus 5.5               1M     (not signed in)
+    kimi       Kimi K3                1M     effort [max]
+    llm-local  Qwen3.8 Flash Next (local) 320K
+    openai     GPT-5.6 Sol            1M     effort [high]  (not signed in)
+    openrouter DeepSeek V4 Flash      1M     effort [high]
+    openrouter Gemini 3 Flash         1M     effort [high]
+    openrouter GPT-6 Sol              1M     effort [high]
+    openrouter Grok 4.6               500K   effort [xhigh]
+    openrouter Grok 4.7               500K   effort [high]
+    openrouter Opus 5.5               1M     effort [xhigh]
+    qwen       Qwen3.8 Max            1M     effort [max]
+  /model in-session: every model in the same class
+  Claude account not signed in — Enter offers the sign-in (personal use)
+  in-session: /model claude-multi-opus-5-5[1m]
+
+
+
+  Enter launch · Tab save as profile · G providers · ? help · Esc back

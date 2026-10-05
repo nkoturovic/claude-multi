@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": ["version", "seeds"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "seeds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["version", "digest"],
+        "additionalProperties": false,
+        "properties": {
+          "version": { "type": "integer", "minimum": 1 },
+          "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        }
+      }
+    }
+  }
+}

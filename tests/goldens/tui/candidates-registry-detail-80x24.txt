@@ -1,0 +1,24 @@
+
+  model — full details
+  ─────────────────────────────────────────────────────────────────────────────
+  Candidates — advisory only; nothing declared or admitted
+  claude  claude-fixture-new  registry-stated context 400000  max output 32000
+    candidate · visibility: n/a · created 1973-01-05
+  claude  claude-fixture-undated  registry-stated context unknown  max output
+  unknown
+    candidate · visibility: n/a · created unknown
+  claude  k3  registry-stated context unknown  max output unknown
+    candidate · visibility: n/a · created 1973-04-15
+  codex-pro  gpt-fixture-next  registry-stated context unknown  max output
+  unknown
+    candidate · visibility: hide · created 1972-11-16
+  claude: 1 older candidate(s) hidden (created before the newest onboarded
+  wire) — --all shows them
+  other registry channels hidden: codex-free, gemini — --all shows them
+  next: claude-multi models add PROVIDER WIRE --context N --source registry
+
+
+
+
+
+  Up/Down scroll · PgUp/PgDn page · Home/End  · Esc back

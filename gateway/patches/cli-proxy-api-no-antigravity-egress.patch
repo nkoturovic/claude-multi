@@ -1,0 +1,54 @@
+diff --git a/cmd/server/main.go b/cmd/server/main.go
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -746,7 +746,9 @@
+ 			if standalone {
+ 				// Standalone mode: start an embedded local server and connect TUI client to it.
+ 				managementasset.StartAutoUpdater(context.Background(), configFilePath)
+-				misc.StartAntigravityVersionUpdater(context.Background())
++				if antigravityVersionUpdaterPlan(localModel) {
++					misc.StartAntigravityVersionUpdater(context.Background())
++				}
+ 				startModelCatalogUpdaters(localModel, cfg.Home.Enabled)
+ 				hook := tui.NewLogHook(2000)
+ 				hook.SetFormatter(&logging.LogFormatter{})
+@@ -820,11 +822,18 @@
+ 		} else {
+ 			// Start the main proxy service
+ 			managementasset.StartAutoUpdater(context.Background(), configFilePath)
+-			misc.StartAntigravityVersionUpdater(context.Background())
++			if antigravityVersionUpdaterPlan(localModel) {
++				misc.StartAntigravityVersionUpdater(context.Background())
++			}
+ 			startModelCatalogUpdaters(localModel, cfg.Home.Enabled)
+ 			cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, serverOptions...)
+ 		}
+ 	}
++}
++
++// antigravityVersionUpdaterPlan keeps local-model startup free of remote version fetches.
++func antigravityVersionUpdaterPlan(localModel bool) bool {
++	return !localModel
+ }
+ 
+ // modelCatalogUpdaterPlan decides which remote model catalogs should refresh.
+diff --git a/cmd/server/antigravity_version_cm053_test.go b/cmd/server/antigravity_version_cm053_test.go
+new file mode 100644
+--- /dev/null
++++ b/cmd/server/antigravity_version_cm053_test.go
+@@ -0,0 +1,15 @@
++package main
++
++import "testing"
++
++func TestCM053NoAntigravityEgressLocalModel(t *testing.T) {
++	if antigravityVersionUpdaterPlan(true) {
++		t.Fatal("local-model must not start the Antigravity version updater")
++	}
++}
++
++func TestCM053NoAntigravityEgressRemoteModel(t *testing.T) {
++	if !antigravityVersionUpdaterPlan(false) {
++		t.Fatal("ordinary startup must retain the Antigravity version updater")
++	}
++}

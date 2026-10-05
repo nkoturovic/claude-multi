@@ -1,0 +1,74 @@
+{
+  "availability": {
+    "models": {
+      "deepseek-flash": "agents",
+      "fable": "off",
+      "glm52": "off",
+      "gpt55": "off",
+      "grok45": "lead+agents",
+      "kimi-k3": "off",
+      "opus": "off",
+      "opus5": "off",
+      "qwen38": "off",
+      "sol": "off"
+    },
+    "providers": {
+      "anthropic": "off",
+      "deepseek": "agents",
+      "kimi": "off",
+      "openai": "off",
+      "openrouter": "lead+agents",
+      "qwen": "off"
+    }
+  },
+  "description": "Grok 4.5 lead (OpenRouter) with DeepSeek V4 Flash agents — x-ai lead, deepseek side lanes, cross-family review",
+  "name": "grok-deepseek",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "slots": [
+    {
+      "model": "grok45",
+      "role": "cm-lead"
+    },
+    {
+      "lane": "high",
+      "model": "deepseek-flash",
+      "preferred": true,
+      "role": "cm-analyst"
+    },
+    {
+      "lane": "high",
+      "model": "grok45",
+      "preferred": false,
+      "role": "cm-analyst"
+    },
+    {
+      "lane": "high",
+      "model": "deepseek-flash",
+      "preferred": true,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "high",
+      "model": "grok45",
+      "preferred": false,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "max",
+      "model": "deepseek-flash",
+      "preferred": true,
+      "role": "cm-reviewer"
+    },
+    {
+      "lane": "high",
+      "model": "grok45",
+      "preferred": false,
+      "role": "cm-reviewer"
+    }
+  ],
+  "version": 1
+}

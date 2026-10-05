@@ -1,0 +1,24 @@
+
+  claude-multi — profile: blocked · follows profile · Fresh
+               Fixture seed balanced: frozen test data mirroring the shipped s…
+  ─────────────────────────────────────────────────────────────────────────────
+  health    gateway ok · Claude 2.1.281 · catalog 31
+
+  Status  BLOCKED
+    lead.model: muse-spark was retired in catalog 31 (no successor): needs a
+      model choice
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Enter launch · E edit · Tab next · P profiles · D direct · V details
+  S sessions · G providers · M models · O settings · H doctor · ? help · Esc

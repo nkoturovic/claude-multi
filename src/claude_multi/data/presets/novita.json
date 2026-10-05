@@ -1,0 +1,21 @@
+{
+  "lines": {},
+  "notes": "Novita AI's Anthropic-compatible endpoint (model ids like vendor/model). It serves several model families; its documentation names no model-list endpoint for this route. Declaration only: add models with claude-multi models add novita WIRE …, then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://docs.novita.ai/guides/claude-code",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:NOVITA_API_KEY"
+    },
+    "base_url": "https://api.novita.ai/anthropic",
+    "display": "Novita AI",
+    "independence_family": "unknown",
+    "kind": "anthropic-compatible"
+  },
+  "version": 1
+}

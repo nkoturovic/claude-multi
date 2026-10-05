@@ -1,0 +1,112 @@
+{
+  "applied": {
+    "agents": {
+      "cm-analyst": {
+        "effort": "high",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-high[1m]"
+      },
+      "cm-explorer": {
+        "effort": "high",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-high[1m]"
+      },
+      "cm-implementer": {
+        "effort": "high",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-high[1m]"
+      },
+      "cm-reviewer": {
+        "effort": "xhigh",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-xhigh[1m]"
+      },
+      "cm-reviewer-strong": {
+        "effort": "xhigh",
+        "generation": "5.5",
+        "key": "opus55",
+        "selector": "claude-multi-opus-5-5[1m]"
+      }
+    },
+    "lead": {
+      "compaction": {
+        "client_tokens": 1000000,
+        "percent": null,
+        "provider_tokens": 1000000,
+        "scalar": null,
+        "trigger": 702000,
+        "window": 800000
+      },
+      "effort": "xhigh",
+      "env": {},
+      "generation": null,
+      "key": "muse-spark",
+      "selector": "claude-multi-muse-spark-high[1m]"
+    },
+    "lead_providers": [
+      "anthropic",
+      "kimi",
+      "meta",
+      "openai"
+    ],
+    "native_agents": {
+      "explore": "replace",
+      "general_purpose": "off",
+      "plan": "native"
+    },
+    "no_subagents": false,
+    "settings": {
+      "admitted_lines": [],
+      "compaction_percent": 90,
+      "explore_inherit_cap_disabled": true,
+      "providers_enabled": {
+        "anthropic": true,
+        "deepseek": true,
+        "kimi": true,
+        "llm-local": true,
+        "meta": true,
+        "openai": true,
+        "openrouter": true,
+        "qwen": true
+      },
+      "review_round_cap": 2,
+      "version": 1,
+      "workflow_default_binding": null
+    },
+    "settings_overrides": {},
+    "workflows": "native"
+  },
+  "applied_hash": "sha256:ba63cc623e11990a30c0bc6e24e21517a72d2188b8091bdea2791c936a2bc34b",
+  "catalog_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "catalog_version": 31,
+  "created_at": "2026-09-01T00:00:00Z",
+  "cwd": "/project/a",
+  "follow": false,
+  "forked_from": null,
+  "identity_state": "authoritative",
+  "last_event_source": "end",
+  "last_seen_at": "2026-09-25T00:00:00Z",
+  "launch_epoch": 1,
+  "launcher_version": "2.26.0",
+  "lead_class": null,
+  "lineup_generation": 0,
+  "managed_id": "a5555555-5555-4555-8555-555555555555",
+  "migrated_from_version": 3,
+  "migration": {
+    "composition_name": "kimi-sol",
+    "from_version": 3,
+    "migrated_at": "2026-09-25T00:00:00Z",
+    "outcome": "needs-choice",
+    "session_type": "managed-composition"
+  },
+  "mutation_token": "f0000000-0000-4000-8000-000000000000",
+  "pending_forks": [],
+  "profile": null,
+  "runtime_aliases": [],
+  "runtime_session_id": "a5555555-5555-4555-8555-555555555555",
+  "version": 4
+}

@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.patch -text -whitespace
+tests/goldens/** -text
+# Verbatim third-party licence and notice texts: never normalised.
+gateway/licenses/** -text -whitespace

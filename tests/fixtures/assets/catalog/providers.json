@@ -1,0 +1,178 @@
+{
+  "providers": {
+    "anthropic": {
+      "adapter": "cliproxy-oauth-claude-v1",
+      "display": "Anthropic",
+      "independence_family": "anthropic",
+      "passthrough_routes": [
+        {
+          "fork": true,
+          "name": "claude-fable-5"
+        },
+        {
+          "fork": true,
+          "name": "claude-fable-5-1"
+        },
+        {
+          "fork": true,
+          "name": "claude-opus-5"
+        },
+        {
+          "fork": true,
+          "name": "claude-opus-5-5"
+        },
+        {
+          "fork": true,
+          "name": "claude-opus-4-8"
+        },
+        {
+          "fork": true,
+          "name": "claude-sonnet-5"
+        }
+      ],
+      "payload_contracts": [],
+      "support": "anthropic-supported",
+      "support_note": "Fixture provider anthropic.",
+      "transport": {
+        "kind": "oauth-pool",
+        "pool": "claude"
+      }
+    },
+    "deepseek": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "DeepSeek",
+      "independence_family": "deepseek",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-high",
+        "output-config-max"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Fixture provider deepseek.",
+      "transport": {
+        "auth": {
+          "header": "x-api-key",
+          "kind": "header",
+          "secret_ref": "env:DEEPSEEK_CLAUDE_API_KEY"
+        },
+        "base_url": "https://api.deepseek.com/anthropic",
+        "kind": "direct"
+      }
+    },
+    "kimi": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "Kimi",
+      "independence_family": "moonshot",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-max",
+        "filter-thinking"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Fixture provider kimi.",
+      "transport": {
+        "auth": {
+          "header": "x-api-key",
+          "kind": "header",
+          "secret_ref": "env:KIMI_CLAUDE_API_KEY"
+        },
+        "base_url": "https://api.kimi.com/coding",
+        "kind": "direct"
+      }
+    },
+    "llm-local": {
+      "adapter": "cliproxy-openai-compat-v1",
+      "display": "Local LLM",
+      "independence_family": "local",
+      "passthrough_routes": [],
+      "payload_contracts": [],
+      "support": "locally-validated-experimental",
+      "support_note": "Fixture provider llm-local.",
+      "transport": {
+        "auth": {
+          "kind": "none"
+        },
+        "base_url": "http://llm-local.invalid:8010/v1",
+        "kind": "direct-openai"
+      }
+    },
+    "meta": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "Meta",
+      "independence_family": "meta",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-high",
+        "output-config-xhigh"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Fixture provider meta.",
+      "transport": {
+        "auth": {
+          "kind": "bearer",
+          "secret_ref": "env:META_CLAUDE_API_KEY"
+        },
+        "base_url": "https://api.meta.ai",
+        "kind": "direct"
+      }
+    },
+    "openai": {
+      "adapter": "cliproxy-oauth-codex-v1",
+      "display": "OpenAI",
+      "independence_family": "openai",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "reasoning-effort-high",
+        "reasoning-effort-xhigh"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Fixture provider openai.",
+      "transport": {
+        "kind": "oauth-pool",
+        "pool": "codex"
+      }
+    },
+    "openrouter": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "OpenRouter",
+      "independence_family": "unknown",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "output-config-high",
+        "output-config-xhigh"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Fixture provider openrouter.",
+      "transport": {
+        "auth": {
+          "header": "x-api-key",
+          "kind": "header",
+          "secret_ref": "env:OPENROUTER_CLAUDE_API_KEY"
+        },
+        "base_url": "https://openrouter.ai/api",
+        "kind": "direct"
+      }
+    },
+    "qwen": {
+      "adapter": "cliproxy-claude-compatible-v1",
+      "display": "Qwen",
+      "independence_family": "alibaba",
+      "passthrough_routes": [],
+      "payload_contracts": [
+        "reasoning-effort-xhigh",
+        "reasoning-effort-max"
+      ],
+      "support": "locally-validated-experimental",
+      "support_note": "Fixture provider qwen.",
+      "transport": {
+        "auth": {
+          "kind": "bearer",
+          "secret_ref": "env:QWEN_CLAUDE_API_KEY"
+        },
+        "base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+        "kind": "direct"
+      }
+    }
+  },
+  "version": 1
+}

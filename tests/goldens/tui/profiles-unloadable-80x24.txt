@@ -1,0 +1,24 @@
+
+  profiles
+  ─────────────────────────────────────────────────────────────────────────────
+    profile     origin  state        used  notes
+    openrouter  seed    connected    —     fallback
+    balanced    seed    not checked  —
+    claude      seed    not checked  —     fallback
+    direct      seed    not checked  —
+    economy     seed    not checked  —
+    max         seed    not checked  —
+    openai      seed    not checked  —     fallback
+    quality     seed    not checked  —
+  › broken      yours   cannot load  —     line 3
+
+
+
+
+
+
+  ─
+  ~/.config/claude-multi/profiles/broken.json line 3: $: invalid JSON at line …
+  cannot be loaded — E edits the file, X deletes it (a copy is kept)
+
+  E edit file · X delete · N new · ? help · Esc back

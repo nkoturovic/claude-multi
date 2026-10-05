@@ -1,0 +1,24 @@
+
+  reviewer — choose model
+  reviewer (plain): Independent report-only review: verified BLOCKER/MAJOR/MIN…
+  ─────────────────────────────────────────────────────────────────────────────
+    anthropic   Fable 5          anthropic 1M    efforts max
+                Opus 4.8         anthropic 1M    efforts xhigh
+                Opus 5           anthropic 1M    efforts xhigh
+                Opus 5.5         anthropic 1M    efforts xhigh
+    kimi        Kimi K3          moonshot  1M    efforts max
+    openai      GPT-5.5          openai    258K  efforts high
+                GPT-5.6 Sol      openai    1M    efforts high xhigh
+    openrouter  Grok 4.6         x-ai      500K  efforts high xhigh
+                DeepSeek V4 Flash deepseek  1M    efforts high xhigh
+                Gemini 3 Flash   google    1M    efforts high xhigh
+                GPT-6 Sol        openai    1M    efforts high xhigh
+                Grok 4.7         x-ai      500K  efforts high xhigh
+                Opus 5.5         anthropic 1M    efforts high xhigh
+  ›             ◇ Fixture Reviewer openai    200K  efforts high  (not agent-el…
+    qwen        Qwen3.8 Max      alibaba   1M    efforts max
+    deepseek · meta     configured · no models
+
+
+  not agent-eligible: no current effort high, stream, tools evidence
+  ← → effort · Enter choose · V details · ? help · Esc back

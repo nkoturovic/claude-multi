@@ -1,0 +1,24 @@
+
+  lineup — full details
+  ─────────────────────────────────────────────────────────────────────────────
+  ! explorer and every implementer are on openai (codex quota shared)
+  implementer agents are unavailable here: they work in a Git worktree and
+  this directory is not a Git repository (git init enables them)
+
+  Review routing (operator-declared families are labelled)
+  implementer-light  — (its check)  reviewer-strong Opus 5.5 ✓
+  implementer  reviewer-strong Opus 5.5 ✓°  reviewer-strong Opus 5.5 ✓
+  implementer-strong  reviewer-strong Opus 5.5 ✓  reviewer-strong Opus 5.5 ✓
+  lead (Opus 5.5)  reviewer GPT-5.6 Sol ✓°  reviewer GPT-5.6 Sol ✓°
+
+  Per-slot readiness
+  Ready means locally configured and served; upstream authentication, quota,
+  and reachability may still fail.
+  lead: claude credential records not observed — sign in: G → L
+  explorer: codex credential records not observed — sign in: G → L
+  analyst: codex credential records not observed — sign in: G → L
+  analyst-strong: claude credential records not observed — sign in: G → L
+  implementer-light: codex credential records not observed — sign in: G → L
+  implementer: codex credential records not observed — sign in: G → L
+  More below — arrows/PgDn scroll; Home/End
+  Up/Down scroll · PgUp/PgDn page · Home/End  · Esc back

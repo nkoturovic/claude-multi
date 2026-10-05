@@ -1,0 +1,21 @@
+{
+  "lines": {},
+  "notes": "Z.ai's Anthropic-compatible endpoint for its GLM models (keys from z.ai). Its documentation names no model-list endpoint. Declaration only: add models with claude-multi models add zai WIRE …, then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://docs.z.ai/scenario-example/develop-tools/claude",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:ZAI_API_KEY"
+    },
+    "base_url": "https://api.z.ai/api/anthropic",
+    "display": "Z.ai (GLM)",
+    "independence_family": "zhipu",
+    "kind": "anthropic-compatible"
+  },
+  "version": 1
+}

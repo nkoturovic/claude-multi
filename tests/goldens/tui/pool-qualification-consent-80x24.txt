@@ -1,0 +1,24 @@
+
+  Confirm explicit action
+  ─────────────────────────────────────────────────────────────────────────────
+  Qualification plan for custom-x:
+    definition:
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    route: the claude OAuth pool; auth an OAuth pool credential held by the
+  gateway (not shown)
+    1. smoke — alias claude-fixture-9, approximately 40 input tokens
+    2. effort high — alias claude-fixture-9, approximately 40 input tokens
+    3. tools (forced) step 1 — alias claude-fixture-9, approximately 150 input
+  tokens
+    4. tools (forced) step 2 — alias claude-fixture-9, approximately 250 input
+  tokens
+    5. stream — alias claude-fixture-9, approximately 40 input tokens
+    tools variant: forced named tool (tool_choice {type: tool}, strict object
+  schema); no other variant is tried.
+    tools step 2 runs only if step 1 returns the expected tool call.
+    exact-client check: the pinned Claude Code client runs offline against a
+  local fake (no provider request); recorded as separate evidence.
+  Caps: 120 s and 256 KiB per request; context 300 s and 256 KiB.
+  No retries. max_tokens is sent but is not a reliable cost bound.
+  More below — arrows/PgDn scroll; Home/End
+  y proceed · N cancel · Esc cancel

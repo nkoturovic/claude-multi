@@ -1,0 +1,1935 @@
+diff --git a/internal/compatsafe/compatsafe.go b/internal/compatsafe/compatsafe.go
+index f19277f..9024ec2 100644
+--- a/internal/compatsafe/compatsafe.go
++++ b/internal/compatsafe/compatsafe.go
+@@ -20,7 +20,7 @@
+ // example request-scoped-error rules with free-text match strings) is not
+ // supported on this route.
+ //
+-// The package depends on the standard library only.
++// The package depends on the standard library and internal/retryhint only.
+ package compatsafe
+ 
+ import (
+@@ -37,6 +37,8 @@ import (
+ 	"strings"
+ 	"syscall"
+ 	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
+ )
+ 
+ // MaxErrorBody is the most bytes of an upstream failure body that are ever
+@@ -179,8 +181,14 @@ type Error struct {
+ 	Kind   Kind
+ 	Status int
+ 	Retry  *time.Duration
++	// Hint is the validated upstream Retry-After of a 429/503:
++	// typed data only, emitted by the handler as one canonical value.
++	Hint retryhint.Hint
+ }
+ 
++// UpstreamRetryAfter implements retryhint.Carrier.
++func (e Error) UpstreamRetryAfter() (retryhint.Hint, bool) { return e.Hint, e.Hint.Valid() }
++
+ // NewError returns the safe failure of kind with status. A status outside
+ // 400..599 becomes 502.
+ func NewError(kind Kind, status int, retry *time.Duration) Error {
+diff --git a/internal/retryhint/retryhint.go b/internal/retryhint/retryhint.go
+new file mode 100644
+index 0000000..be67635
+--- /dev/null
++++ b/internal/retryhint/retryhint.go
+@@ -0,0 +1,204 @@
++// Package retryhint carries a validated upstream Retry-After hint from the
++// upstream response boundary to the gateway's terminal error response
++// (claude-multi retry-after).
++//
++// General upstream header passthrough stays off. An executor parses the
++// upstream Retry-After of a failure once, at the response boundary, into a
++// typed Hint (never a raw header map) and attaches it to the error it
++// returns. The handler that writes the terminal 429/503 re-serializes one
++// canonical delta-seconds value from it, after any trusted local recovery
++// header (which wins), before the response headers are committed. A hint
++// keeps the upstream deadline: time already spent in the gateway is
++// subtracted at emission rather than restarting the wait. There is no gateway
++// clamp. Mid-stream errors (after headers are committed) are out of scope.
++//
++// The package depends on the standard library only.
++package retryhint
++
++import (
++	"errors"
++	"math"
++	"net/http"
++	"strconv"
++	"strings"
++	"time"
++)
++
++// MaxValueLength bounds the accepted header value (an HTTP-date is 29 bytes).
++const MaxValueLength = 64
++
++// maxDeltaSeconds is the largest delta that fits a time.Duration.
++const maxDeltaSeconds = int64(math.MaxInt64 / int64(time.Second))
++
++// Hint is a validated upstream Retry-After deadline. The zero Hint is "no
++// hint"; a valid "0" is a hint with a deadline at receipt.
++type Hint struct {
++	deadline time.Time
++	valid    bool
++}
++
++// Valid reports whether h is a hint (as opposed to no hint).
++func (h Hint) Valid() bool { return h.valid }
++
++// Remaining returns the wait left at now, never negative. ok is false for
++// no hint.
++func (h Hint) Remaining(now time.Time) (time.Duration, bool) {
++	if !h.valid {
++		return 0, false
++	}
++	remaining := h.deadline.Sub(now)
++	if remaining < 0 {
++		remaining = 0
++	}
++	return remaining, true
++}
++
++// Value returns the one canonical Retry-After value at now: whole
++// delta-seconds, rounded up. ok is false for no hint.
++func (h Hint) Value(now time.Time) (string, bool) {
++	remaining, ok := h.Remaining(now)
++	if !ok {
++		return "", false
++	}
++	seconds := int64(remaining / time.Second)
++	if remaining%time.Second != 0 {
++		seconds++
++	}
++	return strconv.FormatInt(seconds, 10), true
++}
++
++// Parse validates the Retry-After values of one upstream response received
++// at now. Exactly one value is accepted: delta-seconds (ASCII digits only,
++// fitting a time.Duration) or an HTTP-date; a past date is a zero wait. No
++// value, several values (even identical ones), an over-long, negative,
++// signed, fractional, overflowing or otherwise malformed value is no hint.
++func Parse(values []string, now time.Time) (Hint, bool) {
++	if len(values) != 1 {
++		return Hint{}, false
++	}
++	raw := strings.Trim(values[0], " \t")
++	if raw == "" || len(raw) > MaxValueLength {
++		return Hint{}, false
++	}
++	if isDigits(raw) {
++		seconds, errParse := strconv.ParseInt(raw, 10, 64)
++		if errParse != nil || seconds > maxDeltaSeconds {
++			return Hint{}, false
++		}
++		return Hint{deadline: now.Add(time.Duration(seconds) * time.Second), valid: true}, true
++	}
++	date, errParse := http.ParseTime(raw)
++	if errParse != nil {
++		return Hint{}, false
++	}
++	if date.Before(now) {
++		date = now
++	}
++	return Hint{deadline: date, valid: true}, true
++}
++
++// FromHeader parses the Retry-After field of header (see Parse).
++func FromHeader(header http.Header, now time.Time) (Hint, bool) {
++	if header == nil {
++		return Hint{}, false
++	}
++	return Parse(header.Values("Retry-After"), now)
++}
++
++func isDigits(value string) bool {
++	for i := 0; i < len(value); i++ {
++		if value[i] < '0' || value[i] > '9' {
++			return false
++		}
++	}
++	return value != ""
++}
++
++// Carrier is implemented by an upstream failure that carries a hint. The
++// status is the carrier's own HTTP status: a hint is emitted only on a
++// terminal response with that same 429 or 503 status.
++type Carrier interface {
++	UpstreamRetryAfter() (Hint, bool)
++	StatusCode() int
++}
++
++// From returns the hint of the first carrier in err's chain.
++func From(err error) (Hint, int, bool) {
++	var carrier Carrier
++	if err == nil || !errors.As(err, &carrier) || carrier == nil {
++		return Hint{}, 0, false
++	}
++	hint, ok := carrier.UpstreamRetryAfter()
++	if !ok || !hint.Valid() {
++		return Hint{}, 0, false
++	}
++	return hint, carrier.StatusCode(), true
++}
++
++// Emittable reports whether a terminal response with status may carry an
++// upstream hint.
++func Emittable(status int) bool {
++	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
++}
++
++// ResponseValue returns the one canonical Retry-After value for a terminal
++// error response with status, when err carries an upstream hint whose
++// carrier has that same 429 or 503 status.
++func ResponseValue(err error, status int, now time.Time) (string, bool) {
++	if !Emittable(status) {
++		return "", false
++	}
++	hint, carrierStatus, ok := From(err)
++	if !ok || carrierStatus != status {
++		return "", false
++	}
++	return hint.Value(now)
++}
++
++// DirectCarrier is implemented by a direct upstream response error (one
++// whose headers are forwarded as they are) that validated its response's
++// Retry-After when the response headers arrived. It is deliberately not a
++// Carrier: a direct response never gains a second, typed Retry-After.
++type DirectCarrier interface {
++	DirectRetryAfter() (Hint, bool)
++}
++
++// CanonicalizeHeader replaces the Retry-After field of a forwarded upstream
++// header set (the direct-response path, which forwards upstream headers by
++// design) with at most one canonical value: a valid hint is re-serialized, an
++// invalid or duplicated field is dropped. Other fields are untouched.
++func CanonicalizeHeader(header http.Header, now time.Time) {
++	CanonicalizeDirectHeader(header, nil, now)
++}
++
++// CanonicalizeDirectHeader is CanonicalizeHeader for the direct response
++// built from err. When err carries a DirectCarrier hint (validated when the
++// upstream response headers arrived), that deadline is serialized at now, so
++// time spent reading and handling the failure is not added back to the
++// client's wait; otherwise the forwarded value is validated at now (a
++// response built in process, for example by an interceptor). Nothing is
++// emitted unless the forwarded header set has a Retry-After field.
++func CanonicalizeDirectHeader(header http.Header, err error, now time.Time) {
++	if header == nil {
++		return
++	}
++	values := header.Values("Retry-After")
++	if len(values) == 0 {
++		return
++	}
++	header.Del("Retry-After")
++	var direct DirectCarrier
++	if err != nil && errors.As(err, &direct) && direct != nil {
++		if hint, ok := direct.DirectRetryAfter(); ok && hint.Valid() {
++			if value, okValue := hint.Value(now); okValue {
++				header.Set("Retry-After", value)
++			}
++			return
++		}
++	}
++	if hint, ok := Parse(values, now); ok {
++		if value, okValue := hint.Value(now); okValue {
++			header.Set("Retry-After", value)
++		}
++	}
++}
+diff --git a/internal/retryhint/retryhint_cm053_test.go b/internal/retryhint/retryhint_cm053_test.go
+new file mode 100644
+index 0000000..2cb95c3
+--- /dev/null
++++ b/internal/retryhint/retryhint_cm053_test.go
+@@ -0,0 +1,174 @@
++package retryhint
++
++import (
++	"errors"
++	"fmt"
++	"net/http"
++	"strings"
++	"testing"
++	"time"
++)
++
++// The typed upstream Retry-After hint.
++
++func TestCM053RetryAfterParseAndCanonicalize(t *testing.T) {
++	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
++	valid := []struct {
++		in   string
++		want string
++	}{
++		{"0", "0"},
++		{"5", "5"},
++		{"3600", "3600"},
++		{"30000", "30000"},
++		{" \t7 ", "7"},
++		{"007", "7"},
++		{now.Add(90 * time.Second).Format(http.TimeFormat), "90"},
++		{now.Add(-time.Hour).Format(http.TimeFormat), "0"},
++		{now.Add(90 * time.Second).Format(time.RFC850), "90"},
++		{now.Add(90 * time.Second).Format(time.ANSIC), "90"},
++		{fmt.Sprint(maxDeltaSeconds), fmt.Sprint(maxDeltaSeconds)},
++	}
++	for _, tc := range valid {
++		hint, ok := Parse([]string{tc.in}, now)
++		if !ok || !hint.Valid() {
++			t.Fatalf("Parse(%q) rejected a valid value", tc.in)
++		}
++		if got, okValue := hint.Value(now); !okValue || got != tc.want {
++			t.Fatalf("Parse(%q).Value = %q, want %q", tc.in, got, tc.want)
++		}
++	}
++	invalid := [][]string{
++		nil,
++		{},
++		{""},
++		{"   "},
++		{"-5"},
++		{"+5"},
++		{"5.0"},
++		{"1e3"},
++		{"0x10"},
++		{"5 5"},
++		{"soon"},
++		{"5", "5"},
++		{"5", "6"},
++		{"99999999999999999999"},
++		{fmt.Sprint(maxDeltaSeconds + 1)},
++		{strings.Repeat("1", MaxValueLength+1)},
++		{"Mon, 32 Sep 2026 12:00:00 GMT"},
++	}
++	for _, in := range invalid {
++		if hint, ok := Parse(in, now); ok || hint.Valid() {
++			t.Fatalf("Parse(%q) accepted an invalid value", in)
++		}
++	}
++
++	var none Hint
++	if _, ok := none.Value(now); ok || none.Valid() {
++		t.Fatal("the zero Hint is a hint")
++	}
++	zero, _ := Parse([]string{"0"}, now)
++	if !zero.Valid() {
++		t.Fatal("a valid 0 is not distinguished from no hint")
++	}
++
++	// The upstream deadline is kept: time already spent is subtracted and
++	// the remainder is rounded up.
++	ten, _ := Parse([]string{"10"}, now)
++	for spent, want := range map[time.Duration]string{0: "10", 3500 * time.Millisecond: "7", 10 * time.Second: "0", time.Minute: "0"} {
++		if got, _ := ten.Value(now.Add(spent)); got != want {
++			t.Fatalf("after %s: Value = %q, want %q", spent, got, want)
++		}
++	}
++
++	header := http.Header{"Retry-After": {"30", "30"}, "X-Other": {"kept"}}
++	CanonicalizeHeader(header, now)
++	if len(header.Values("Retry-After")) != 0 || header.Get("X-Other") != "kept" {
++		t.Fatalf("duplicate Retry-After not dropped: %v", header)
++	}
++	header = http.Header{"Retry-After": {now.Add(2 * time.Minute).Format(http.TimeFormat)}}
++	CanonicalizeHeader(header, now)
++	if got := header.Values("Retry-After"); len(got) != 1 || got[0] != "120" {
++		t.Fatalf("date not canonicalized: %v", got)
++	}
++	header = http.Header{"Retry-After": {"later"}}
++	CanonicalizeHeader(header, now)
++	if len(header.Values("Retry-After")) != 0 {
++		t.Fatalf("invalid Retry-After kept: %v", header)
++	}
++	CanonicalizeHeader(nil, now)
++}
++
++type cm053Carrier struct {
++	status int
++	hint   Hint
++}
++
++func (c cm053Carrier) Error() string                    { return "carrier" }
++func (c cm053Carrier) StatusCode() int                  { return c.status }
++func (c cm053Carrier) UpstreamRetryAfter() (Hint, bool) { return c.hint, c.hint.Valid() }
++
++func TestCM053RetryAfterResponseValueGating(t *testing.T) {
++	now := time.Now()
++	hint, _ := Parse([]string{"5"}, now)
++	for _, tc := range []struct {
++		err    error
++		status int
++		ok     bool
++	}{
++		{cm053Carrier{429, hint}, 429, true},
++		{cm053Carrier{503, hint}, 503, true},
++		{fmt.Errorf("wrapped: %w", cm053Carrier{429, hint}), 429, true},
++		{cm053Carrier{429, hint}, 503, false},
++		{cm053Carrier{500, hint}, 500, false},
++		{cm053Carrier{429, Hint{}}, 429, false},
++		{errors.New("plain"), 429, false},
++		{nil, 429, false},
++	} {
++		if _, ok := ResponseValue(tc.err, tc.status, now); ok != tc.ok {
++			t.Fatalf("ResponseValue(%v, %d) ok = %t, want %t", tc.err, tc.status, ok, tc.ok)
++		}
++	}
++}
++
++type cm053DirectErr struct{ hint Hint }
++
++func (e cm053DirectErr) Error() string                  { return "cm053 direct response" }
++func (e cm053DirectErr) DirectRetryAfter() (Hint, bool) { return e.hint, e.hint.Valid() }
++
++// TestCM053RetryAfterDirectReceiptDeadline: a direct response serializes the
++// deadline its executor validated when the upstream headers arrived, not a
++// re-parse of the forwarded value at emission (time spent receiving and
++// handling the failure is not added back to the wait).
++func TestCM053RetryAfterDirectReceiptDeadline(t *testing.T) {
++	received := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
++	emitted := received.Add(1200 * time.Millisecond)
++	atReceipt, _ := Parse([]string{"1"}, received)
++	wrapped := fmt.Errorf("wrapped: %w", cm053DirectErr{hint: atReceipt})
++	for _, tc := range []struct {
++		name   string
++		header http.Header
++		err    error
++		want   []string
++	}{
++		{"receipt-deadline-elapsed", http.Header{"Retry-After": {"1"}}, wrapped, []string{"0"}},
++		{"receipt-deadline-remaining", http.Header{"Retry-After": {"10"}}, cm053DirectErr{hint: func() Hint { h, _ := Parse([]string{"10"}, received); return h }()}, []string{"9"}},
++		{"no-carrier-parses-at-emission", http.Header{"Retry-After": {"1"}}, errors.New("in-process"), []string{"1"}},
++		{"nil-error-parses-at-emission", http.Header{"Retry-After": {"1"}}, nil, []string{"1"}},
++		{"carrier-without-hint-falls-back", http.Header{"Retry-After": {"5"}}, cm053DirectErr{}, []string{"5"}},
++		{"carrier-duplicate-forwarded-one-value", http.Header{"Retry-After": {"1", "1"}}, wrapped, []string{"0"}},
++		{"carrier-but-nothing-forwarded", http.Header{}, wrapped, nil},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			header := tc.header.Clone()
++			CanonicalizeDirectHeader(header, tc.err, emitted)
++			got := header.Values("Retry-After")
++			if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
++				t.Fatalf("Retry-After = %v, want %v", got, tc.want)
++			}
++		})
++	}
++	if _, _, ok := From(wrapped); ok {
++		t.Fatal("a direct carrier must not also be a typed Carrier")
++	}
++}
+diff --git a/internal/runtime/executor/claude_executor_execute.go b/internal/runtime/executor/claude_executor_execute.go
+index 09b1503..51474e1 100644
+--- a/internal/runtime/executor/claude_executor_execute.go
++++ b/internal/runtime/executor/claude_executor_execute.go
+@@ -6,6 +6,7 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"net/http"
++	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+@@ -343,6 +344,9 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
+ 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := doClaudeUpstreamRequest(httpClient, httpReq)
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, wrapClaudeFastRequestError(fastRequest, 0, err)
+@@ -357,7 +361,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
+ 			helps.RecordAPIResponseError(ctx, e.cfg, decErr)
+ 			msg := fmt.Sprintf("failed to decode error response body: %v", decErr)
+ 			helps.LogWithRequestID(ctx).Warn(msg)
+-			errClassified := classifyClaudeUpstreamErrorWithCooling(httpResp.StatusCode, httpResp.Header, []byte(msg), e.modelLevelCooling())
++			errClassified := classifyClaudeUpstreamErrorReceived(httpResp.StatusCode, httpResp.Header, []byte(msg), e.modelLevelCooling(), received)
+ 			if fastRequest {
+ 				return resp, wrapClaudeFastRequestError(fastRequest, httpResp.StatusCode, errClassified)
+ 			}
+@@ -376,9 +380,9 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
+ 			log.Errorf("response body close error: %v", errClose)
+ 		}
+ 		if fastRequest {
+-			return resp, newClaudeFastDirectResponseError(httpResp, b)
++			return resp, newClaudeFastDirectResponseError(httpResp, b, received)
+ 		}
+-		return resp, classifyClaudeUpstreamErrorWithCooling(httpResp.StatusCode, httpResp.Header, b, e.modelLevelCooling())
++		return resp, classifyClaudeUpstreamErrorReceived(httpResp.StatusCode, httpResp.Header, b, e.modelLevelCooling(), received)
+ 	}
+ 	decodedBody, err := decodeResponseBody(httpResp.Body, claudeResponseContentEncoding(httpResp.Header))
+ 	if err != nil {
+diff --git a/internal/runtime/executor/claude_executor_fast_error.go b/internal/runtime/executor/claude_executor_fast_error.go
+index 2c791ca..c8e5499 100644
+--- a/internal/runtime/executor/claude_executor_fast_error.go
++++ b/internal/runtime/executor/claude_executor_fast_error.go
+@@ -8,6 +8,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/upstreamredirect"
+ 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+@@ -83,6 +84,18 @@ type claudeFastDirectResponseError struct {
+ 	response         *cliproxyexecutor.RequestTerminatedError
+ 	retryAfter       *time.Duration
+ 	credentialScoped bool
++	// upstreamRetryAfter is the forwarded Retry-After validated when the
++	// response headers arrived; the handler serializes this
++	// deadline rather than re-parsing the forwarded value later.
++	upstreamRetryAfter retryhint.Hint
++}
++
++// DirectRetryAfter implements retryhint.DirectCarrier.
++func (e *claudeFastDirectResponseError) DirectRetryAfter() (retryhint.Hint, bool) {
++	if e == nil {
++		return retryhint.Hint{}, false
++	}
++	return e.upstreamRetryAfter, e.upstreamRetryAfter.Valid()
+ }
+ 
+ func (e *claudeFastDirectResponseError) Error() string {
+@@ -140,7 +153,7 @@ func wrapClaudeFastRequestError(fastRequest bool, status int, err error) error {
+ 	return &claudeFastRequestError{cause: err, status: status, retryAfter: retryAfter}
+ }
+ 
+-func newClaudeFastDirectResponseError(resp *http.Response, body []byte) error {
++func newClaudeFastDirectResponseError(resp *http.Response, body []byte, received time.Time) error {
+ 	if resp == nil {
+ 		return nil
+ 	}
+@@ -150,6 +163,7 @@ func newClaudeFastDirectResponseError(resp *http.Response, body []byte) error {
+ 	headers.Del("Content-Encoding")
+ 	headers.Del("Content-Length")
+ 
++	directHint, _ := retryhint.FromHeader(resp.Header, received)
+ 	var retryAfter *time.Duration
+ 	credentialScoped := false
+ 	if resp.StatusCode == http.StatusTooManyRequests {
+@@ -165,8 +179,9 @@ func newClaudeFastDirectResponseError(resp *http.Response, body []byte) error {
+ 			Header:     headers,
+ 			Body:       bytes.Clone(body),
+ 		},
+-		retryAfter:       retryAfter,
+-		credentialScoped: credentialScoped,
++		retryAfter:         retryAfter,
++		credentialScoped:   credentialScoped,
++		upstreamRetryAfter: directHint,
+ 	}
+ }
+ 
+diff --git a/internal/runtime/executor/claude_executor_request.go b/internal/runtime/executor/claude_executor_request.go
+index b24ee92..c9f8f4e 100644
+--- a/internal/runtime/executor/claude_executor_request.go
++++ b/internal/runtime/executor/claude_executor_request.go
+@@ -652,11 +652,19 @@ func classifyClaudeUpstreamError(statusCode int, headers http.Header, body []byt
+ }
+ 
+ func classifyClaudeUpstreamErrorWithCooling(statusCode int, headers http.Header, body []byte, modelLevelCooling bool) error {
++	return classifyClaudeUpstreamErrorReceived(statusCode, headers, body, modelLevelCooling, time.Now())
++}
++
++// classifyClaudeUpstreamErrorReceived is classifyClaudeUpstreamErrorWithCooling
++// for a response whose headers arrived at received: the validated upstream
++// Retry-After hint keeps the deadline from receipt, before the
++// failure body was read. The gateway's own retry timing is unchanged.
++func classifyClaudeUpstreamErrorReceived(statusCode int, headers http.Header, body []byte, modelLevelCooling bool, received time.Time) error {
+ 	var retryAfter *time.Duration
+ 	if statusCode == http.StatusTooManyRequests || (statusCode >= 400 && statusCode < 600) {
+ 		retryAfter = helps.ParseClaudeRateLimitReset(headers, time.Now())
+ 	}
+-	err := statusErr{code: statusCode, msg: string(body), retryAfter: retryAfter}
++	err := statusErr{code: statusCode, msg: string(body), retryAfter: retryAfter}.withUpstreamRetryAfter(headers, received)
+ 	if statusCode == http.StatusTooManyRequests {
+ 		if !modelLevelCooling && helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(headers) {
+ 			return claudeRateLimitError{statusErr: err, credentialScoped: true}
+diff --git a/internal/runtime/executor/claude_executor_stream.go b/internal/runtime/executor/claude_executor_stream.go
+index 988b095..4071d55 100644
+--- a/internal/runtime/executor/claude_executor_stream.go
++++ b/internal/runtime/executor/claude_executor_stream.go
+@@ -8,6 +8,7 @@ import (
+ 	"io"
+ 	"net/http"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+@@ -335,6 +336,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
+ 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := doClaudeUpstreamRequest(httpClient, httpReq)
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return nil, wrapClaudeFastRequestError(fastRequest, 0, err)
+@@ -349,7 +353,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
+ 			helps.RecordAPIResponseError(ctx, e.cfg, decErr)
+ 			msg := fmt.Sprintf("failed to decode error response body: %v", decErr)
+ 			helps.LogWithRequestID(ctx).Warn(msg)
+-			errClassified := classifyClaudeUpstreamErrorWithCooling(httpResp.StatusCode, httpResp.Header, []byte(msg), e.modelLevelCooling())
++			errClassified := classifyClaudeUpstreamErrorReceived(httpResp.StatusCode, httpResp.Header, []byte(msg), e.modelLevelCooling(), received)
+ 			if fastRequest {
+ 				return nil, wrapClaudeFastRequestError(fastRequest, httpResp.StatusCode, errClassified)
+ 			}
+@@ -368,9 +372,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
+ 			log.Errorf("response body close error: %v", errClose)
+ 		}
+ 		if fastRequest {
+-			return nil, newClaudeFastDirectResponseError(httpResp, b)
++			return nil, newClaudeFastDirectResponseError(httpResp, b, received)
+ 		}
+-		return nil, classifyClaudeUpstreamErrorWithCooling(httpResp.StatusCode, httpResp.Header, b, e.modelLevelCooling())
++		return nil, classifyClaudeUpstreamErrorReceived(httpResp.StatusCode, httpResp.Header, b, e.modelLevelCooling(), received)
+ 	}
+ 	decodedBody, err := decodeResponseBody(httpResp.Body, claudeResponseContentEncoding(httpResp.Header))
+ 	if err != nil {
+diff --git a/internal/runtime/executor/claude_executor_tokens.go b/internal/runtime/executor/claude_executor_tokens.go
+index 7ef0a37..8b64c83 100644
+--- a/internal/runtime/executor/claude_executor_tokens.go
++++ b/internal/runtime/executor/claude_executor_tokens.go
+@@ -7,6 +7,7 @@ import (
+ 	"io"
+ 	"net/http"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+@@ -258,6 +259,9 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
+ 
+ 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
+ 	resp, err := doClaudeUpstreamRequest(httpClient, httpReq)
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return cliproxyexecutor.Response{}, err
+@@ -272,7 +276,7 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
+ 			helps.RecordAPIResponseError(ctx, e.cfg, decErr)
+ 			msg := fmt.Sprintf("failed to decode error response body: %v", decErr)
+ 			helps.LogWithRequestID(ctx).Warn(msg)
+-			return cliproxyexecutor.Response{}, classifyClaudeUpstreamErrorWithCooling(resp.StatusCode, resp.Header, []byte(msg), e.modelLevelCooling())
++			return cliproxyexecutor.Response{}, classifyClaudeUpstreamErrorReceived(resp.StatusCode, resp.Header, []byte(msg), e.modelLevelCooling(), received)
+ 		}
+ 		b, readErr := io.ReadAll(errBody)
+ 		if readErr != nil {
+@@ -285,7 +289,7 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
+ 		if errClose := errBody.Close(); errClose != nil {
+ 			log.Errorf("response body close error: %v", errClose)
+ 		}
+-		return cliproxyexecutor.Response{}, classifyClaudeUpstreamErrorWithCooling(resp.StatusCode, resp.Header, b, e.modelLevelCooling())
++		return cliproxyexecutor.Response{}, classifyClaudeUpstreamErrorReceived(resp.StatusCode, resp.Header, b, e.modelLevelCooling(), received)
+ 	}
+ 	decodedBody, err := decodeResponseBody(resp.Body, claudeResponseContentEncoding(resp.Header))
+ 	if err != nil {
+diff --git a/internal/runtime/executor/codex_executor_execute.go b/internal/runtime/executor/codex_executor_execute.go
+index a837897..0a2aed9 100644
+--- a/internal/runtime/executor/codex_executor_execute.go
++++ b/internal/runtime/executor/codex_executor_execute.go
+@@ -6,6 +6,7 @@ import (
+ 	"io"
+ 	"net/http"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+@@ -106,6 +107,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
+ 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := upstreamredirect.Result(httpClient.Do(httpReq))
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, err
+@@ -124,7 +128,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
+ 		}
+ 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
+ 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+-		err = newCodexStatusErrWithCooling(httpResp.StatusCode, b, e.modelLevelCooling())
++		err = newCodexStatusErrWithCooling(httpResp.StatusCode, b, e.modelLevelCooling()).withUpstreamRetryAfter(httpResp.Header, received)
+ 		return resp, err
+ 	}
+ 	data, errRead := io.ReadAll(httpResp.Body)
+@@ -279,6 +283,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
+ 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := upstreamredirect.Result(httpClient.Do(httpReq))
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, err
+@@ -294,7 +301,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
+ 		b = applyCodexIdentityConfuseResponsePayload(b, identityState)
+ 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
+ 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+-		err = newCodexStatusErrWithCooling(httpResp.StatusCode, b, e.modelLevelCooling())
++		err = newCodexStatusErrWithCooling(httpResp.StatusCode, b, e.modelLevelCooling()).withUpstreamRetryAfter(httpResp.Header, received)
+ 		return resp, err
+ 	}
+ 	data, err := io.ReadAll(httpResp.Body)
+diff --git a/internal/runtime/executor/codex_executor_stream.go b/internal/runtime/executor/codex_executor_stream.go
+index 2c32f86..27204d9 100644
+--- a/internal/runtime/executor/codex_executor_stream.go
++++ b/internal/runtime/executor/codex_executor_stream.go
+@@ -115,6 +115,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
+ 	httpClient = reporter.TrackHTTPClientRoundTripOnly(httpClient)
+ 	httpResp, err := upstreamredirect.Result(httpClient.Do(httpReq))
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return nil, err
+@@ -135,7 +138,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 		}
+ 		helps.AppendAPIResponseChunk(ctx, e.cfg, data)
+ 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
+-		err = newCodexStatusErrWithCooling(httpResp.StatusCode, data, e.modelLevelCooling())
++		err = newCodexStatusErrWithCooling(httpResp.StatusCode, data, e.modelLevelCooling()).withUpstreamRetryAfter(httpResp.Header, received)
+ 		return nil, err
+ 	}
+ 
+diff --git a/internal/runtime/executor/codex_websockets_execute.go b/internal/runtime/executor/codex_websockets_execute.go
+index 72d8f14..5818661 100644
+--- a/internal/runtime/executor/codex_websockets_execute.go
++++ b/internal/runtime/executor/codex_websockets_execute.go
+@@ -6,6 +6,7 @@ import (
+ 	"fmt"
+ 	"net/http"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/gorilla/websocket"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+@@ -144,6 +145,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
+ 	var closer *websocketConnectionCloser
+ 	var respHS *http.Response
+ 	var errDial error
++	var handshakeReceipt *websocketHandshakeReceipt
+ 	dialCtx := ctx
+ 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
+ 		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, e.cfg, auth))
+@@ -152,8 +154,12 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
+ 		}
+ 	} else {
+ 		dialCtx = cliproxyexecutor.WithUpstreamAttemptTracker(ctx)
++		dialCtx, handshakeReceipt = withWebsocketHandshakeReceipt(dialCtx)
+ 		conn, closer, respHS, errDial = e.ensureUpstreamConn(dialCtx, auth, sess, authID, wsURL, wsHeaders)
+ 	}
++	// A rejected handshake's Retry-After deadline starts when its
++	// response arrived, before the dialer read the rejected body.
++	received := handshakeReceipt.receivedAt(time.Now())
+ 	if errDial != nil {
+ 		bodyErr := websocketHandshakeBody(respHS)
+ 		if respHS != nil {
+@@ -172,7 +178,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
+ 			cliproxyexecutor.MarkUpstreamAttempt(ctx)
+ 		}
+ 		if respHS != nil && respHS.StatusCode > 0 {
+-			return resp, newCodexStatusErrWithCooling(respHS.StatusCode, bodyErr, e.modelLevelCooling())
++			return resp, newCodexStatusErrWithCooling(respHS.StatusCode, bodyErr, e.modelLevelCooling()).withUpstreamRetryAfter(respHS.Header, received)
+ 		}
+ 		helps.RecordAPIWebsocketError(ctx, e.cfg, "dial", errDial)
+ 		return resp, errDial
+diff --git a/internal/runtime/executor/codex_websockets_retry_after.go b/internal/runtime/executor/codex_websockets_retry_after.go
+new file mode 100644
+index 0000000..24a677a
+--- /dev/null
++++ b/internal/runtime/executor/codex_websockets_retry_after.go
+@@ -0,0 +1,48 @@
++package executor
++
++import (
++	"context"
++	"net/http/httptrace"
++	"sync"
++	"time"
++)
++
++// websocketHandshakeReceipt records when a WebSocket upgrade
++// response arrived. gorilla's dialer reads (up to 1 KiB of) a rejected
++// handshake's body before DialContext returns, so a time taken after that
++// return restarts the upstream Retry-After deadline late by however long the
++// body took. The dialer reports the handshake response's first byte (its
++// status line, which the header block follows before any body byte) through
++// the dial context's httptrace.ClientTrace: that is the receipt boundary.
++type websocketHandshakeReceipt struct {
++	mu sync.Mutex
++	at time.Time
++}
++
++// withWebsocketHandshakeReceipt returns a dial context whose client trace
++// (composed with any trace ctx already carries) records the receipt.
++func withWebsocketHandshakeReceipt(ctx context.Context) (context.Context, *websocketHandshakeReceipt) {
++	receipt := &websocketHandshakeReceipt{}
++	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotFirstResponseByte: receipt.mark}), receipt
++}
++
++func (r *websocketHandshakeReceipt) mark() {
++	now := time.Now()
++	r.mu.Lock()
++	r.at = now
++	r.mu.Unlock()
++}
++
++// receivedAt returns when the last handshake response arrived, or fallback
++// when no response was observed (or the recorded time is not earlier).
++func (r *websocketHandshakeReceipt) receivedAt(fallback time.Time) time.Time {
++	if r == nil {
++		return fallback
++	}
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	if r.at.IsZero() || r.at.After(fallback) {
++		return fallback
++	}
++	return r.at
++}
+diff --git a/internal/runtime/executor/codex_websockets_stream.go b/internal/runtime/executor/codex_websockets_stream.go
+index a5a631b..3ae5ef9 100644
+--- a/internal/runtime/executor/codex_websockets_stream.go
++++ b/internal/runtime/executor/codex_websockets_stream.go
+@@ -95,6 +95,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
+ 	var closer *websocketConnectionCloser
+ 	var respHS *http.Response
+ 	var errDial error
++	var handshakeReceipt *websocketHandshakeReceipt
+ 	dialCtx := ctx
+ 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
+ 		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, e.cfg, auth))
+@@ -104,8 +105,12 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
+ 		}
+ 	} else {
+ 		dialCtx = cliproxyexecutor.WithUpstreamAttemptTracker(ctx)
++		dialCtx, handshakeReceipt = withWebsocketHandshakeReceipt(dialCtx)
+ 		conn, closer, respHS, errDial = e.ensureUpstreamConn(dialCtx, auth, sess, authID, wsURL, wsHeaders)
+ 	}
++	// A rejected handshake's Retry-After deadline starts when its
++	// response arrived, before the dialer read the rejected body.
++	received := handshakeReceipt.receivedAt(time.Now())
+ 	var upstreamHeaders http.Header
+ 	if respHS != nil {
+ 		upstreamHeaders = respHS.Header.Clone()
+@@ -130,7 +135,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
+ 		}
+ 		if respHS != nil && respHS.StatusCode > 0 {
+ 			unlockStreamSession()
+-			return nil, newCodexStatusErrWithCooling(respHS.StatusCode, bodyErr, e.modelLevelCooling())
++			return nil, newCodexStatusErrWithCooling(respHS.StatusCode, bodyErr, e.modelLevelCooling()).withUpstreamRetryAfter(respHS.Header, received)
+ 		}
+ 		helps.RecordAPIWebsocketError(ctx, e.cfg, "dial", errDial)
+ 		unlockStreamSession()
+diff --git a/internal/runtime/executor/openai_compat_executor.go b/internal/runtime/executor/openai_compat_executor.go
+index 89ec8f4..a5fa367 100644
+--- a/internal/runtime/executor/openai_compat_executor.go
++++ b/internal/runtime/executor/openai_compat_executor.go
+@@ -18,6 +18,7 @@ import (
+ 	"github.com/google/uuid"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
+@@ -200,6 +201,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
+ 	httpClient, redirectMode := e.newHTTPClient(ctx, auth, httpReq)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := redirectMode.Result(httpClient.Do(httpReq))
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		if keyed {
+ 			err = openAICompatKeyedTransportError(err)
+@@ -215,13 +219,13 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
+ 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, responseHeaders.Clone())
+ 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+ 		if keyed {
+-			err = openAICompatKeyedHTTPFailure(ctx, e.cfg, httpResp)
++			err = openAICompatKeyedHTTPFailure(ctx, e.cfg, httpResp, received)
+ 			return resp, err
+ 		}
+ 		b, _ := io.ReadAll(httpResp.Body)
+ 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
+ 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+-		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b)
++		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b).withUpstreamRetryAfter(httpResp.Header, received)
+ 		return resp, err
+ 	}
+ 	body, err := io.ReadAll(httpResp.Body)
+@@ -312,6 +316,9 @@ func (e *OpenAICompatExecutor) executeImages(ctx context.Context, auth *cliproxy
+ 	httpClient, redirectMode := e.newHTTPClient(ctx, auth, httpReq)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := redirectMode.Result(httpClient.Do(httpReq))
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, err
+@@ -333,7 +340,7 @@ func (e *OpenAICompatExecutor) executeImages(ctx context.Context, auth *cliproxy
+ 
+ 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+ 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), body))
+-		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, body)
++		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, body).withUpstreamRetryAfter(httpResp.Header, received)
+ 		return resp, err
+ 	}
+ 
+@@ -452,6 +459,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
+ 	httpClient, redirectMode := e.newHTTPClient(ctx, auth, httpReq)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := redirectMode.Result(httpClient.Do(httpReq))
++	// The upstream Retry-After deadline starts when the response
++	// headers arrive, before any body is read.
++	received := time.Now()
+ 	if err != nil {
+ 		if keyed {
+ 			err = openAICompatKeyedTransportError(err)
+@@ -463,7 +473,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
+ 		responseHeaders := compatsafe.ResponseHeaders(httpResp.Header)
+ 		helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, responseHeaders.Clone())
+ 		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+-			err = openAICompatKeyedHTTPFailure(ctx, e.cfg, httpResp)
++			err = openAICompatKeyedHTTPFailure(ctx, e.cfg, httpResp, received)
+ 			closeOpenAICompatBody(httpResp.Body, true)
+ 			return nil, err
+ 		}
+@@ -483,7 +493,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
+ 		if errClose := httpResp.Body.Close(); errClose != nil {
+ 			log.Errorf("openai compat executor: close response body error: %v", errClose)
+ 		}
+-		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b)
++		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b).withUpstreamRetryAfter(httpResp.Header, received)
+ 		return nil, err
+ 	}
+ 	out := make(chan cliproxyexecutor.StreamChunk)
+@@ -1097,6 +1107,10 @@ type statusErr struct {
+ 	msg              string
+ 	retryAfter       *time.Duration
+ 	credentialScoped bool
++	// upstreamRetryAfter is the validated upstream Retry-After hint; the
++	// zero Hint is none. It is separate from retryAfter, the
++	// gateway's own retry timing, which it never changes.
++	upstreamRetryAfter retryhint.Hint
+ }
+ 
+ func (e statusErr) Error() string {
+@@ -1109,6 +1123,25 @@ func (e statusErr) StatusCode() int            { return e.code }
+ func (e statusErr) RetryAfter() *time.Duration { return e.retryAfter }
+ func (e statusErr) IsCredentialScoped() bool   { return e.credentialScoped }
+ 
++// UpstreamRetryAfter implements retryhint.Carrier.
++func (e statusErr) UpstreamRetryAfter() (retryhint.Hint, bool) {
++	return e.upstreamRetryAfter, e.upstreamRetryAfter.Valid()
++}
++
++// withUpstreamRetryAfter attaches the validated Retry-After of an upstream
++// 429/503 response. received is when the response headers
++// arrived: the deadline runs from then, so time spent reading or handling
++// the failure body is not added back to the client's wait.
++func (e statusErr) withUpstreamRetryAfter(header http.Header, received time.Time) statusErr {
++	if !retryhint.Emittable(e.code) {
++		return e
++	}
++	if hint, ok := retryhint.FromHeader(header, received); ok {
++		e.upstreamRetryAfter = hint
++	}
++	return e
++}
++
+ const openAICompatTPMFallbackRetryAfter = time.Minute
+ 
+ func newOpenAICompatStatusError(status int, headers http.Header, body []byte) statusErr {
+diff --git a/internal/runtime/executor/openai_compat_keyed_safety.go b/internal/runtime/executor/openai_compat_keyed_safety.go
+index 3f334d8..b8b774f 100644
+--- a/internal/runtime/executor/openai_compat_keyed_safety.go
++++ b/internal/runtime/executor/openai_compat_keyed_safety.go
+@@ -13,6 +13,7 @@ import (
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/upstreamredirect"
+ 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+@@ -109,7 +110,9 @@ func closeOpenAICompatBody(body io.Closer, keyed bool) {
+ // openAICompatKeyedHTTPFailure turns a non-2xx keyed response into its safe
+ // failure. The typed retry metadata is parsed from the raw headers and body
+ // before they are dropped; only the fixed representation is captured.
+-func openAICompatKeyedHTTPFailure(ctx context.Context, cfg *config.Config, resp *http.Response) error {
++// received is when the response headers arrived (the upstream Retry-After
++// deadline runs from then, not from the end of the body read).
++func openAICompatKeyedHTTPFailure(ctx context.Context, cfg *config.Config, resp *http.Response, received time.Time) error {
+ 	body, overflow, readable := compatsafe.ReadErrorBody(resp.Body)
+ 	retryBody := body
+ 	if overflow || !readable {
+@@ -117,6 +120,11 @@ func openAICompatKeyedHTTPFailure(ctx context.Context, cfg *config.Config, resp
+ 	}
+ 	retry := openAICompatRetryAfter(resp.StatusCode, resp.Header, retryBody, time.Now())
+ 	failure := compatsafe.HTTPFailure(resp.StatusCode, body, overflow, readable, retry)
++	if retryhint.Emittable(failure.Status) {
++		if hint, ok := retryhint.FromHeader(resp.Header, received); ok {
++			failure.Hint = hint
++		}
++	}
+ 	helps.AppendAPIResponseChunk(ctx, cfg, []byte(failure.Error()))
+ 	helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, failure kind: %s", failure.StatusCode(), failure.Kind)
+ 	return failure
+diff --git a/internal/runtime/executor/retry_after_cm053_test.go b/internal/runtime/executor/retry_after_cm053_test.go
+new file mode 100644
+index 0000000..b3232f9
+--- /dev/null
++++ b/internal/runtime/executor/retry_after_cm053_test.go
+@@ -0,0 +1,331 @@
++package executor
++
++// Every managed executor attaches a typed, validated upstream
++// Retry-After hint (retryhint.Carrier) to its terminal 429/503 error at the
++// upstream response boundary: Claude ordinary execute/stream/token count,
++// Codex execute/stream/compact, OpenAI-compatible chat/stream/compact, keyed
++// (in the safe failure representation) and keyless. The Claude fast path is a
++// direct response: it forwards upstream headers by design and carries no
++// separate hint (the handler canonicalizes its Retry-After). HTTP upstreams
++// are injected RoundTrippers (no socket is opened); the Codex WebSocket
++// rejected-upgrade case needs a real handshake and uses a loopback
++// httptest server.
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strconv"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++)
++
++type cm053RetryUpstream struct {
++	status int
++	values []string
++	// delay holds back the first read of the failure body (the upstream
++	// headers have already arrived).
++	delay time.Duration
++}
++
++type cm053SlowBody struct {
++	io.Reader
++	delay time.Duration
++	once  sync.Once
++}
++
++func (b *cm053SlowBody) Read(p []byte) (int, error) {
++	b.once.Do(func() { time.Sleep(b.delay) })
++	return b.Reader.Read(p)
++}
++
++func (b *cm053SlowBody) Close() error { return nil }
++
++func (u cm053RetryUpstream) RoundTrip(req *http.Request) (*http.Response, error) {
++	if req.Body != nil {
++		_, _ = io.Copy(io.Discard, req.Body)
++		_ = req.Body.Close()
++	}
++	header := http.Header{"Content-Type": {"application/json"}}
++	if u.values != nil {
++		header["Retry-After"] = u.values
++	}
++	body := `{"error":{"type":"rate_limit_error","message":"cm053 upstream busy"}}`
++	return &http.Response{StatusCode: u.status, Status: http.StatusText(u.status), Header: header, Body: &cm053SlowBody{Reader: strings.NewReader(body), delay: u.delay}, Request: req, ProtoMajor: 1, ProtoMinor: 1}, nil
++}
++
++type cm053RetryEntry struct {
++	cm053EntryPoint
++	stream bool
++	keyed  bool
++}
++
++func cm053RetryEntries() []cm053RetryEntry {
++	var entries []cm053RetryEntry
++	for _, entry := range cm053ClaudeEntryPoints() {
++		if strings.Contains(entry.name, "fast") {
++			continue
++		}
++		entries = append(entries, cm053RetryEntry{entry, strings.HasSuffix(entry.name, "stream"), false})
++	}
++	for _, entry := range cm053CodexEntryPoints() {
++		entries = append(entries, cm053RetryEntry{entry, strings.HasSuffix(entry.name, "stream"), false})
++	}
++	for _, keyed := range []bool{false, true} {
++		for _, entry := range cm053CompatEntryPoints(keyed) {
++			if keyed {
++				entry.name = "keyed-" + entry.name
++			}
++			entries = append(entries, cm053RetryEntry{entry, strings.HasSuffix(entry.name, "stream"), keyed && !strings.HasSuffix(entry.name, "compact")})
++		}
++	}
++	return entries
++}
++
++func cm053RunRetryEntry(t *testing.T, entry cm053RetryEntry, upstream cm053RetryUpstream) error {
++	t.Helper()
++	capture := cm053CaptureContext(upstream)
++	return entry.run(capture.ctx, &config.Config{})
++}
++
++func cm053AssertCarrier(t *testing.T, err error, status int, want string) {
++	t.Helper()
++	if err == nil {
++		t.Fatal("upstream failure returned no error")
++	}
++	hint, carrierStatus, ok := retryhint.From(err)
++	if want == "" {
++		if ok {
++			t.Fatalf("error %T carries a hint on a %d it must not have", err, status)
++		}
++		return
++	}
++	if !ok || carrierStatus != status {
++		t.Fatalf("error %T (%v) carries no hint for its %d (ok=%t status=%d)", err, err, status, ok, carrierStatus)
++	}
++	got, _ := hint.Value(time.Now())
++	if got != want && !(want != "0" && got == decrementSeconds(want)) {
++		t.Fatalf("hint value = %q, want %q", got, want)
++	}
++	if value, okValue := retryhint.ResponseValue(err, status, time.Now()); !okValue || (value != got && value != decrementSeconds(got)) {
++		t.Fatalf("ResponseValue = %q/%t, want %q", value, okValue, got)
++	}
++}
++
++// decrementSeconds tolerates one second elapsing between receipt and check.
++func decrementSeconds(value string) string {
++	n, errAtoi := strconv.Atoi(value)
++	if errAtoi != nil || n == 0 {
++		return value
++	}
++	return strconv.Itoa(n - 1)
++}
++
++func cm053RetryMatrix(t *testing.T, streamOnly bool) {
++	for _, entry := range cm053RetryEntries() {
++		if streamOnly && !entry.stream {
++			continue
++		}
++		for _, tc := range []struct {
++			name   string
++			status int
++			values []string
++			want   string
++		}{
++			{"429-120", http.StatusTooManyRequests, []string{"120"}, "120"},
++			{"429-zero", http.StatusTooManyRequests, []string{"0"}, "0"},
++			{"503-5", http.StatusServiceUnavailable, []string{"5"}, "5"},
++			{"429-date", http.StatusTooManyRequests, []string{time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)}, "0"},
++			{"429-duplicate", http.StatusTooManyRequests, []string{"5", "5"}, ""},
++			{"429-invalid", http.StatusTooManyRequests, []string{"-5"}, ""},
++			{"429-none", http.StatusTooManyRequests, nil, ""},
++			{"500-never", http.StatusInternalServerError, []string{"5"}, ""},
++		} {
++			t.Run(entry.name+"/"+tc.name, func(t *testing.T) {
++				err := cm053RunRetryEntry(t, entry, cm053RetryUpstream{status: tc.status, values: tc.values})
++				status := tc.status
++				// Codex maps some bodies to 429; this body is a plain rate limit.
++				cm053AssertCarrier(t, err, status, tc.want)
++				if entry.keyed {
++					var safe compatsafe.Error
++					if !errors.As(err, &safe) || err.Error() != safe.Kind.Body() || strings.Contains(err.Error(), "cm053 upstream busy") {
++						t.Fatalf("keyed compat error %T %q left the safe representation", err, err)
++					}
++				}
++			})
++		}
++	}
++}
++
++func TestCM053RetryAfterExecutorCarriers(t *testing.T) {
++	cm053RetryMatrix(t, false)
++
++	// The Claude fast path is a direct response: the upstream Retry-After is
++	// in its forwarded headers (canonicalized by the handler), never a second
++	// typed hint.
++	for _, entry := range cm053ClaudeEntryPoints() {
++		if !strings.Contains(entry.name, "fast") {
++			continue
++		}
++		t.Run(entry.name+"/direct", func(t *testing.T) {
++			capture := cm053CaptureContext(cm053RetryUpstream{status: http.StatusTooManyRequests, values: []string{"120"}})
++			err := entry.run(capture.ctx, &config.Config{})
++			if _, _, ok := retryhint.From(err); ok {
++				t.Fatalf("fast direct response also carries a typed hint: %T", err)
++			}
++			var direct *cliproxyexecutor.RequestTerminatedError
++			if !errors.As(err, &direct) || direct.ResponseHeaders().Get("Retry-After") != "120" {
++				t.Fatalf("fast path error = %T %v, want a direct response forwarding Retry-After", err, err)
++			}
++		})
++	}
++
++	// The gateway's own retry timing is untouched: the compat 429 keeps its
++	// Retry-After parse, the Claude/Codex/compat 503 keeps none.
++	compat := cm053RetryEntry{cm053CompatEntryPoints(false)[0], false, false}
++	err := cm053RunRetryEntry(t, compat, cm053RetryUpstream{status: http.StatusTooManyRequests, values: []string{"120"}})
++	if rap, ok := err.(interface{ RetryAfter() *time.Duration }); !ok || rap.RetryAfter() == nil || *rap.RetryAfter() != 120*time.Second {
++		t.Fatalf("compat internal retry timing changed: %v", err)
++	}
++	err = cm053RunRetryEntry(t, compat, cm053RetryUpstream{status: http.StatusServiceUnavailable, values: []string{"120"}})
++	if rap, ok := err.(interface{ RetryAfter() *time.Duration }); !ok || rap.RetryAfter() != nil {
++		t.Fatalf("compat 503 gained internal retry timing: %v", err)
++	}
++}
++
++func TestCM053RetryAfterStreamingBootstrap(t *testing.T) {
++	cm053RetryMatrix(t, true)
++}
++
++// TestCM053RetryAfterReceiptDeadline: the upstream Retry-After deadline
++// starts when the response headers arrive, not after the failure body has
++// been read and handled. Retry-After: 1 with a body whose first read takes
++// 1.2 s must be emitted as 0 by every carrier (ordinary execute, stream
++// bootstrap, keyed and keyless compat) and by the Claude fast direct path.
++func TestCM053RetryAfterReceiptDeadline(t *testing.T) {
++	const delay = 1200 * time.Millisecond
++	// The subtests run in parallel (each waits on a slow body): gin's global
++	// mode is set once here, never from a parallel subtest.
++	gin.SetMode(gin.TestMode)
++	receiptContext := func(upstream http.RoundTripper) context.Context {
++		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
++		ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
++		ctx := context.WithValue(context.Background(), "gin", ginCtx)
++		ctx = logging.WithResponseHeadersHolder(ctx)
++		return context.WithValue(ctx, "cliproxy.roundtripper", upstream)
++	}
++	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
++		for _, entry := range cm053RetryEntries() {
++			t.Run(entry.name+"/"+strconv.Itoa(status), func(t *testing.T) {
++				t.Parallel()
++				err := entry.run(receiptContext(cm053RetryUpstream{status: status, values: []string{"1"}, delay: delay}), &config.Config{})
++				cm053AssertCarrier(t, err, status, "0")
++			})
++		}
++		for _, entry := range cm053ClaudeEntryPoints() {
++			if !strings.Contains(entry.name, "fast") {
++				continue
++			}
++			t.Run(entry.name+"/direct/"+strconv.Itoa(status), func(t *testing.T) {
++				t.Parallel()
++				err := entry.run(receiptContext(cm053RetryUpstream{status: status, values: []string{"1"}, delay: delay}), &config.Config{})
++				var direct *cliproxyexecutor.RequestTerminatedError
++				if !errors.As(err, &direct) {
++					t.Fatalf("fast path error = %T %v, want a direct response", err, err)
++				}
++				header := direct.ResponseHeaders().Clone()
++				retryhint.CanonicalizeDirectHeader(header, err, time.Now())
++				if got := header.Values("Retry-After"); len(got) != 1 || got[0] != "0" {
++					t.Fatalf("direct Retry-After = %v, want [0] (the deadline from receipt)", got)
++				}
++			})
++		}
++	}
++}
++
++// TestCM053RetryAfterWebsocketDelayedBodyDeadline: a rejected Codex WebSocket
++// upgrade (429/503 with Retry-After) whose body is delayed. gorilla's dialer
++// reads the rejected handshake's body before DialContext returns, so the
++// deadline must start when the handshake response arrived, not when the dial
++// returned. The upstream (a loopback test server) flushes the status line and
++// headers with Retry-After: 1 at once and sends the body 1.2 s later: both
++// CodexWebsocketsExecutor paths (Execute and ExecuteStream) must carry a hint
++// that serializes as 0. The prompt control (Retry-After: 120, body at once)
++// shows the WebSocket carrier keeps a live deadline rather than zeroing it.
++func TestCM053RetryAfterWebsocketDelayedBodyDeadline(t *testing.T) {
++	body := `{"error":{"type":"rate_limit_error","message":"cm053 upstream busy"}}`
++	for _, tc := range []struct {
++		name, value, want string
++		delay             time.Duration
++	}{
++		{"delayed-body", "1", "0", 1200 * time.Millisecond},
++		{"prompt-body", "120", "120", 0},
++	} {
++		for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
++			for _, path := range []string{"execute", "stream"} {
++				t.Run(tc.name+"/"+path+"/"+strconv.Itoa(status), func(t *testing.T) {
++					t.Parallel()
++					var upgrades atomic.Int32
++					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++						if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
++							upgrades.Add(1)
++						}
++						w.Header().Set("Content-Type", "application/json")
++						w.Header().Set("Retry-After", tc.value)
++						w.Header().Set("Content-Length", strconv.Itoa(len(body)))
++						w.WriteHeader(status)
++						w.(http.Flusher).Flush()
++						select {
++						case <-time.After(tc.delay):
++						case <-r.Context().Done():
++							return
++						}
++						_, _ = io.WriteString(w, body)
++					}))
++					defer upstream.Close()
++					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++					defer cancel()
++					exec := NewCodexWebsocketsExecutor(&config.Config{})
++					exec.store = &codexWebsocketSessionStore{sessions: make(map[string]*codexWebsocketSession)}
++					credential := &cliproxyauth.Auth{ID: "cm053-ws-retry-after", Provider: "codex", Status: cliproxyauth.StatusActive, Attributes: map[string]string{
++						"api_key": "cm053-key", "base_url": upstream.URL, "websockets": "true",
++					}}
++					req := cliproxyexecutor.Request{Model: "cm053-ws-model", Payload: []byte(`{"model":"cm053-ws-model","input":[]}`)}
++					opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("codex")}
++					start := time.Now()
++					var err error
++					if path == "execute" {
++						_, err = exec.Execute(ctx, credential, req, opts)
++					} else {
++						var result *cliproxyexecutor.StreamResult
++						result, err = exec.ExecuteStream(ctx, credential, req, opts)
++						if result != nil {
++							t.Fatalf("rejected upgrade returned a stream: %+v", result)
++						}
++					}
++					if elapsed := time.Since(start); elapsed < tc.delay {
++						t.Fatalf("returned after %v, before the delayed body (%v): the case does not discriminate", elapsed, tc.delay)
++					}
++					if upgrades.Load() != 1 {
++						t.Fatalf("upstream saw %d WebSocket upgrade requests, want exactly 1", upgrades.Load())
++					}
++					cm053AssertCarrier(t, err, status, tc.want)
++				})
++			}
++		}
++	}
++}
+diff --git a/sdk/api/handlers/claude/code_handlers.go b/sdk/api/handlers/claude/code_handlers.go
+index c722631..604d5c9 100644
+--- a/sdk/api/handlers/claude/code_handlers.go
++++ b/sdk/api/handlers/claude/code_handlers.go
+@@ -22,6 +22,7 @@ import (
+ 	. "github.com/router-for-me/CLIProxyAPI/v7/internal/constant"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
+ 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+ 	log "github.com/sirupsen/logrus"
+@@ -374,6 +375,9 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
+ 				c.Writer.Header().Add(key, value)
+ 			}
+ 		}
++		// The fast/direct path forwards upstream headers by
++		// design; its Retry-After becomes at most one canonical value.
++		retryhint.CanonicalizeDirectHeader(c.Writer.Header(), msg.Error, time.Now())
+ 		body := bytes.Clone(msg.Body)
+ 		appendClaudeAPIResponse(c, body)
+ 		if !c.Writer.Written() && c.Writer.Header().Get("Content-Type") == "" {
+@@ -384,7 +388,9 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
+ 		return
+ 	}
+ 	if msg != nil && msg.Error != nil {
+-		for _, value := range coreauth.SafeResponseHeaders(msg.Error).Values("Retry-After") {
++		// A trusted local value, else one validated upstream hint
++		// on a terminal 429/503; headers are not committed yet.
++		for _, value := range coreauth.ResponseRetryAfter(msg.Error, status) {
+ 			c.Writer.Header().Add("Retry-After", value)
+ 		}
+ 	}
+diff --git a/sdk/api/handlers/claude/retry_after_cm053_test.go b/sdk/api/handlers/claude/retry_after_cm053_test.go
+new file mode 100644
+index 0000000..00641f8
+--- /dev/null
++++ b/sdk/api/handlers/claude/retry_after_cm053_test.go
+@@ -0,0 +1,320 @@
++package claude
++
++// Retry-After forwarding, end to end through the real Claude
++// handler, the auth manager (conductor) and a fake provider executor. The
++// executor returns typed upstream hints (retryhint.Carrier), the shape every
++// managed executor now attaches at its response boundary. Header passthrough
++// stays at its production default (off).
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"strconv"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
++	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
++)
++
++const cm053RAProvider = "cm053ra"
++
++// cm053HintedErr is an upstream failure carrying a validated hint.
++type cm053HintedErr struct {
++	status int
++	hint   retryhint.Hint
++}
++
++func (e cm053HintedErr) Error() string {
++	return `{"type":"error","error":{"type":"rate_limit_error","message":"cm053 upstream failure"}}`
++}
++func (e cm053HintedErr) StatusCode() int { return e.status }
++func (e cm053HintedErr) UpstreamRetryAfter() (retryhint.Hint, bool) {
++	return e.hint, e.hint.Valid()
++}
++
++func cm053Hint(t *testing.T, value string) retryhint.Hint {
++	t.Helper()
++	hint, ok := retryhint.Parse([]string{value}, time.Now())
++	if !ok {
++		t.Fatalf("hint %q did not parse", value)
++	}
++	return hint
++}
++
++// cm053RABehavior is what the fake executor does for one auth.
++type cm053RABehavior struct {
++	err         error // bootstrap / non-stream failure
++	firstChunk  bool  // stream: send one chunk, then midErr
++	midErr      error
++	successBody string
++}
++
++type cm053RAExecutor struct {
++	mu        sync.Mutex
++	behaviors map[string]cm053RABehavior
++	calls     []string
++}
++
++func (e *cm053RAExecutor) Identifier() string { return cm053RAProvider }
++
++func (e *cm053RAExecutor) behavior(auth *coreauth.Auth) cm053RABehavior {
++	e.mu.Lock()
++	defer e.mu.Unlock()
++	e.calls = append(e.calls, auth.ID)
++	return e.behaviors[auth.ID]
++}
++
++func (e *cm053RAExecutor) Execute(_ context.Context, auth *coreauth.Auth, _ coreexecutor.Request, _ coreexecutor.Options) (coreexecutor.Response, error) {
++	b := e.behavior(auth)
++	if b.err != nil {
++		return coreexecutor.Response{}, b.err
++	}
++	return coreexecutor.Response{Payload: []byte(b.successBody)}, nil
++}
++
++func (e *cm053RAExecutor) ExecuteStream(_ context.Context, auth *coreauth.Auth, _ coreexecutor.Request, _ coreexecutor.Options) (*coreexecutor.StreamResult, error) {
++	b := e.behavior(auth)
++	if b.err != nil {
++		return nil, b.err
++	}
++	ch := make(chan coreexecutor.StreamChunk, 2)
++	if b.firstChunk {
++		ch <- coreexecutor.StreamChunk{Payload: []byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\n")}
++	}
++	if b.midErr != nil {
++		ch <- coreexecutor.StreamChunk{Err: b.midErr}
++	}
++	close(ch)
++	return &coreexecutor.StreamResult{Chunks: ch}, nil
++}
++
++func (e *cm053RAExecutor) Refresh(_ context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
++	return auth, nil
++}
++
++func (e *cm053RAExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
++	return coreexecutor.Response{}, &coreauth.Error{HTTPStatus: http.StatusNotImplemented, Message: "not implemented"}
++}
++
++func (e *cm053RAExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.Request) (*http.Response, error) {
++	return nil, &coreauth.Error{HTTPStatus: http.StatusNotImplemented, Message: "not implemented"}
++}
++
++// cm053RAServe registers one auth per behavior (in order: the conductor tries
++// them by ID) and serves one /v1/messages request.
++func cm053RAServe(t *testing.T, stream bool, behaviors ...cm053RABehavior) (*httptest.ResponseRecorder, *cm053RAExecutor) {
++	t.Helper()
++	gin.SetMode(gin.TestMode)
++	executor := &cm053RAExecutor{behaviors: map[string]cm053RABehavior{}}
++	manager := coreauth.NewManager(nil, nil, nil)
++	manager.RegisterExecutor(executor)
++	model := "cm053-ra-" + strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
++	for i, behavior := range behaviors {
++		id := model + "-auth-" + strconv.Itoa(i)
++		executor.behaviors[id] = behavior
++		if _, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: id, Provider: cm053RAProvider, Status: coreauth.StatusActive}); errRegister != nil {
++			t.Fatalf("register %s: %v", id, errRegister)
++		}
++		registry.GetGlobalRegistry().RegisterClient(id, cm053RAProvider, []*registry.ModelInfo{{ID: model}})
++		t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(id) })
++	}
++	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager)
++	if handlers.PassthroughHeadersEnabled(base.Cfg) {
++		t.Fatal("header passthrough is on; the gate needs the production default")
++	}
++	handler := NewClaudeCodeAPIHandler(base)
++	router := gin.New()
++	router.POST("/v1/messages", handler.ClaudeMessages)
++	body := `{"model":"` + model + `","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"stream":` + strconv.FormatBool(stream) + `}`
++	recorder := httptest.NewRecorder()
++	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
++	request.Header.Set("Content-Type", "application/json")
++	router.ServeHTTP(recorder, request)
++	return recorder, executor
++}
++
++func cm053AssertRetryAfter(t *testing.T, recorder *httptest.ResponseRecorder, wantStatus int, want string) {
++	t.Helper()
++	if recorder.Code != wantStatus {
++		t.Fatalf("status = %d, want %d; body %s", recorder.Code, wantStatus, recorder.Body.String())
++	}
++	values := recorder.Header().Values("Retry-After")
++	if want == "" {
++		if len(values) != 0 {
++			t.Fatalf("Retry-After = %v, want none", values)
++		}
++		return
++	}
++	if len(values) != 1 || values[0] != want {
++		t.Fatalf("Retry-After = %v, want exactly [%s]", values, want)
++	}
++}
++
++func TestCM053RetryAfterTerminal429And503(t *testing.T) {
++	cases := []struct {
++		name   string
++		status int
++		value  string
++		want   string
++	}{
++		{"429-3600", http.StatusTooManyRequests, "3600", "3600"},
++		{"429-zero", http.StatusTooManyRequests, "0", "0"},
++		{"429-30000", http.StatusTooManyRequests, "30000", "30000"},
++		{"503-5", http.StatusServiceUnavailable, "5", "5"},
++		{"500-never", http.StatusInternalServerError, "5", ""},
++		{"400-never", http.StatusBadRequest, "5", ""},
++	}
++	for _, tc := range cases {
++		for _, stream := range []bool{false, true} {
++			t.Run(tc.name+"/stream="+strconv.FormatBool(stream), func(t *testing.T) {
++				recorder, _ := cm053RAServe(t, stream, cm053RABehavior{err: cm053HintedErr{status: tc.status, hint: cm053Hint(t, tc.value)}})
++				cm053AssertRetryAfter(t, recorder, tc.status, tc.want)
++			})
++		}
++	}
++	t.Run("no-hint-no-header", func(t *testing.T) {
++		recorder, _ := cm053RAServe(t, false, cm053RABehavior{err: cm053HintedErr{status: http.StatusTooManyRequests}})
++		cm053AssertRetryAfter(t, recorder, http.StatusTooManyRequests, "")
++	})
++	t.Run("deadline-already-spent", func(t *testing.T) {
++		hint, _ := retryhint.Parse([]string{"10"}, time.Now().Add(-4*time.Second))
++		recorder, _ := cm053RAServe(t, false, cm053RABehavior{err: cm053HintedErr{status: http.StatusTooManyRequests, hint: hint}})
++		got := recorder.Header().Get("Retry-After")
++		if got != "6" && got != "5" {
++			t.Fatalf("Retry-After = %q, want the remaining 6s (the upstream deadline, not a restarted wait)", got)
++		}
++	})
++}
++
++func TestCM053RetryAfterWithoutHeaderPassthrough(t *testing.T) {
++	// The ordinary path introduces only Retry-After: the hinted error carries
++	// no other upstream header, and passthrough is off.
++	recorder, _ := cm053RAServe(t, false, cm053RABehavior{err: cm053HintedErr{status: http.StatusTooManyRequests, hint: cm053Hint(t, "7")}})
++	cm053AssertRetryAfter(t, recorder, http.StatusTooManyRequests, "7")
++	for name := range recorder.Header() {
++		switch http.CanonicalHeaderKey(name) {
++		case "Retry-After", "Content-Type":
++		default:
++			t.Fatalf("ordinary error response gained header %q: %v", name, recorder.Header())
++		}
++	}
++
++	// The fast/direct path already forwards upstream headers (pre-patch
++	// baseline); the patch only makes its Retry-After one canonical value.
++	upstream := http.Header{
++		"Retry-After":                       {"30", "30"},
++		"Anthropic-Ratelimit-Unified-Reset": {"1700000000"},
++		"Set-Cookie":                        {"a=b"},
++		"Content-Type":                      {"application/json"},
++	}
++	cases := []struct {
++		name  string
++		after []string
++		want  string
++	}{
++		{"duplicate-dropped", []string{"30", "30"}, ""},
++		{"single-kept", []string{"30"}, "30"},
++		{"date-canonical", []string{time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat)}, "0"},
++		{"invalid-dropped", []string{"soon"}, ""},
++	}
++	for _, tc := range cases {
++		t.Run("direct/"+tc.name, func(t *testing.T) {
++			header := upstream.Clone()
++			header["Retry-After"] = tc.after
++			direct := &coreexecutor.RequestTerminatedError{HTTPStatus: http.StatusTooManyRequests, Header: header, Body: []byte(`{"type":"error"}`)}
++			recorder, _ := cm053RAServe(t, false, cm053RABehavior{err: direct})
++			cm053AssertRetryAfter(t, recorder, http.StatusTooManyRequests, tc.want)
++			if recorder.Header().Get("Anthropic-Ratelimit-Unified-Reset") != "1700000000" {
++				t.Fatalf("the direct path's existing forwarding changed: %v", recorder.Header())
++			}
++			if recorder.Header().Get("Set-Cookie") != "" {
++				t.Fatalf("Set-Cookie forwarded: %v", recorder.Header())
++			}
++		})
++	}
++}
++
++func TestCM053RetryAfterNotLeakedAcrossAttempts(t *testing.T) {
++	hinted := cm053RABehavior{err: cm053HintedErr{status: http.StatusTooManyRequests, hint: cm053Hint(t, "3600")}}
++	success := cm053RABehavior{successBody: `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"m","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`}
++	for _, stream := range []bool{false, true} {
++		t.Run("then-success/stream="+strconv.FormatBool(stream), func(t *testing.T) {
++			second := success
++			if stream {
++				second = cm053RABehavior{firstChunk: true}
++			}
++			recorder, executor := cm053RAServe(t, stream, hinted, second)
++			if len(executor.calls) != 2 {
++				t.Fatalf("attempts = %v, want the hinted credential then the successful one", executor.calls)
++			}
++			cm053AssertRetryAfter(t, recorder, http.StatusOK, "")
++		})
++		t.Run("then-unhinted-failure/stream="+strconv.FormatBool(stream), func(t *testing.T) {
++			recorder, executor := cm053RAServe(t, stream, hinted, cm053RABehavior{err: &coreauth.Error{HTTPStatus: http.StatusBadGateway, Message: "second failed"}})
++			if len(executor.calls) != 2 {
++				t.Fatalf("attempts = %v, want both credentials", executor.calls)
++			}
++			if recorder.Code == http.StatusTooManyRequests || recorder.Header().Get("Retry-After") != "" {
++				t.Fatalf("the first credential's hint reached the final response: %d %v", recorder.Code, recorder.Header())
++			}
++		})
++	}
++}
++
++func TestCM053RetryAfterCommittedStreamUnchanged(t *testing.T) {
++	recorder, _ := cm053RAServe(t, true, cm053RABehavior{firstChunk: true, midErr: cm053HintedErr{status: http.StatusTooManyRequests, hint: cm053Hint(t, "3600")}})
++	if recorder.Code != http.StatusOK {
++		t.Fatalf("committed stream status = %d, want 200", recorder.Code)
++	}
++	if got := recorder.Header().Values("Retry-After"); len(got) != 0 {
++		t.Fatalf("Retry-After added after the stream was committed: %v", got)
++	}
++	if !strings.Contains(recorder.Body.String(), "message_start") || !strings.Contains(recorder.Body.String(), "event: error") {
++		t.Fatalf("stream body = %q, want the first chunk then a terminal SSE error", recorder.Body.String())
++	}
++}
++
++// cm053DirectReceiptErr is the shape of the Claude fast path's direct
++// response: forwarded upstream headers plus the Retry-After deadline its
++// executor validated when those headers arrived (retryhint.DirectCarrier).
++type cm053DirectReceiptErr struct {
++	response *coreexecutor.RequestTerminatedError
++	hint     retryhint.Hint
++}
++
++func (e *cm053DirectReceiptErr) Error() string { return "cm053 direct upstream failure" }
++func (e *cm053DirectReceiptErr) Unwrap() error { return e.response }
++func (e *cm053DirectReceiptErr) DirectRetryAfter() (retryhint.Hint, bool) {
++	return e.hint, e.hint.Valid()
++}
++
++// TestCM053RetryAfterDirectReceiptDeadline: the fast/direct path forwards
++// one canonical Retry-After that keeps the deadline from upstream receipt:
++// a 1 s wait whose time was already spent in the gateway is emitted as 0,
++// not restarted at the handler.
++func TestCM053RetryAfterDirectReceiptDeadline(t *testing.T) {
++	for _, stream := range []bool{false, true} {
++		t.Run("stream="+strconv.FormatBool(stream), func(t *testing.T) {
++			hint, _ := retryhint.Parse([]string{"1"}, time.Now().Add(-1200*time.Millisecond))
++			direct := &cm053DirectReceiptErr{
++				response: &coreexecutor.RequestTerminatedError{
++					HTTPStatus: http.StatusTooManyRequests,
++					Header:     http.Header{"Retry-After": {"1"}, "Content-Type": {"application/json"}},
++					Body:       []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"cm053 direct"}}`),
++				},
++				hint: hint,
++			}
++			recorder, _ := cm053RAServe(t, stream, cm053RABehavior{err: direct})
++			cm053AssertRetryAfter(t, recorder, http.StatusTooManyRequests, "0")
++		})
++	}
++}
+diff --git a/sdk/api/handlers/handlers_errors.go b/sdk/api/handlers/handlers_errors.go
+index 4843b81..9a174b3 100644
+--- a/sdk/api/handlers/handlers_errors.go
++++ b/sdk/api/handlers/handlers_errors.go
+@@ -6,10 +6,12 @@ import (
+ 	"fmt"
+ 	"net/http"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/gin-gonic/gin"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
+ 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+ 	"golang.org/x/net/context"
+ )
+@@ -124,7 +126,9 @@ func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.Erro
+ 		return
+ 	}
+ 	if msg != nil && msg.Error != nil {
+-		for _, value := range coreauth.SafeResponseHeaders(msg.Error).Values("Retry-After") {
++		// A trusted local value, else one validated upstream hint
++		// on a terminal 429/503; headers are not committed yet.
++		for _, value := range coreauth.ResponseRetryAfter(msg.Error, status) {
+ 			c.Writer.Header().Add("Retry-After", value)
+ 		}
+ 	}
+@@ -186,6 +190,9 @@ func writeDirectErrorResponse(c *gin.Context, status int, msg *interfaces.ErrorM
+ 			c.Writer.Header().Add(key, value)
+ 		}
+ 	}
++	// A direct response forwards upstream headers by design; its
++	// Retry-After becomes at most one canonical validated value.
++	retryhint.CanonicalizeDirectHeader(c.Writer.Header(), msg.Error, time.Now())
+ 	body := bytes.Clone(msg.Body)
+ 	appendAPIResponse(c, body)
+ 	if !c.Writer.Written() && c.Writer.Header().Get("Content-Type") == "" {
+diff --git a/sdk/api/handlers/retry_after_cm053_test.go b/sdk/api/handlers/retry_after_cm053_test.go
+new file mode 100644
+index 0000000..ee11509
+--- /dev/null
++++ b/sdk/api/handlers/retry_after_cm053_test.go
+@@ -0,0 +1,74 @@
++package handlers
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
++)
++
++// The base (OpenAI/Gemini) error writer emits one validated
++// upstream Retry-After on a terminal 429/503 and canonicalizes the forwarded
++// Retry-After of a direct response.
++
++type cm053BaseHintErr struct {
++	status int
++	hint   retryhint.Hint
++}
++
++func (e cm053BaseHintErr) Error() string   { return `{"error":{"message":"cm053 busy"}}` }
++func (e cm053BaseHintErr) StatusCode() int { return e.status }
++func (e cm053BaseHintErr) UpstreamRetryAfter() (retryhint.Hint, bool) {
++	return e.hint, e.hint.Valid()
++}
++
++// cm053BaseDirectErr is a direct response error that validated its
++// Retry-After when the upstream headers arrived.
++type cm053BaseDirectErr struct{ hint retryhint.Hint }
++
++func (e cm053BaseDirectErr) Error() string { return "cm053 direct" }
++func (e cm053BaseDirectErr) DirectRetryAfter() (retryhint.Hint, bool) {
++	return e.hint, e.hint.Valid()
++}
++
++func TestCM053RetryAfterBaseHandlerWriter(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	hint, _ := retryhint.Parse([]string{"42"}, time.Now())
++	spent, _ := retryhint.Parse([]string{"1"}, time.Now().Add(-2*time.Second))
++	handler := &BaseAPIHandler{}
++	write := func(msg *interfaces.ErrorMessage) *httptest.ResponseRecorder {
++		recorder := httptest.NewRecorder()
++		c, _ := gin.CreateTestContext(recorder)
++		handler.WriteErrorResponse(c, msg)
++		return recorder
++	}
++	for _, tc := range []struct {
++		name string
++		msg  *interfaces.ErrorMessage
++		want []string
++	}{
++		{"429", &interfaces.ErrorMessage{StatusCode: 429, Error: cm053BaseHintErr{429, hint}}, []string{"42"}},
++		{"503", &interfaces.ErrorMessage{StatusCode: 503, Error: cm053BaseHintErr{503, hint}}, []string{"42"}},
++		{"500", &interfaces.ErrorMessage{StatusCode: 500, Error: cm053BaseHintErr{500, hint}}, nil},
++		{"status-mismatch", &interfaces.ErrorMessage{StatusCode: 503, Error: cm053BaseHintErr{429, hint}}, nil},
++		{"passthrough-off-addon-ignored", &interfaces.ErrorMessage{StatusCode: 429, Error: cm053BaseHintErr{429, retryhint.Hint{}}, Addon: http.Header{"Retry-After": {"9"}, "X-Upstream": {"v"}}}, nil},
++		{"direct-duplicate", &interfaces.ErrorMessage{StatusCode: 429, DirectResponse: true, Headers: http.Header{"Retry-After": {"5", "5"}}, Body: []byte(`{}`)}, nil},
++		{"direct-single", &interfaces.ErrorMessage{StatusCode: 429, DirectResponse: true, Headers: http.Header{"Retry-After": {"5"}}, Body: []byte(`{}`)}, []string{"5"}},
++		{"direct-receipt-deadline", &interfaces.ErrorMessage{StatusCode: 429, DirectResponse: true, Error: cm053BaseDirectErr{spent}, Headers: http.Header{"Retry-After": {"1"}}, Body: []byte(`{}`)}, []string{"0"}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			recorder := write(tc.msg)
++			got := recorder.Header().Values("Retry-After")
++			if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
++				t.Fatalf("Retry-After = %v, want %v", got, tc.want)
++			}
++			if recorder.Header().Get("X-Upstream") != "" {
++				t.Fatalf("an addon header was forwarded with passthrough off: %v", recorder.Header())
++			}
++		})
++	}
++}
+diff --git a/sdk/cliproxy/auth/upstream_retry_after.go b/sdk/cliproxy/auth/upstream_retry_after.go
+new file mode 100644
+index 0000000..a782769
+--- /dev/null
++++ b/sdk/cliproxy/auth/upstream_retry_after.go
+@@ -0,0 +1,25 @@
++package auth
++
++import (
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
++)
++
++// ResponseRetryAfter returns the Retry-After values of a terminal error
++// response written with status. A trusted local
++// recovery value (SafeResponseHeaders) wins. Otherwise, when err carries a
++// validated upstream hint whose carrier has this same 429 or 503 status, it
++// returns that hint as one canonical delta-seconds value with the time
++// already spent subtracted. It never returns local and upstream values
++// together, nor more than one upstream value. General upstream header
++// passthrough is not involved.
++func ResponseRetryAfter(err error, status int) []string {
++	if local := SafeResponseHeaders(err).Values("Retry-After"); len(local) > 0 {
++		return local
++	}
++	if value, ok := retryhint.ResponseValue(err, status, time.Now()); ok {
++		return []string{value}
++	}
++	return nil
++}
+diff --git a/sdk/cliproxy/auth/upstream_retry_after_cm053_test.go b/sdk/cliproxy/auth/upstream_retry_after_cm053_test.go
+new file mode 100644
+index 0000000..2d5cae8
+--- /dev/null
++++ b/sdk/cliproxy/auth/upstream_retry_after_cm053_test.go
+@@ -0,0 +1,86 @@
++package auth
++
++import (
++	"fmt"
++	"net/http"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/retryhint"
++)
++
++// The terminal Retry-After of an error response.
++
++type cm053HintCarrier struct {
++	status int
++	hint   retryhint.Hint
++}
++
++func (c cm053HintCarrier) Error() string   { return "upstream failure" }
++func (c cm053HintCarrier) StatusCode() int { return c.status }
++func (c cm053HintCarrier) UpstreamRetryAfter() (retryhint.Hint, bool) {
++	return c.hint, c.hint.Valid()
++}
++
++func cm053HintOf(t *testing.T, value string) retryhint.Hint {
++	t.Helper()
++	hint, ok := retryhint.Parse([]string{value}, time.Now())
++	if !ok {
++		t.Fatalf("hint %q did not parse", value)
++	}
++	return hint
++}
++
++func TestCM053RetryAfterSurvivesErrorWrapping(t *testing.T) {
++	carrier := cm053HintCarrier{status: http.StatusTooManyRequests, hint: cm053HintOf(t, "120")}
++	wrapped := []struct {
++		name   string
++		err    error
++		status int
++		want   string
++	}{
++		{"direct", carrier, 429, "120"},
++		{"fmt-wrap", fmt.Errorf("attempt failed: %w", carrier), 429, "120"},
++		{"with-cause-same-status", WithCause(&Error{Code: "rate_limited", Message: "x", HTTPStatus: 429}, carrier), 429, "120"},
++		{"terminal-auth", NewTerminalAuthError(&Error{Message: "x", HTTPStatus: 429}, carrier), 429, "120"},
++		{"double-wrap", fmt.Errorf("outer: %w", WithCause(&Error{HTTPStatus: 429}, fmt.Errorf("inner: %w", carrier))), 429, "120"},
++		// An enrichment that changes the terminal status is a local error:
++		// the upstream hint is not emitted on it.
++		{"enriched-503-over-429", WithCause(&Error{Code: "auth_unavailable", Message: "x", HTTPStatus: 503}, carrier), 503, ""},
++		{"status-500", carrier, 500, ""},
++	}
++	for _, tc := range wrapped {
++		got := ResponseRetryAfter(tc.err, tc.status)
++		switch {
++		case tc.want == "" && len(got) != 0:
++			t.Fatalf("%s: Retry-After = %v, want none", tc.name, got)
++		case tc.want != "" && (len(got) != 1 || got[0] != tc.want):
++			t.Fatalf("%s: Retry-After = %v, want [%s]", tc.name, got, tc.want)
++		}
++	}
++}
++
++func TestCM053RetryAfterLocalDeadlinePrecedence(t *testing.T) {
++	carrier := cm053HintCarrier{status: http.StatusTooManyRequests, hint: cm053HintOf(t, "3600")}
++	local := 7 * time.Second
++	cases := []struct {
++		name string
++		err  error
++	}{
++		{"home-dispatch-cooldown", fmt.Errorf("%w: %w", &homeDispatchRetryAfterError{retryAfter: local}, carrier)},
++		{"model-cooldown", fmt.Errorf("%w: %w", newModelCooldownError("cm053-model", "cm053", local), carrier)},
++	}
++	for _, tc := range cases {
++		got := ResponseRetryAfter(tc.err, http.StatusTooManyRequests)
++		if len(got) != 1 || got[0] != "7" {
++			t.Fatalf("%s: Retry-After = %v, want only the local [7]", tc.name, got)
++		}
++	}
++	// Without a local value the upstream hint is the one value.
++	if got := ResponseRetryAfter(carrier, http.StatusTooManyRequests); len(got) != 1 || got[0] != "3600" {
++		t.Fatalf("upstream-only Retry-After = %v, want [3600]", got)
++	}
++	if got := ResponseRetryAfter(nil, http.StatusTooManyRequests); len(got) != 0 {
++		t.Fatalf("nil error Retry-After = %v", got)
++	}
++}

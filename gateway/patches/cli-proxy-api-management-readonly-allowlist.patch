@@ -1,0 +1,1002 @@
+diff --git a/internal/api/handlers/management/handler.go b/internal/api/handlers/management/handler.go
+index 883d532..87063aa 100644
+--- a/internal/api/handlers/management/handler.go
++++ b/internal/api/handlers/management/handler.go
+@@ -79,7 +79,7 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
+ 		failedAttempts:      make(map[string]*attemptInfo),
+ 		authManager:         manager,
+ 		tokenStore:          sdkAuth.GetTokenStore(),
+-		allowRemoteOverride: envSecret != "",
++		allowRemoteOverride: false, // claude-multi: MANAGEMENT_PASSWORD never implies allow-remote
+ 		envSecret:           envSecret,
+ 	}
+ 	h.startAttemptCleanup()
+diff --git a/internal/api/redis_queue_protocol.go b/internal/api/redis_queue_protocol.go
+index 4295cc7..06407cb 100644
+--- a/internal/api/redis_queue_protocol.go
++++ b/internal/api/redis_queue_protocol.go
+@@ -64,6 +64,14 @@ func (s *Server) handleRedisConnection(conn net.Conn, reader *bufio.Reader) {
+ 		return
+ 	}
+ 
++	// claude-multi: the RESP surface authenticates with the management key and
++	// pops the usage queue, so it is outside the read-only allowlist. Close
++	// before any command is read or any key is checked, exactly as a gateway
++	// without a management key does.
++	if managementRESPOutputDisabled {
++		return
++	}
++
+ 	for {
+ 		if !s.managementRoutesEnabled.Load() {
+ 			return
+diff --git a/internal/api/server.go b/internal/api/server.go
+index ec04949..990c18a 100644
+--- a/internal/api/server.go
++++ b/internal/api/server.go
+@@ -143,6 +143,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
+ 	engine.Use(logging.GinLogrusLogger())
+ 	engine.Use(logging.GinLogrusRecovery())
+ 	engine.Use(logging.CPATraceIDMiddleware())
++	// claude-multi: read-only management allowlist; must precede every route.
++	engine.Use(managementReadOnlyAllowlistMiddleware())
+ 	for _, mw := range optionState.extraMiddleware {
+ 		engine.Use(mw)
+ 	}
+diff --git a/internal/api/server_devin_oauth_test.go b/internal/api/server_devin_oauth_test.go
+index f2f5290..533e61d 100644
+--- a/internal/api/server_devin_oauth_test.go
++++ b/internal/api/server_devin_oauth_test.go
+@@ -18,7 +18,7 @@ func TestDevinOAuthRoutes(t *testing.T) {
+ 
+ 	w := httptest.NewRecorder()
+ 	server.engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v0/management/devin-auth-url", nil))
+-	if w.Code != http.StatusUnauthorized {
++	if w.Code != http.StatusNotFound {
+ 		t.Fatalf("unprotected login route: %d", w.Code)
+ 	}
+ 	registered := false
+diff --git a/internal/api/server_kimi_oauth_test.go b/internal/api/server_kimi_oauth_test.go
+index a026e3e..391e38c 100644
+--- a/internal/api/server_kimi_oauth_test.go
++++ b/internal/api/server_kimi_oauth_test.go
+@@ -12,13 +12,13 @@ func TestKimiAndKimiAIOAuthRoutes(t *testing.T) {
+ 
+ 	wKimi := httptest.NewRecorder()
+ 	server.engine.ServeHTTP(wKimi, httptest.NewRequest(http.MethodGet, "/v0/management/kimi-auth-url", nil))
+-	if wKimi.Code != http.StatusUnauthorized {
++	if wKimi.Code != http.StatusNotFound {
+ 		t.Fatalf("unprotected kimi login route: %d", wKimi.Code)
+ 	}
+ 
+ 	wKimiAI := httptest.NewRecorder()
+ 	server.engine.ServeHTTP(wKimiAI, httptest.NewRequest(http.MethodGet, "/v0/management/kimi-ai-auth-url", nil))
+-	if wKimiAI.Code != http.StatusUnauthorized {
++	if wKimiAI.Code != http.StatusNotFound {
+ 		t.Fatalf("unprotected kimi-ai login route: %d", wKimiAI.Code)
+ 	}
+ 
+diff --git a/internal/api/server_management_allowlist.go b/internal/api/server_management_allowlist.go
+new file mode 100644
+index 0000000..9e8348f
+--- /dev/null
++++ b/internal/api/server_management_allowlist.go
+@@ -0,0 +1,163 @@
++package api
++
++import (
++	"net"
++	"net/http"
++	"path"
++	"strings"
++
++	"github.com/gin-gonic/gin"
++)
++
++// claude-multi local patch (management-readonly-allowlist).
++//
++// The Management API is reduced to an exact read-only allowlist. The guard is
++// an engine-level middleware installed before any route exists, so it runs
++// ahead of every /v0/management handler: the group routes (and their
++// management-key middleware), the engine-level oauth-callback routes, and the
++// NoRoute plugin dispatcher. A management-scoped request is refused with a
++// bare 404 before any key check, so it never reaches the failed-attempt
++// counter, when any of these holds:
++//   - it is not an exact allowlisted request (GET, canonical path);
++//   - it carries browser request metadata (Origin or Sec-Fetch-*), so a
++//     Fetch-Metadata-capable browser page cannot drive the 5-strike ban on
++//     the allowlisted routes;
++//   - its Host is not a loopback literal, so the Host check covers DNS
++//     rebinding.
++//
++// Older browsers without Fetch Metadata remain an accepted residual: their
++// cross-site simple GETs to 127.0.0.1 still reach the key check on the
++// allowlisted routes, and the ban they can drive only blocks quota reads for
++// 30 minutes.
++//
++// The refusal has an empty body and no X-CPA-* headers, like upstream's
++// "management unavailable" 404, but also no Access-Control-* headers: CORS
++// runs after the guard. That is intentional: no cross-origin read or
++// preflight succeeds on a management path.
++//
++// The one pre-routing exception is gin's trailing-slash redirect
++// (RedirectTrailingSlash): a registered path plus "/" is answered with a
++// 301/307 before any middleware runs. It runs no handler, counts nothing and
++// returns no data, but it does show which refused paths are registered.
++
++const managementAllowlistScopePrefix = "/v0/management"
++
++// managementRESPOutputDisabled closes the RESP (Redis protocol) usage/error
++// surface that shares the HTTP port, authenticates with the management key
++// and pops the usage queue. It is outside the read-only allowlist.
++const managementRESPOutputDisabled = true
++
++var managementAllowlistExactGET = map[string]struct{}{
++	"/v0/management/auth-files":        {},
++	"/v0/management/auth-files/models": {},
++}
++
++const managementAllowlistChannelPrefix = "/v0/management/model-definitions/"
++
++var managementBrowserRequestHeaders = []string{
++	"Origin",
++	"Sec-Fetch-Site",
++	"Sec-Fetch-Mode",
++	"Sec-Fetch-Dest",
++}
++
++func managementReadOnlyAllowlistMiddleware() gin.HandlerFunc {
++	return func(c *gin.Context) {
++		r := c.Request
++		if r == nil || r.URL == nil {
++			c.AbortWithStatus(http.StatusNotFound)
++			return
++		}
++		if !isManagementScopedRequest(r) {
++			c.Next()
++			return
++		}
++		if isBrowserOriginatedRequest(r) || !isLoopbackHostHeader(r.Host) || !isAllowlistedManagementRequest(r) {
++			c.AbortWithStatus(http.StatusNotFound)
++			return
++		}
++		c.Next()
++	}
++}
++
++// isManagementScopedRequest is deliberately broad: any spelling that gin (in
++// any engine configuration: raw or decoded path, extra slashes removed or
++// not) or the NoRoute dispatcher could route to a management handler is in
++// scope. There is no segment boundary on purpose.
++func isManagementScopedRequest(r *http.Request) bool {
++	for _, candidate := range []string{r.URL.Path, r.URL.RawPath} {
++		if candidate == "" {
++			continue
++		}
++		lower := strings.ToLower(candidate)
++		if strings.HasPrefix(lower, managementAllowlistScopePrefix) ||
++			strings.HasPrefix(path.Clean("/"+lower), managementAllowlistScopePrefix) {
++			return true
++		}
++	}
++	return false
++}
++
++// isBrowserOriginatedRequest reports whether the request carries any header a
++// browser attaches to cross-site or fetch-metadata requests. The claude-multi
++// client sends none of them.
++func isBrowserOriginatedRequest(r *http.Request) bool {
++	for _, name := range managementBrowserRequestHeaders {
++		if len(r.Header.Values(name)) > 0 {
++			return true
++		}
++	}
++	return false
++}
++
++// isLoopbackHostHeader accepts only loopback literals (any port): 127.0.0.1,
++// [::1] and localhost. A DNS-rebinding page carries its own host name.
++func isLoopbackHostHeader(hostport string) bool {
++	host := hostport
++	if h, _, err := net.SplitHostPort(hostport); err == nil {
++		host = h
++	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
++		host = host[1 : len(host)-1]
++	}
++	switch strings.ToLower(host) {
++	case "127.0.0.1", "::1", "localhost":
++		return true
++	}
++	return false
++}
++
++// isAllowlistedManagementRequest is deliberately strict: GET only, canonical
++// (no percent-encoding) path, exact match. Allowed paths are fixed points of
++// gin's path cleaning and unescaping, so an allowed request routes to exactly
++// one allowlisted handler.
++func isAllowlistedManagementRequest(r *http.Request) bool {
++	if r.Method != http.MethodGet || r.URL.RawPath != "" {
++		return false
++	}
++	p := r.URL.Path
++	if _, ok := managementAllowlistExactGET[p]; ok {
++		return true
++	}
++	if channel, ok := strings.CutPrefix(p, managementAllowlistChannelPrefix); ok {
++		return isManagementAllowlistChannel(channel)
++	}
++	return false
++}
++
++// isManagementAllowlistChannel matches ^[a-z0-9][a-z0-9._-]{0,63}$, which
++// excludes "", ".", ".." and "/".
++func isManagementAllowlistChannel(channel string) bool {
++	if len(channel) == 0 || len(channel) > 64 {
++		return false
++	}
++	for i := 0; i < len(channel); i++ {
++		ch := channel[i]
++		switch {
++		case ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9':
++		case i > 0 && (ch == '.' || ch == '-' || ch == '_'):
++		default:
++			return false
++		}
++	}
++	return true
++}
+diff --git a/internal/api/server_management_allowlist_test.go b/internal/api/server_management_allowlist_test.go
+new file mode 100644
+index 0000000..b5abecd
+--- /dev/null
++++ b/internal/api/server_management_allowlist_test.go
+@@ -0,0 +1,734 @@
++package api
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"io/fs"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"os"
++	"path/filepath"
++	"sort"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	managementHandlers "github.com/router-for-me/CLIProxyAPI/v7/internal/api/handlers/management"
++	proxyconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
++	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
++)
++
++// claude-multi local patch (management-readonly-allowlist) gate.
++// Network-free: requests go through server.engine.ServeHTTP (no listener);
++// the RESP check uses a 127.0.0.1:0 listener only; the source tripwire reads
++// the module's own files.
++
++const (
++	allowlistTestKey  = "allowlist-test-management-key"
++	allowlistTestHost = "127.0.0.1:8317"
++)
++
++var allowlistedManagementRoutes = map[string]string{
++	"GET /v0/management/auth-files":                 "/v0/management/auth-files",
++	"GET /v0/management/auth-files/models":          "/v0/management/auth-files/models?name=none",
++	"GET /v0/management/model-definitions/:channel": "/v0/management/model-definitions/claude",
++}
++
++// newAllowlistTestServer builds every gate server production-shaped: the
++// plugin host is wired exactly as sdk/cliproxy/builder.go Build does
++// (pluginhost.New, ApplyConfig, RegisterFrontendAuthProviders, then
++// WithPluginHost). Production always has a plugin host, and without one the
++// NoRoute dispatcher 404s before the management key middleware
++// (pluginManagementNoRoute), so NoRoute probes on newTestServer are vacuous.
++func newAllowlistTestServer(t *testing.T) *Server {
++	t.Helper()
++	t.Setenv("MANAGEMENT_PASSWORD", allowlistTestKey)
++	cfg := &proxyconfig.Config{
++		SDKConfig: sdkconfig.SDKConfig{
++			APIKeys: []string{"test-key"},
++		},
++	}
++	host := pluginhost.New()
++	host.ApplyConfig(context.Background(), cfg)
++	host.RegisterFrontendAuthProviders()
++	s := newTestServerWithConfig(t, cfg, WithPluginHost(host))
++	if s.pluginHost != host || s.mgmt == nil {
++		t.Fatal("gate server is not production-shaped: plugin host or management handler missing")
++	}
++	return s
++}
++
++// allowlistRequest builds a request shaped like the claude-multi client: a
++// loopback peer, a loopback Host literal, no browser headers.
++func allowlistRequest(method, target, key, remoteAddr string) *http.Request {
++	req := httptest.NewRequest(method, target, nil)
++	if remoteAddr == "" {
++		remoteAddr = "127.0.0.1:40000"
++	}
++	req.RemoteAddr = remoteAddr
++	req.Host = allowlistTestHost
++	if key != "" {
++		req.Header.Set("Authorization", "Bearer "+key)
++	}
++	return req
++}
++
++func serveAllowlist(s *Server, req *http.Request) *httptest.ResponseRecorder {
++	rr := httptest.NewRecorder()
++	s.engine.ServeHTTP(rr, req)
++	return rr
++}
++
++// concreteRoutePath substitutes gin parameters with a sample segment.
++func concreteRoutePath(routePath string) string {
++	segments := strings.Split(routePath, "/")
++	for i, seg := range segments {
++		if strings.HasPrefix(seg, ":") || strings.HasPrefix(seg, "*") {
++			segments[i] = "sample"
++		}
++	}
++	return strings.Join(segments, "/")
++}
++
++func managementRoutes(t *testing.T, s *Server) map[string]string {
++	t.Helper()
++	out := make(map[string]string)
++	for _, route := range s.engine.Routes() {
++		if strings.HasPrefix(route.Path, managementAllowlistScopePrefix) {
++			out[route.Method+" "+route.Path] = concreteRoutePath(route.Path)
++		}
++	}
++	return out
++}
++
++// refusalProblem returns "" for the guard's refusal (a bare 404: empty body,
++// no X-CPA-* header from the management key middleware) and a description
++// otherwise.
++func refusalProblem(rr *httptest.ResponseRecorder) string {
++	if rr.Code != http.StatusNotFound {
++		return fmt.Sprintf("status = %d, want 404 body=%q", rr.Code, rr.Body.String())
++	}
++	if rr.Body.Len() != 0 {
++		return fmt.Sprintf("body = %q, want empty (upstream NoRoute shape)", rr.Body.String())
++	}
++	for name := range rr.Header() {
++		if strings.HasPrefix(strings.ToUpper(name), "X-CPA-") {
++			return fmt.Sprintf("header %s present: management key middleware ran on a refused request", name)
++		}
++	}
++	return ""
++}
++
++func assertRefused(t *testing.T, rr *httptest.ResponseRecorder, label string) {
++	t.Helper()
++	if problem := refusalProblem(rr); problem != "" {
++		t.Fatalf("%s: %s", label, problem)
++	}
++}
++
++func assertNotBanned(t *testing.T, s *Server, label string) {
++	t.Helper()
++	rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/auth-files", allowlistTestKey, ""))
++	if rr.Code != http.StatusOK {
++		t.Fatalf("valid key after %s: status = %d body=%q, want 200 (not banned)", label, rr.Code, rr.Body.String())
++	}
++}
++
++func TestManagementAllowlist_EveryRegisteredRouteRefusedUnlessAllowlisted(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	routes := managementRoutes(t, s)
++	if len(routes) < 100 {
++		t.Fatalf("only %d management routes registered; enumeration broken?", len(routes))
++	}
++	for key := range allowlistedManagementRoutes {
++		if _, ok := routes[key]; !ok {
++			t.Fatalf("allowlisted route %s is not registered upstream", key)
++		}
++	}
++	for _, key := range []string{
++		"GET /v0/management/config",
++		"GET /v0/management/config.yaml",
++		"GET /v0/management/api-keys",
++		"GET /v0/management/usage-queue",
++		"GET /v0/management/auth-files/download",
++		"GET /v0/management/oauth-callback",
++		"POST /v0/management/oauth-callback",
++	} {
++		if _, ok := routes[key]; !ok {
++			t.Fatalf("refused route %s is not registered upstream; enumeration broken?", key)
++		}
++	}
++	for key, concrete := range routes {
++		method := strings.SplitN(key, " ", 2)[0]
++		if target, ok := allowlistedManagementRoutes[key]; ok {
++			rr := serveAllowlist(s, allowlistRequest(method, target, allowlistTestKey, ""))
++			if rr.Code != http.StatusOK {
++				t.Fatalf("%s: allowlisted status = %d, want 200 body=%q", key, rr.Code, rr.Body.String())
++			}
++			continue
++		}
++		assertRefused(t, serveAllowlist(s, allowlistRequest(method, concrete, allowlistTestKey, "")), key)
++	}
++}
++
++// The management key is consumed outside the /v0/management route group too:
++// s.mgmt.Middleware() also runs from the NoRoute dispatcher, and
++// AuthenticateManagementKey from the RESP protocol (closed; see the RESP
++// test). Probe every engine route with no prefix filter, plus unregistered
++// paths that reach NoRoute, with a bad key in each header the key middleware
++// reads. Only the three allowlisted routes may run it (X-CPA-VERSION), so an
++// upstream route that attaches the key middleware outside the prefix fails
++// here instead of silently counting strikes and serving data.
++func TestManagementAllowlist_KeyMiddlewareRunsOnlyOnAllowlistedRoutes(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	badKeys := []struct{ header, value string }{
++		{"Authorization", "Bearer wrong"},
++		{"X-Management-Key", "wrong"},
++	}
++	probe := func(method, target, header, value string) *httptest.ResponseRecorder {
++		req := allowlistRequest(method, target, "", "")
++		req.Header.Set(header, value)
++		return serveAllowlist(s, req)
++	}
++	probed, outsidePrefix := 0, 0
++	for _, route := range s.engine.Routes() {
++		if route.Path == "/management.html" {
++			continue // control panel; may fetch its asset over the network
++		}
++		key := route.Method + " " + route.Path
++		if _, ok := allowlistedManagementRoutes[key]; ok {
++			continue // positive control below
++		}
++		probed++
++		if !strings.HasPrefix(route.Path, managementAllowlistScopePrefix) {
++			outsidePrefix++
++		}
++		target := concreteRoutePath(route.Path)
++		for _, bad := range badKeys {
++			if rr := probe(route.Method, target, bad.header, bad.value); rr.Header().Get("X-CPA-VERSION") != "" {
++				t.Fatalf("%s (bad key via %s): management key middleware ran outside the allowlist, status = %d", key, bad.header, rr.Code)
++			}
++		}
++	}
++	if probed < 150 || outsidePrefix < 30 {
++		t.Fatalf("probed %d routes (%d outside %s); enumeration broken?", probed, outsidePrefix, managementAllowlistScopePrefix)
++	}
++	t.Logf("probed %d non-allowlisted routes (%d outside %s)", probed, outsidePrefix, managementAllowlistScopePrefix)
++	for _, target := range []string{"/unregistered", "/v0/unregistered", "/v1/unregistered", "/v0/resource/plugins/sample"} {
++		for _, method := range []string{http.MethodGet, http.MethodPost} {
++			for _, bad := range badKeys {
++				if rr := probe(method, target, bad.header, bad.value); rr.Header().Get("X-CPA-VERSION") != "" {
++					t.Fatalf("%s %s (NoRoute, bad key via %s): management key middleware ran, status = %d", method, target, bad.header, rr.Code)
++				}
++			}
++		}
++	}
++	assertNotBanned(t, s, "bad keys on every non-allowlisted route")
++	// Positive control: the sentinel is live, and the allowlisted routes are
++	// exactly where the key is checked. The valid-key request after each
++	// strike resets the counter.
++	for key, target := range allowlistedManagementRoutes {
++		for _, bad := range badKeys {
++			rr := probe(http.MethodGet, target, bad.header, bad.value)
++			if rr.Code != http.StatusUnauthorized || rr.Header().Get("X-CPA-VERSION") == "" {
++				t.Fatalf("%s (bad key via %s): status = %d X-CPA-VERSION = %q, want 401 from the key middleware", key, bad.header, rr.Code, rr.Header().Get("X-CPA-VERSION"))
++			}
++			assertNotBanned(t, s, key+" positive control")
++		}
++	}
++}
++
++// ginRoutePatternMatches reports whether a registered gin path pattern
++// (":param" matches one non-empty segment, "*catch" the rest) matches path.
++func ginRoutePatternMatches(pattern, path string) bool {
++	ps, xs := strings.Split(pattern, "/"), strings.Split(path, "/")
++	for i, seg := range ps {
++		if strings.HasPrefix(seg, "*") {
++			return len(xs) >= i
++		}
++		if i >= len(xs) {
++			return false
++		}
++		if strings.HasPrefix(seg, ":") {
++			if xs[i] == "" {
++				return false
++			}
++			continue
++		}
++		if seg != xs[i] {
++			return false
++		}
++	}
++	return len(ps) == len(xs)
++}
++
++// On a production-shaped server the NoRoute dispatcher runs the management key
++// middleware for every unregistered /v0/management path (plugin routes and
++// plugin *-auth-url logins; pluginManagementNoRoute). Four real strikes land
++// first, so a single strike leaking past the guard would ban loopback.
++func TestManagementAllowlist_UnregisteredManagementPathsNeverReachKeyMiddleware(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	targets := []string{
++		"/v0/management/no-such-route",
++		"/v0/management/plugins/x/y",
++		"/v0/management/foo-auth-url",
++	}
++	methods := []string{http.MethodGet, http.MethodPost}
++	keys := []struct{ label, header, value string }{
++		{"bad key via Authorization", "Authorization", "Bearer wrong"},
++		{"bad key via X-Management-Key", "X-Management-Key", "wrong"},
++		{"no key", "", ""},
++	}
++	probe := func(method, target, header, value string) *http.Request {
++		req := allowlistRequest(method, target, "", "")
++		if header != "" {
++			req.Header.Set(header, value)
++		}
++		return req
++	}
++	for _, target := range targets {
++		for _, route := range s.engine.Routes() {
++			if ginRoutePatternMatches(route.Path, target) {
++				t.Fatalf("%s matches registered route %s %s; the probe must reach NoRoute", target, route.Method, route.Path)
++			}
++		}
++	}
++	// Positive control: on this server shape the dispatcher itself runs the
++	// key middleware for these paths (a bare engine with only the dispatcher,
++	// no guard). The valid key on the guarded engine then resets the counter.
++	bare := gin.New()
++	bare.NoRoute(s.pluginManagementNoRoute)
++	for _, target := range targets {
++		for _, method := range methods {
++			for _, key := range keys {
++				rr := httptest.NewRecorder()
++				bare.ServeHTTP(rr, probe(method, target, key.header, key.value))
++				if rr.Code != http.StatusUnauthorized || rr.Header().Get("X-CPA-VERSION") == "" {
++					t.Fatalf("positive control %s %s (%s, no guard): status = %d X-CPA-VERSION = %q, want 401 from the key middleware; the NoRoute dispatcher changed, re-audit this gate", method, target, key.label, rr.Code, rr.Header().Get("X-CPA-VERSION"))
++				}
++				assertNotBanned(t, s, "positive control "+method+" "+target)
++			}
++		}
++	}
++	for i := 0; i < 4; i++ {
++		rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/auth-files", "wrong", ""))
++		if rr.Code != http.StatusUnauthorized || rr.Header().Get("X-CPA-VERSION") == "" {
++			t.Fatalf("strike %d on the allowlisted route: status = %d, want 401 from the key middleware", i+1, rr.Code)
++		}
++	}
++	total, leaked := 0, 0
++	for n := 0; n < 5; n++ {
++		for _, target := range targets {
++			for _, method := range methods {
++				for _, key := range keys {
++					total++
++					if problem := refusalProblem(serveAllowlist(s, probe(method, target, key.header, key.value))); problem != "" {
++						leaked++
++						if leaked <= 6 {
++							t.Errorf("%s %s (%s): %s", method, target, key.label, problem)
++						}
++					}
++				}
++			}
++		}
++	}
++	if leaked > 0 {
++		t.Errorf("%d of %d unregistered-path probes were not a bare 404", leaked, total)
++	}
++	assertNotBanned(t, s, "4 real strikes plus the unregistered-path flood")
++}
++
++// Every source-level consumer of the management key in the module, by file
++// and count (selector references, so a method value or a renamed receiver
++// counts too). Audited consumers:
++//   - handlers/management/handler.go: Middleware() calls
++//     AuthenticateManagementKey;
++//   - redis_queue_protocol.go: the RESP surface, closed before any command is
++//     read (managementRESPOutputDisabled);
++//   - server_management.go: the /v0/management group and the NoRoute
++//     dispatcher, both behind the engine-level guard.
++//
++// A new consumer (an upstream bump) fails here until it is audited against
++// the allowlist.
++var auditedManagementKeyConsumers = map[string]int{
++	"AuthenticateManagementKey internal/api/handlers/management/handler.go": 1,
++	"AuthenticateManagementKey internal/api/redis_queue_protocol.go":        3,
++	"Middleware internal/api/server_management.go":                          2,
++}
++
++var managementKeyConsumerNames = map[string]struct{}{
++	"AuthenticateManagementKey": {},
++	"Middleware":                {},
++}
++
++const managementKeyHandlerFile = "internal/api/handlers/management/handler.go"
++
++func allowlistModuleRoot(t *testing.T) string {
++	t.Helper()
++	dir, err := os.Getwd()
++	if err != nil {
++		t.Fatalf("getwd: %v", err)
++	}
++	for {
++		data, errRead := os.ReadFile(filepath.Join(dir, "go.mod"))
++		if errRead == nil {
++			module := ""
++			for _, line := range strings.Split(string(data), "\n") {
++				if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
++					module = strings.TrimSpace(rest)
++					break
++				}
++			}
++			if module != "github.com/router-for-me/CLIProxyAPI/v7" {
++				t.Fatalf("%s/go.mod declares module %q, want github.com/router-for-me/CLIProxyAPI/v7", dir, module)
++			}
++			return dir
++		}
++		parent := filepath.Dir(dir)
++		if parent == dir {
++			t.Fatal("go.mod not found above the test directory")
++		}
++		dir = parent
++	}
++}
++
++func TestManagementAllowlist_ManagementKeyConsumersAudited(t *testing.T) {
++	root := allowlistModuleRoot(t)
++	found := make(map[string]int)
++	defined := make(map[string][]string)
++	files := 0
++	fset := token.NewFileSet()
++	errWalk := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
++		if err != nil {
++			return err
++		}
++		rel, errRel := filepath.Rel(root, p)
++		if errRel != nil {
++			return errRel
++		}
++		rel = filepath.ToSlash(rel)
++		if d.IsDir() {
++			if rel == "." {
++				return nil
++			}
++			name := d.Name()
++			if rel == "vendor" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
++				return filepath.SkipDir
++			}
++			if _, errStat := os.Stat(filepath.Join(p, "go.mod")); errStat == nil {
++				return filepath.SkipDir // a nested module is not part of this one
++			}
++			return nil
++		}
++		if !d.Type().IsRegular() || !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") {
++			return nil
++		}
++		file, errParse := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
++		if errParse != nil {
++			return errParse
++		}
++		files++
++		ast.Inspect(file, func(n ast.Node) bool {
++			switch x := n.(type) {
++			case *ast.SelectorExpr:
++				if _, ok := managementKeyConsumerNames[x.Sel.Name]; ok {
++					found[x.Sel.Name+" "+rel]++
++				}
++			case *ast.FuncDecl:
++				if _, ok := managementKeyConsumerNames[x.Name.Name]; ok && x.Recv != nil {
++					defined[x.Name.Name] = append(defined[x.Name.Name], rel)
++				}
++			}
++			return true
++		})
++		return nil
++	})
++	if errWalk != nil {
++		t.Fatalf("walk %s: %v", root, errWalk)
++	}
++	if files < 300 {
++		t.Fatalf("parsed only %d non-test Go files under %s; walk broken?", files, root)
++	}
++	for name := range managementKeyConsumerNames {
++		ok := false
++		for _, rel := range defined[name] {
++			ok = ok || rel == managementKeyHandlerFile
++		}
++		if !ok {
++			t.Fatalf("method %s is no longer declared in %s (declared in %v); re-audit the management key consumers", name, managementKeyHandlerFile, defined[name])
++		}
++	}
++	keys := make(map[string]struct{})
++	for k := range found {
++		keys[k] = struct{}{}
++	}
++	for k := range auditedManagementKeyConsumers {
++		keys[k] = struct{}{}
++	}
++	var diffs []string
++	for k := range keys {
++		if found[k] != auditedManagementKeyConsumers[k] {
++			diffs = append(diffs, fmt.Sprintf("%s: found %d, audited %d", k, found[k], auditedManagementKeyConsumers[k]))
++		}
++	}
++	sort.Strings(diffs)
++	if len(diffs) > 0 {
++		t.Fatalf("management key consumers changed; audit each against the read-only allowlist, then update auditedManagementKeyConsumers:\n  %s", strings.Join(diffs, "\n  "))
++	}
++	t.Logf("parsed %d non-test Go files; management key consumers match the audited set", files)
++}
++
++func TestManagementAllowlist_AllowlistedRouteWithoutKeyIs401(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	for key, target := range allowlistedManagementRoutes {
++		rr := serveAllowlist(s, allowlistRequest(http.MethodGet, target, "", ""))
++		if rr.Code != http.StatusUnauthorized {
++			t.Fatalf("%s without key: status = %d, want 401", key, rr.Code)
++		}
++	}
++}
++
++func TestManagementAllowlist_FiveBadKeysOnAllowlistedRouteBan(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	for i := 0; i < 5; i++ {
++		rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/auth-files", "wrong", ""))
++		if rr.Code != http.StatusUnauthorized {
++			t.Fatalf("bad key %d: status = %d, want 401", i+1, rr.Code)
++		}
++	}
++	rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/auth-files", allowlistTestKey, ""))
++	if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "IP banned") {
++		t.Fatalf("after 5 bad keys: status = %d body=%q, want 403 IP banned", rr.Code, rr.Body.String())
++	}
++}
++
++var managementBypassTargets = []struct{ method, target string }{
++	{http.MethodGet, "/v0/management"},
++	{http.MethodGet, "/v0/management/"},
++	{http.MethodGet, "//v0/management/config.yaml"},
++	{http.MethodGet, "/v0//management/config.yaml"},
++	{http.MethodGet, "/v0/management//config.yaml"},
++	{http.MethodGet, "/v0/management//auth-files"},
++	{http.MethodGet, "/v0/management%2Fconfig.yaml"},
++	{http.MethodGet, "/v0/management%2fauth-files%2fdownload"},
++	{http.MethodGet, "/v0/management/auth-files%2Fdownload?name=x"},
++	{http.MethodGet, "/v0/%6danagement/config.yaml"},
++	{http.MethodGet, "/v0/management/auth%2Dfiles"},
++	{http.MethodGet, "/v0/management/./config.yaml"},
++	{http.MethodGet, "/v0/management/x/../config.yaml"},
++	{http.MethodGet, "/x/../v0/management/config.yaml"},
++	{http.MethodGet, "/v0/management/auth-files/../config.yaml"},
++	{http.MethodGet, "/v0/management/%2e%2e/management/config.yaml"},
++	{http.MethodGet, "/v0/management/model-definitions/..%2fconfig.yaml"},
++	{http.MethodGet, "/v0/management/model-definitions/claude%2F..%2F..%2Fconfig.yaml"},
++	{http.MethodGet, "/v0/management/model-definitions/.."},
++	{http.MethodGet, "/v0/management/model-definitions/CLAUDE"},
++	{http.MethodGet, "/v0/management/auth-files%00"},
++	{http.MethodGet, "/v0/management/auth-files;/../config.yaml"},
++	{http.MethodGet, "http://127.0.0.1/v0/management%2Fconfig.yaml"},
++	{http.MethodGet, "http://127.0.0.1/v0/management/config.yaml"},
++	{http.MethodGet, "/V0/MANAGEMENT/config.yaml"},
++	{http.MethodGet, "/v0/Management/auth-files"},
++	{http.MethodGet, "/v0/management/no-such-route"},
++	{http.MethodGet, "/v0/management/oauth-callback?state=s&code=c"},
++	{http.MethodPost, "/v0/management/oauth-callback"},
++	{"get", "/v0/management/auth-files"},
++	{http.MethodHead, "/v0/management/auth-files"},
++	{http.MethodOptions, "/v0/management/auth-files"},
++	{http.MethodOptions, "/v0/management/config.yaml"},
++	{http.MethodConnect, "/v0/management/config.yaml"},
++	{http.MethodPost, "/v0/management/auth-files"},
++	{http.MethodPut, "/v0/management/auth-files"},
++	{http.MethodPatch, "/v0/management/auth-files/models"},
++	{http.MethodDelete, "/v0/management/auth-files"},
++	{http.MethodPost, "/v0/management/api-call"},
++}
++
++// Trailing slash on a registered path: gin answers 301/307 before any
++// middleware (RedirectTrailingSlash); the redirect target is then refused.
++var managementTrailingSlashTargets = []struct {
++	method, target string
++	final          int
++}{
++	{http.MethodGet, "/v0/management/config.yaml/", http.StatusNotFound},
++	{http.MethodGet, "/v0/management/auth-files/download/", http.StatusNotFound},
++	{http.MethodPost, "/v0/management/api-call/", http.StatusNotFound},
++	{http.MethodGet, "/v0/management/auth-files/", http.StatusOK},
++}
++
++func TestManagementAllowlist_BypassVariantsRefused(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	for _, tc := range managementBypassTargets {
++		assertRefused(t, serveAllowlist(s, allowlistRequest(tc.method, tc.target, allowlistTestKey, "")), tc.method+" "+tc.target)
++	}
++	for _, tc := range managementTrailingSlashTargets {
++		label := tc.method + " " + tc.target
++		rr := serveAllowlist(s, allowlistRequest(tc.method, tc.target, allowlistTestKey, ""))
++		if rr.Code != http.StatusMovedPermanently && rr.Code != http.StatusTemporaryRedirect {
++			t.Fatalf("%s: status = %d, want gin trailing-slash redirect", label, rr.Code)
++		}
++		if rr.Header().Get("X-CPA-VERSION") != "" {
++			t.Fatalf("%s: management key middleware ran before redirect", label)
++		}
++		loc, err := url.Parse(rr.Header().Get("Location"))
++		if err != nil || loc.Path == "" {
++			t.Fatalf("%s: bad Location %q", label, rr.Header().Get("Location"))
++		}
++		follow := serveAllowlist(s, allowlistRequest(tc.method, loc.RequestURI(), allowlistTestKey, ""))
++		if follow.Code != tc.final {
++			t.Fatalf("%s -> %s: status = %d, want %d", label, loc.RequestURI(), follow.Code, tc.final)
++		}
++	}
++}
++
++func TestManagementAllowlist_BadKeysOnRefusedRoutesNeverCount(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	for key, concrete := range managementRoutes(t, s) {
++		if _, ok := allowlistedManagementRoutes[key]; ok {
++			continue
++		}
++		method := strings.SplitN(key, " ", 2)[0]
++		assertRefused(t, serveAllowlist(s, allowlistRequest(method, concrete, "wrong", "")), key+" (bad key)")
++		assertRefused(t, serveAllowlist(s, allowlistRequest(method, concrete, "", "")), key+" (no key)")
++	}
++	for _, tc := range managementBypassTargets {
++		assertRefused(t, serveAllowlist(s, allowlistRequest(tc.method, tc.target, "wrong", "")), tc.method+" "+tc.target+" (bad key)")
++		assertRefused(t, serveAllowlist(s, allowlistRequest(tc.method, tc.target, "", "")), tc.method+" "+tc.target+" (no key)")
++	}
++	assertNotBanned(t, s, "refused bad keys")
++}
++
++// A web page can send simple GETs to 127.0.0.1 without a preflight; with no
++// key (or a guessed one) each would count toward the loopback ban. Browser
++// request metadata is refused before the key check.
++func TestManagementAllowlist_BrowserOriginatedRequestsRefusedAndNeverCount(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	shapes := []map[string]string{
++		{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"},
++		{"Sec-Fetch-Site": "same-origin"},
++		{"Sec-Fetch-Mode": "cors"},
++		{"Sec-Fetch-Dest": "empty"},
++		{"Origin": "https://attacker.example"},
++		{"Origin": "null"},
++		{"Origin": ""},
++	}
++	for i, shape := range shapes {
++		for _, key := range []string{"", "wrong", allowlistTestKey} {
++			for route, target := range allowlistedManagementRoutes {
++				for n := 0; n < 5; n++ {
++					req := allowlistRequest(http.MethodGet, target, key, "")
++					for name, value := range shape {
++						req.Header.Set(name, value)
++					}
++					assertRefused(t, serveAllowlist(s, req), fmt.Sprintf("%s browser shape %d key %q", route, i, key))
++				}
++			}
++		}
++	}
++	assertNotBanned(t, s, "browser-shaped requests")
++}
++
++// A DNS-rebinding page reaches 127.0.0.1 under its own host name. Only
++// loopback Host literals are served.
++func TestManagementAllowlist_NonLoopbackHostRefusedAndNeverCounts(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	for _, host := range []string{
++		"rebind.attacker.example:8317",
++		"rebind.attacker.example",
++		"127.0.0.1.nip.io:8317",
++		"localhost.attacker.example:8317",
++		"127.0.0.2:8317",
++		"0.0.0.0:8317",
++		"[::ffff:127.0.0.1]:8317",
++		"192.168.1.10:8317",
++		"",
++	} {
++		for _, key := range []string{"", "wrong", allowlistTestKey} {
++			for n := 0; n < 5; n++ {
++				req := allowlistRequest(http.MethodGet, "/v0/management/auth-files", key, "")
++				req.Host = host
++				assertRefused(t, serveAllowlist(s, req), "Host "+host)
++			}
++		}
++	}
++	assertNotBanned(t, s, "non-loopback Host requests")
++	for _, host := range []string{"127.0.0.1:8317", "127.0.0.1", "localhost:8317", "LOCALHOST", "[::1]:8317", "[::1]"} {
++		req := allowlistRequest(http.MethodGet, "/v0/management/auth-files", allowlistTestKey, "")
++		req.Host = host
++		if rr := serveAllowlist(s, req); rr.Code != http.StatusOK {
++			t.Fatalf("Host %q: status = %d body=%q, want 200", host, rr.Code, rr.Body.String())
++		}
++	}
++}
++
++func TestManagementAllowlist_RemoteOverrideForcedOff(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	if s.cfg.RemoteManagement.AllowRemote {
++		t.Fatal("test precondition: allow-remote must be false")
++	}
++	rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/auth-files", allowlistTestKey, "192.0.2.10:40000"))
++	if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "remote management disabled") {
++		t.Fatalf("remote client with MANAGEMENT_PASSWORD: status = %d body=%q, want 403 remote management disabled", rr.Code, rr.Body.String())
++	}
++}
++
++// Upstream serves oauth-callback without the key middleware and writes a
++// callback file for a pending session. With a session pending, both methods
++// are refused and nothing is written.
++func TestManagementAllowlist_OAuthCallbackWithPendingSessionWritesNothing(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	state := "allowlist-pending-oauth-state"
++	if err := managementHandlers.RegisterPluginOAuthSession(state, "gemini-cli", nil); err != nil {
++		t.Fatalf("register plugin oauth session: %v", err)
++	}
++	defer managementHandlers.CompleteOAuthSession(state)
++	for _, method := range []string{http.MethodGet, http.MethodPost} {
++		for _, key := range []string{"", allowlistTestKey} {
++			target := "/v0/management/oauth-callback?state=" + state + "&code=test-code"
++			assertRefused(t, serveAllowlist(s, allowlistRequest(method, target, key, "")), method+" oauth-callback (pending session)")
++		}
++	}
++	callbackPath := filepath.Join(s.cfg.AuthDir, ".oauth-gemini-cli-"+state+".oauth")
++	if _, err := os.Stat(callbackPath); !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("callback file %s: stat err = %v, want not exist", callbackPath, err)
++	}
++}
++
++// The RESP surface authenticates with the management key; it is closed
++// before any command is read, so no RESP attempt reaches the ban counter.
++func TestManagementAllowlist_RESPSurfaceClosedWithoutKeyCheck(t *testing.T) {
++	s := newAllowlistTestServer(t)
++	addr, stop := startRedisMuxListener(t, s)
++	defer stop()
++	for i := 0; i < 6; i++ {
++		for _, args := range [][]string{{"AUTH", "wrong"}, {"PING"}, {"AUTH", allowlistTestKey}, {"LPOP", "usage"}} {
++			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
++			if err != nil {
++				t.Fatalf("dial: %v", err)
++			}
++			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
++			if err := writeTestRESPCommand(conn, args...); err != nil {
++				t.Fatalf("write: %v", err)
++			}
++			buf := make([]byte, 64)
++			n, err := conn.Read(buf)
++			if n != 0 || err == nil {
++				t.Fatalf("RESP %v: got reply %q (err=%v), want the connection closed without a reply", args, buf[:n], err)
++			}
++			var netErr net.Error
++			if errors.As(err, &netErr) && netErr.Timeout() {
++				t.Fatalf("RESP %v: connection left open (timeout)", args)
++			}
++			_ = conn.Close()
++		}
++	}
++	assertNotBanned(t, s, "RESP attempts")
++}
+diff --git a/internal/api/server_test.go b/internal/api/server_test.go
+index 5a853ea..74f7abd 100644
+--- a/internal/api/server_test.go
++++ b/internal/api/server_test.go
+@@ -1920,7 +1920,9 @@ func TestExampleAPIKeySafeModeShowsWarningAndKeepsManagement(t *testing.T) {
+ 	})
+ 
+ 	t.Run("management endpoints still work", func(t *testing.T) {
+-		req := httptest.NewRequest(http.MethodGet, "/v0/management/config", nil)
++		req := httptest.NewRequest(http.MethodGet, "/v0/management/auth-files", nil)
++		req.RemoteAddr = "127.0.0.1:12345"
++		req.Host = "127.0.0.1:8317"
+ 		req.Header.Set("Authorization", "Bearer test-management-key")
+ 		rr := httptest.NewRecorder()
+ 		server.engine.ServeHTTP(rr, req)

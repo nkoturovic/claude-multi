@@ -1,0 +1,24 @@
+
+  providers — local status
+  ─────────────────────────────────────────────────────────────────────────────
+  credential: API key or sign-in · served: models the local gateway serves now
+  (not a test of the provider)
+    provider   on credential    quota models served src route
+  +--------------------------------------------------------------------------+
+  | Sign out of your Claude account?                                         |
+  | Signed in: a@example.com                                                 |
+  | The sign-in record(s) move to                                            |
+  | ~/.local/share/claude-multi/auth.signed-out.claude.20261003 (kept, not   |
+  | deleted); the gateway stops using them within a few seconds.             |
+  | Profiles that use Claude account stop being connected: balanced,         |
+  | claude, direct, economy, max, quality.                                   |
+  |                                                                          |
+  |                                                                          |
+  | [ Cancel ] [ Sign out ]                                                  |
+  +--------------------------------------------------------------------------+
+
+
+
+
+  Enter connect · L sign in/out · T test · Space on/off · Q details · N new
+  ? help · Esc back

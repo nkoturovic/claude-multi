@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "notes": "Fixture T2 provider (anthropic-compatible, bearer).",
+  "provider": {
+    "display": "Acme",
+    "kind": "anthropic-compatible",
+    "base_url": "https://api.acme.example/anthropic",
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:ACME_API_KEY"
+    },
+    "independence_family": "acme",
+    "payload_contracts": [
+      "output-config-high"
+    ]
+  },
+  "lines": {
+    "custom-acme-large": {
+      "wire_model": "acme-large-1",
+      "display": "Acme Large",
+      "efforts": {
+        "high": "output-config-high"
+      },
+      "default_effort": "high",
+      "context": {
+        "declared_tokens": 262144,
+        "source": "docs",
+        "source_ref": "https://docs.acme.example/models"
+      }
+    },
+    "custom-acme-small": {
+      "wire_model": "acme-small-1",
+      "display": "Acme Small",
+      "efforts": [
+        "high"
+      ],
+      "default_effort": "high",
+      "context": {
+        "declared_tokens": 131072,
+        "source": "operator"
+      }
+    }
+  }
+}

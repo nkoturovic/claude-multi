@@ -1,0 +1,26 @@
+{
+  "lines": {},
+  "notes": "xAI's chat completions API, which xAI offers as a legacy endpoint next to its Responses API. Declaration only: add models with claude-multi discover xai --add WIRE (or claude-multi models add xai WIRE …), then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://docs.x.ai/docs/guides/chat-completions",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:XAI_API_KEY"
+    },
+    "base_url": "https://api.x.ai/v1",
+    "display": "xAI (Grok)",
+    "independence_family": "xai",
+    "kind": "openai-compatible",
+    "listing": {
+      "auth": "provider",
+      "shape": "openai",
+      "url": "https://api.x.ai/v1/models"
+    }
+  },
+  "version": 1
+}

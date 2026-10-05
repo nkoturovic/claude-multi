@@ -1,0 +1,6 @@
+lineup gen 2: implementer GPT-5.6 Sol · high → Opus 5.5 · 1M selector · xhigh
+session now follows profile lead-in-agents
+switch the lead with /model → Opus 5 · 1M selector · xhigh (claude-multi-opus-5[1m]); press s (this session only)
+Running agents keep their current model; do not SendMessage-continue an agent spawned before this change — spawn it fresh.
+Forks sharing this scope see the change too.
+Next: /reload-plugins, then /model (press s) — or resume the session.

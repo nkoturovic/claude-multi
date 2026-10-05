@@ -1,0 +1,651 @@
+diff --git a/internal/config/claude_compat_fields_test.go b/internal/config/claude_compat_fields_test.go
+new file mode 100644
+index 00000000..c9248f39
+--- /dev/null
++++ b/internal/config/claude_compat_fields_test.go
+@@ -0,0 +1,76 @@
++package config
++
++import "testing"
++
++// claudeCompatGoldenYAML mirrors the claude-api-key shape claude-multi
++// renders for its third-party Claude-compatible providers (Kimi-style
++// x-api-key auth, owned-by/context-length advertisement). A silently ignored
++// YAML key (a partial port of the kimi-claude-compat patch) must fail here.
++const claudeCompatGoldenYAML = `claude-api-key:
++  - api-key: "dummy-kimi-key"
++    base-url: "https://api.kimi.com/coding"
++    auth-header: "x-api-key"
++    cloak:
++      mode: "never"
++    models:
++      - name: "k3"
++        alias: "claude-multi-kimi-k3"
++        display-name: "Kimi K3"
++        owned-by: "moonshot"
++        context-length: 1000000
++        max-completion-tokens: 64000
++        force-mapping: true
++  - api-key: "dummy-kimi-key"
++    base-url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic"
++    cloak:
++      mode: "never"
++    models:
++      - name: "qwen3.8-max"
++        alias: "claude-multi-qwen38-max"
++        display-name: "Qwen3.8 Max"
++        owned-by: "alibaba"
++        context-length: 983616
++        force-mapping: true
++`
++
++func TestClaudeCompatFieldsDecodeFromRenderedGoldenShape(t *testing.T) {
++	cfg, err := ParseConfigBytes([]byte(claudeCompatGoldenYAML))
++	if err != nil {
++		t.Fatalf("ParseConfigBytes() error = %v", err)
++	}
++	if len(cfg.ClaudeKey) != 2 {
++		t.Fatalf("claude-api-key entries = %d, want 2", len(cfg.ClaudeKey))
++	}
++
++	kimi := cfg.ClaudeKey[0]
++	if kimi.AuthHeader != "x-api-key" {
++		t.Fatalf("auth-header = %q, want x-api-key", kimi.AuthHeader)
++	}
++	if len(kimi.Models) != 1 {
++		t.Fatalf("kimi models = %d, want 1", len(kimi.Models))
++	}
++	model := kimi.Models[0]
++	if model.OwnedBy != "moonshot" || model.GetOwnedBy() != "moonshot" {
++		t.Fatalf("owned-by = %q/%q, want moonshot", model.OwnedBy, model.GetOwnedBy())
++	}
++	if model.ContextLength != 1000000 || model.GetContextLength() != 1000000 {
++		t.Fatalf("context-length = %d/%d, want 1000000", model.ContextLength, model.GetContextLength())
++	}
++	if model.MaxCompletionTokens != 64000 || model.GetMaxCompletionTokens() != 64000 {
++		t.Fatalf("max-completion-tokens = %d/%d, want 64000", model.MaxCompletionTokens, model.GetMaxCompletionTokens())
++	}
++	if !model.ForceMapping {
++		t.Fatal("force-mapping = false, want true")
++	}
++
++	qwen := cfg.ClaudeKey[1]
++	if qwen.AuthHeader != "" {
++		t.Fatalf("bearer provider auth-header = %q, want empty", qwen.AuthHeader)
++	}
++	if got := qwen.Models[0].GetOwnedBy(); got != "alibaba" {
++		t.Fatalf("qwen owned-by = %q, want alibaba", got)
++	}
++	if got := qwen.Models[0].GetContextLength(); got != 983616 {
++		t.Fatalf("qwen context-length = %d, want 983616", got)
++	}
++}
+diff --git a/internal/config/config_types.go b/internal/config/config_types.go
+index c746aa5e..639b2a57 100644
+--- a/internal/config/config_types.go
++++ b/internal/config/config_types.go
+@@ -485,6 +485,10 @@ type ClaudeKey struct {
+ 	// If empty, the default Claude API URL will be used.
+ 	BaseURL string `yaml:"base-url" json:"base-url"`
+ 
++	// AuthHeader selects the upstream authentication header. Empty preserves the default behavior.
++	// The supported override is "x-api-key".
++	AuthHeader string `yaml:"auth-header,omitempty" json:"auth-header,omitempty"`
++
+ 	// ProxyURL overrides the global proxy setting for this API key if provided.
+ 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
+ 
+@@ -566,16 +570,28 @@ type ClaudeModel struct {
+ 
+ 	// Thinking configures the thinking/reasoning capability for this model.
+ 	Thinking *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
++
++	// OwnedBy optionally overrides the provider owner advertised to clients.
++	OwnedBy string `yaml:"owned-by,omitempty" json:"owned-by,omitempty"`
++
++	// ContextLength is the optional context window advertised to clients.
++	ContextLength int `yaml:"context-length,omitempty" json:"context-length,omitempty"`
++
++	// MaxCompletionTokens is the optional maximum output length advertised to clients.
++	MaxCompletionTokens int `yaml:"max-completion-tokens,omitempty" json:"max-completion-tokens,omitempty"`
+ }
+ 
+ func (m ClaudeModel) GetName() string { return m.Name }
+ 
+ func (m ClaudeModel) GetAlias() string { return m.Alias }
+ 
+-func (m ClaudeModel) GetDisplayName() string   { return m.DisplayName }
+-func (m ClaudeModel) GetMaxContextLength() int { return m.MaxContextLength }
+-func (m ClaudeModel) GetForceMapping() bool    { return m.ForceMapping }
+-func (m ClaudeModel) GetIsCompat() bool        { return m.IsCompat }
++func (m ClaudeModel) GetDisplayName() string      { return m.DisplayName }
++func (m ClaudeModel) GetMaxContextLength() int    { return m.MaxContextLength }
++func (m ClaudeModel) GetForceMapping() bool       { return m.ForceMapping }
++func (m ClaudeModel) GetIsCompat() bool           { return m.IsCompat }
++func (m ClaudeModel) GetOwnedBy() string          { return m.OwnedBy }
++func (m ClaudeModel) GetContextLength() int       { return m.ContextLength }
++func (m ClaudeModel) GetMaxCompletionTokens() int { return m.MaxCompletionTokens }
+ 
+ func (m ClaudeModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
+ 
+diff --git a/internal/runtime/executor/claude_executor.go b/internal/runtime/executor/claude_executor.go
+index 2aa1250e..63a7fcbd 100644
+--- a/internal/runtime/executor/claude_executor.go
++++ b/internal/runtime/executor/claude_executor.go
+@@ -217,9 +217,10 @@ func (e *ClaudeExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Au
+ 	}
+ 	apiKey, _ := claudeCreds(auth)
+ 	useAPIKey := auth != nil && (auth.AuthKind() == cliproxyauth.AuthKindAPIKey || (auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != ""))
++	useXAPIKey := claudeUsesXAPIKey(auth)
+ 	isAnthropicBase := isAnthropicUpstreamURL(req.URL)
+ 	if strings.TrimSpace(apiKey) != "" {
+-		if isAnthropicBase && useAPIKey {
++		if useXAPIKey || (isAnthropicBase && useAPIKey) {
+ 			req.Header.Del("Authorization")
+ 			req.Header.Set("x-api-key", apiKey)
+ 		} else {
+@@ -235,9 +236,28 @@ func (e *ClaudeExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Au
+ 		attrs = auth.Attributes
+ 	}
+ 	util.ApplyCustomHeadersFromAttrs(req, attrs)
++	enforceClaudeXAPIKeyAuth(req, useXAPIKey, apiKey)
+ 	return nil
+ }
+ 
++func claudeUsesXAPIKey(auth *cliproxyauth.Auth) bool {
++	if auth == nil || auth.Attributes == nil {
++		return false
++	}
++	return strings.EqualFold(strings.TrimSpace(auth.Attributes["auth_header"]), "x-api-key")
++}
++
++// enforceClaudeXAPIKeyAuth re-applies the configured x-api-key override after
++// custom credential headers, so a configured Authorization header can never
++// displace the selected upstream authentication header.
++func enforceClaudeXAPIKeyAuth(r *http.Request, useXAPIKey bool, apiKey string) {
++	if r == nil || !useXAPIKey || strings.TrimSpace(apiKey) == "" {
++		return
++	}
++	r.Header.Del("Authorization")
++	r.Header.Set("x-api-key", apiKey)
++}
++
+ // HttpRequest injects Claude credentials into the request and executes it.
+ func (e *ClaudeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
+ 	if req == nil {
+diff --git a/internal/runtime/executor/claude_executor_auth_header_test.go b/internal/runtime/executor/claude_executor_auth_header_test.go
+new file mode 100644
+index 00000000..78ee2310
+--- /dev/null
++++ b/internal/runtime/executor/claude_executor_auth_header_test.go
+@@ -0,0 +1,227 @@
++package executor
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++)
++
++// The auth-header override (claude-api-key "auth-header: x-api-key", carried
++// as the auth_header attribute) selects x-api-key on third-party
++// Claude-compatible upstreams, where the default would be a Bearer
++// Authorization header, and survives custom-header application. Injected
++// round-trippers only; no network.
++
++func TestClaudeExecutorAuthHeaderXAPIKeyOnThirdPartyMessages(t *testing.T) {
++	for _, tc := range []struct {
++		name       string
++		authHeader string
++		wantXAPI   bool
++	}{
++		{name: "x-api-key override", authHeader: "x-api-key", wantXAPI: true},
++		{name: "x-api-key override case-insensitive", authHeader: " X-API-Key ", wantXAPI: true},
++		{name: "default bearer", authHeader: "", wantXAPI: false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			var gotAuthorization, gotXAPIKey string
++			rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
++				gotAuthorization = req.Header.Get("Authorization")
++				gotXAPIKey = req.Header.Get("x-api-key")
++				return &http.Response{
++					StatusCode: http.StatusOK,
++					Header:     http.Header{"Content-Type": []string{"application/json"}},
++					Body:       io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","model":"k3","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)),
++				}, nil
++			})
++			ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", rt)
++			attrs := map[string]string{
++				"api_key":  "third-party-key",
++				"base_url": "https://gateway.example.test/anthropic",
++				// A configured custom Authorization header must not win over
++				// the x-api-key override.
++				"header:Authorization": "Bearer custom-header",
++			}
++			if tc.authHeader != "" {
++				attrs["auth_header"] = tc.authHeader
++			}
++			executor := NewClaudeExecutor(&config.Config{})
++			auth := &cliproxyauth.Auth{Attributes: attrs}
++			if _, err := executor.Execute(ctx, auth, cliproxyexecutor.Request{
++				Model:   "k3",
++				Payload: []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
++			}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude}); err != nil {
++				t.Fatalf("Execute() error = %v", err)
++			}
++			if tc.wantXAPI {
++				if gotXAPIKey != "third-party-key" {
++					t.Fatalf("x-api-key = %q, want third-party-key", gotXAPIKey)
++				}
++				if gotAuthorization != "" {
++					t.Fatalf("Authorization = %q, want empty with x-api-key override", gotAuthorization)
++				}
++				return
++			}
++			if gotXAPIKey != "" {
++				t.Fatalf("x-api-key = %q, want empty for default bearer", gotXAPIKey)
++			}
++			if gotAuthorization == "" {
++				t.Fatal("Authorization missing for default bearer")
++			}
++		})
++	}
++}
++
++func TestClaudeExecutorPrepareRequestHonorsAuthHeaderOverride(t *testing.T) {
++	req, err := http.NewRequest(http.MethodPost, "https://gateway.example.test/anthropic/v1/messages", nil)
++	if err != nil {
++		t.Fatalf("NewRequest() error = %v", err)
++	}
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"api_key":     "third-party-key",
++		"auth_header": "x-api-key",
++	}}
++	if err := executor.PrepareRequest(req, auth); err != nil {
++		t.Fatalf("PrepareRequest() error = %v", err)
++	}
++	if got := req.Header.Get("x-api-key"); got != "third-party-key" {
++		t.Fatalf("x-api-key = %q, want third-party-key", got)
++	}
++	if got := req.Header.Get("Authorization"); got != "" {
++		t.Fatalf("Authorization = %q, want empty", got)
++	}
++}
++
++// A confirmed Claude Code request is not caller-owned: it takes the CLI
++// header path of applyClaudeHeadersWithNativeProfile, which has its own
++// custom-header application and its own x-api-key enforcement. The override
++// alone selects x-api-key there, and a configured custom Authorization header
++// must not displace it (Execute and ExecuteStream).
++func TestClaudeExecutorAuthHeaderXAPIKeyOnConfirmedClaudeCodePath(t *testing.T) {
++	const sessionID = "11111111-2222-4333-8444-555555555555"
++	const userID = `{"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","account_uuid":"","session_id":"11111111-2222-4333-8444-555555555555"}`
++	payload := []byte(`{"model":"k3","messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":` + fmt.Sprintf("%q", userID) + `}}`)
++	incoming := http.Header{
++		"User-Agent":               {"claude-cli/2.1.280 (external, cli)"},
++		"X-App":                    {"cli"},
++		"Anthropic-Beta":           {"claude-code-20250219"},
++		"X-Claude-Code-Session-Id": {sessionID},
++	}
++	// Premise: the headers are confirmed Claude Code, so the request cannot
++	// fall back to the caller-owned path this test does not target.
++	if !helps.DetectClaudeCodeRequest(incoming, payload, false).Confirmed {
++		t.Fatal("test premise: incoming headers are not confirmed Claude Code")
++	}
++
++	for _, tc := range []struct {
++		stream              bool
++		customAuthorization bool
++	}{
++		{stream: false, customAuthorization: true},
++		{stream: true, customAuthorization: true},
++		{stream: false, customAuthorization: false},
++		{stream: true, customAuthorization: false},
++	} {
++		stream := tc.stream
++		t.Run(fmt.Sprintf("stream=%v/custom-authorization=%v", tc.stream, tc.customAuthorization), func(t *testing.T) {
++			var seen http.Header
++			rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
++				seen = req.Header.Clone()
++				if stream {
++					return &http.Response{
++						StatusCode: http.StatusOK,
++						Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
++						Body:       io.NopCloser(strings.NewReader("event: message_stop\n" + `data: {"type":"message_stop"}` + "\n\n")),
++					}, nil
++				}
++				return &http.Response{
++					StatusCode: http.StatusOK,
++					Header:     http.Header{"Content-Type": []string{"application/json"}},
++					Body:       io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","model":"k3","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)),
++				}, nil
++			})
++			ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", rt)
++			executor := NewClaudeExecutor(&config.Config{})
++			attrs := map[string]string{
++				"api_key":     "third-party-key",
++				"base_url":    "https://gateway.example.test/anthropic",
++				"auth_header": "x-api-key",
++			}
++			if tc.customAuthorization {
++				attrs["header:Authorization"] = "Bearer custom-header"
++			}
++			auth := &cliproxyauth.Auth{Attributes: attrs}
++			req := cliproxyexecutor.Request{Model: "k3", Payload: payload}
++			opts := cliproxyexecutor.Options{
++				Stream:          stream,
++				SourceFormat:    sdktranslator.FormatClaude,
++				OriginalRequest: payload,
++				Headers:         incoming,
++			}
++			if stream {
++				result, err := executor.ExecuteStream(ctx, auth, req, opts)
++				if err != nil {
++					t.Fatalf("ExecuteStream() error = %v", err)
++				}
++				for chunk := range result.Chunks {
++					if chunk.Err != nil {
++						t.Fatalf("stream chunk error = %v", chunk.Err)
++					}
++				}
++			} else if _, err := executor.Execute(ctx, auth, req, opts); err != nil {
++				t.Fatalf("Execute() error = %v", err)
++			}
++			if seen == nil {
++				t.Fatal("no upstream request captured")
++			}
++			// Path witness: only the CLI header path synthesizes these; the
++			// caller-owned path forwards the caller's headers, which omit them.
++			if got := seen.Get("X-Stainless-Timeout"); got != "600" {
++				t.Fatalf("X-Stainless-Timeout = %q, want 600 (CLI header path)", got)
++			}
++			if got := seen.Get("Connection"); got != "keep-alive" {
++				t.Fatalf("Connection = %q, want keep-alive (CLI header path)", got)
++			}
++			if got := seen.Values("X-Api-Key"); len(got) != 1 || got[0] != "third-party-key" {
++				t.Fatalf("x-api-key = %q, want exactly [third-party-key]", got)
++			}
++			if got := seen.Values("Authorization"); len(got) != 0 {
++				t.Fatalf("Authorization = %q, want absent with x-api-key override", got)
++			}
++		})
++	}
++}
++
++// PrepareRequest applies custom credential headers after selecting the auth
++// header, so its own enforcement must keep x-api-key even when a custom
++// Authorization header is configured.
++func TestClaudeExecutorPrepareRequestAuthHeaderOverrideBeatsCustomAuthorization(t *testing.T) {
++	req, err := http.NewRequest(http.MethodPost, "https://gateway.example.test/anthropic/v1/messages", nil)
++	if err != nil {
++		t.Fatalf("NewRequest() error = %v", err)
++	}
++	executor := NewClaudeExecutor(&config.Config{})
++	auth := &cliproxyauth.Auth{Attributes: map[string]string{
++		"api_key":              "third-party-key",
++		"auth_header":          "x-api-key",
++		"header:Authorization": "Bearer custom-header",
++	}}
++	if err := executor.PrepareRequest(req, auth); err != nil {
++		t.Fatalf("PrepareRequest() error = %v", err)
++	}
++	if got := req.Header.Values("X-Api-Key"); len(got) != 1 || got[0] != "third-party-key" {
++		t.Fatalf("x-api-key = %q, want exactly [third-party-key]", got)
++	}
++	if got := req.Header.Values("Authorization"); len(got) != 0 {
++		t.Fatalf("Authorization = %q, want absent with x-api-key override", got)
++	}
++}
+diff --git a/internal/runtime/executor/claude_executor_request.go b/internal/runtime/executor/claude_executor_request.go
+index 40704c62..30225cc2 100644
+--- a/internal/runtime/executor/claude_executor_request.go
++++ b/internal/runtime/executor/claude_executor_request.go
+@@ -1057,8 +1057,9 @@ func applyClaudeHeadersWithNativeProfile(
+ 	preserveCallerFingerprint := !applyCLIFingerprint && !confirmedClaudeCode
+ 	useOAuthBetas := fp.UseOAuthBetas
+ 	isAnthropicBase := isAnthropicUpstreamURL(r.URL)
++	useXAPIKey := claudeUsesXAPIKey(auth)
+ 	if strings.TrimSpace(apiKey) != "" {
+-		if isAnthropicBase && useAPIKey {
++		if useXAPIKey || (isAnthropicBase && useAPIKey) {
+ 			r.Header.Del("Authorization")
+ 			r.Header.Set("x-api-key", apiKey)
+ 		} else {
+@@ -1237,6 +1238,7 @@ func applyClaudeHeadersWithNativeProfile(
+ 			attrs = auth.Attributes
+ 		}
+ 		util.ApplyCustomHeadersFromAttrs(r, attrs, incomingHeaders)
++		enforceClaudeXAPIKeyAuth(r, useXAPIKey, apiKey)
+ 		// Scope the custom-header escape hatch exactly like the CLI path below, which
+ 		// claws overrides back on api.anthropic.com (an operator Anthropic-Beta reaches
+ 		// a first-party API that rejects unknown values) and on any streaming request
+@@ -1374,6 +1376,7 @@ func applyClaudeHeadersWithNativeProfile(
+ 		attrs = auth.Attributes
+ 	}
+ 	util.ApplyCustomHeadersFromAttrs(r, attrs, incomingHeaders)
++	enforceClaudeXAPIKeyAuth(r, useXAPIKey, apiKey)
+ 	// Custom credential headers are a configuration escape hatch for third-party
+ 	// gateways, so they keep the last word there. On api.anthropic.com they must
+ 	// not rewrite the reconstructed identity: an overridden Anthropic-Beta yields a
+diff --git a/internal/watcher/synthesizer/config.go b/internal/watcher/synthesizer/config.go
+index 6f8ea61c..ab8bcf8b 100644
+--- a/internal/watcher/synthesizer/config.go
++++ b/internal/watcher/synthesizer/config.go
+@@ -149,6 +149,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
+ 		}
+ 		prefix := strings.TrimSpace(ck.Prefix)
+ 		proxyURL := strings.TrimSpace(ck.ProxyURL)
++		authHeader := strings.TrimSpace(ck.AuthHeader)
+ 		id, token := idGen.Next("claude:apikey", key, base, proxyURL, prefix, config.FormatSortedHeaders(ck.Headers))
+ 		attrs := map[string]string{
+ 			"source":       fmt.Sprintf("config:claude[%s]", token),
+@@ -157,6 +158,9 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
+ 		if key != "" {
+ 			attrs["api_key"] = key
+ 		}
++		if authHeader != "" {
++			attrs["auth_header"] = authHeader
++		}
+ 		metadata := map[string]any{}
+ 		if ck.DisableCooling != nil {
+ 			metadata["disable_cooling"] = *ck.DisableCooling
+diff --git a/internal/watcher/synthesizer/config_test.go b/internal/watcher/synthesizer/config_test.go
+index 9a8c8ee4..6246ecde 100644
+--- a/internal/watcher/synthesizer/config_test.go
++++ b/internal/watcher/synthesizer/config_test.go
+@@ -278,6 +278,34 @@ func TestConfigSynthesizer_ClaudeKeys(t *testing.T) {
+ 	}
+ }
+ 
++func TestConfigSynthesizer_ClaudeKeys_AuthHeader(t *testing.T) {
++	synth := NewConfigSynthesizer()
++	ctx := &SynthesisContext{
++		Config: &config.Config{
++			ClaudeKey: []config.ClaudeKey{
++				{APIKey: "kimi-key", BaseURL: "https://api.kimi.com/coding", AuthHeader: " x-api-key "},
++				{APIKey: "bearer-key", BaseURL: "https://token-plan.example.test/apps/anthropic"},
++			},
++		},
++		Now:         time.Now(),
++		IDGenerator: NewStableIDGenerator(),
++	}
++
++	auths, err := synth.Synthesize(ctx)
++	if err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++	if len(auths) != 2 {
++		t.Fatalf("expected 2 auths, got %d", len(auths))
++	}
++	if got := auths[0].Attributes["auth_header"]; got != "x-api-key" {
++		t.Errorf("expected auth_header=x-api-key, got %q", got)
++	}
++	if _, ok := auths[1].Attributes["auth_header"]; ok {
++		t.Errorf("expected no auth_header for default bearer credential, got %q", auths[1].Attributes["auth_header"])
++	}
++}
++
+ func TestConfigSynthesizer_ClaudeKeys_SkipsEmptyAndHeaders(t *testing.T) {
+ 	synth := NewConfigSynthesizer()
+ 	ctx := &SynthesisContext{
+diff --git a/sdk/cliproxy/service_models.go b/sdk/cliproxy/service_models.go
+index 76693ee8..c264fc89 100644
+--- a/sdk/cliproxy/service_models.go
++++ b/sdk/cliproxy/service_models.go
+@@ -725,6 +725,15 @@ type modelCompatEntry interface {
+ 	GetIsCompat() bool
+ }
+ 
++type modelTokenLimits interface {
++	GetContextLength() int
++	GetMaxCompletionTokens() int
++}
++
++type modelOwner interface {
++	GetOwnedBy() string
++}
++
+ func buildConfiguredModelInfo(model modelEntry, ownedBy, modelType string, created int64, fallbackDisplayName string, userDefined bool) *ModelInfo {
+ 	name := strings.TrimSpace(model.GetName())
+ 	alias := strings.TrimSpace(model.GetAlias())
+@@ -764,6 +773,19 @@ func buildConfiguredModelInfo(model modelEntry, ownedBy, modelType string, creat
+ 	if compatModel, okCompat := any(model).(modelCompatEntry); okCompat {
+ 		info.IsCompat = compatModel.GetIsCompat()
+ 	}
++	if owner, ok := any(model).(modelOwner); ok {
++		if configuredOwner := strings.TrimSpace(owner.GetOwnedBy()); configuredOwner != "" {
++			info.OwnedBy = configuredOwner
++		}
++	}
++	if limits, ok := any(model).(modelTokenLimits); ok {
++		if contextLength := limits.GetContextLength(); contextLength > 0 {
++			info.ContextLength = contextLength
++		}
++		if maxCompletionTokens := limits.GetMaxCompletionTokens(); maxCompletionTokens > 0 {
++			info.MaxCompletionTokens = maxCompletionTokens
++		}
++	}
+ 	return info
+ }
+ 
+diff --git a/sdk/cliproxy/service_oauth_model_alias_test.go b/sdk/cliproxy/service_oauth_model_alias_test.go
+index 463d7fb5..6183b83e 100644
+--- a/sdk/cliproxy/service_oauth_model_alias_test.go
++++ b/sdk/cliproxy/service_oauth_model_alias_test.go
+@@ -3,6 +3,7 @@ package cliproxy
+ import (
+ 	"testing"
+ 
++	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+ )
+@@ -298,3 +299,98 @@ func TestApplyModelPrefixes_PreservesMetadataModelID(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// The static "codex" channel resolves to the codex-pro tier. On 7.3.15 that
++// tier lists gpt-5.6-sol at 921000/128000 and gpt-6-sol at 272000/128000;
++// claude-multi's OAuth aliases must advertise exactly the registry limits.
++func TestApplyOAuthModelAlias_CodexSolPreservesTokenLimits(t *testing.T) {
++	for _, tc := range []struct {
++		sourceID                string
++		wantContextLength       int
++		wantMaxCompletionTokens int
++		aliases                 []string
++	}{
++		{
++			sourceID:                "gpt-5.6-sol",
++			wantContextLength:       921000,
++			wantMaxCompletionTokens: 128000,
++			aliases:                 []string{"claude-multi-sol-high", "gpt-multi-sol-high", "claude-multi-sol-xhigh", "gpt-multi-sol-xhigh"},
++		},
++		{
++			sourceID:                "gpt-6-sol",
++			wantContextLength:       272000,
++			wantMaxCompletionTokens: 128000,
++			aliases:                 []string{"claude-multi-sol6-high", "gpt-multi-sol6-high"},
++		},
++	} {
++		var source *ModelInfo
++		for _, model := range registry.GetStaticModelDefinitionsByChannel("codex") {
++			if model != nil && model.ID == tc.sourceID {
++				source = model
++				break
++			}
++		}
++		if source == nil {
++			t.Fatalf("expected Codex registry model %q", tc.sourceID)
++		}
++		if source.ContextLength != tc.wantContextLength {
++			t.Fatalf("%s source context length = %d, want %d", tc.sourceID, source.ContextLength, tc.wantContextLength)
++		}
++		if source.MaxCompletionTokens != tc.wantMaxCompletionTokens {
++			t.Fatalf("%s source max completion tokens = %d, want %d", tc.sourceID, source.MaxCompletionTokens, tc.wantMaxCompletionTokens)
++		}
++		for _, alias := range tc.aliases {
++			t.Run(tc.sourceID+"/"+alias, func(t *testing.T) {
++				cfg := &config.Config{
++					OAuthModelAlias: map[string][]config.OAuthModelAlias{
++						"codex": {
++							{Name: tc.sourceID, Alias: alias, ForceMapping: true},
++						},
++					},
++				}
++				out := applyOAuthModelAlias(cfg, "codex", "oauth", []*ModelInfo{source})
++				if len(out) != 1 {
++					t.Fatalf("expected 1 aliased model, got %d", len(out))
++				}
++				if out[0].ID != alias {
++					t.Fatalf("alias model id = %q, want %q", out[0].ID, alias)
++				}
++				if out[0].ContextLength != tc.wantContextLength {
++					t.Fatalf("alias context length = %d, want %d", out[0].ContextLength, tc.wantContextLength)
++				}
++				if out[0].MaxCompletionTokens != tc.wantMaxCompletionTokens {
++					t.Fatalf("alias max completion tokens = %d, want %d", out[0].MaxCompletionTokens, tc.wantMaxCompletionTokens)
++				}
++			})
++		}
++	}
++}
++
++// claude-api-key models advertise the configured owner and token limits
++// (the kimi-claude-compat fields) through the Claude-shape model listing.
++func TestBuildClaudeConfigModelsAdvertisesCompatOwnerAndLimits(t *testing.T) {
++	models := buildClaudeConfigModels(&internalconfig.ClaudeKey{
++		Models: []internalconfig.ClaudeModel{
++			{Name: "k3", Alias: "claude-multi-kimi-k3", DisplayName: "Kimi K3", OwnedBy: " moonshot ", ContextLength: 1000000, MaxCompletionTokens: 64000},
++			{Name: "qwen3.8-max", Alias: "claude-multi-qwen38-max"},
++		},
++	})
++	if len(models) != 2 {
++		t.Fatalf("expected 2 models, got %d", len(models))
++	}
++	if got := models[0].OwnedBy; got != "moonshot" {
++		t.Fatalf("owned_by = %q, want moonshot", got)
++	}
++	if got := models[0].ContextLength; got != 1000000 {
++		t.Fatalf("context_length = %d, want 1000000", got)
++	}
++	if got := models[0].MaxCompletionTokens; got != 64000 {
++		t.Fatalf("max_completion_tokens = %d, want 64000", got)
++	}
++	if got := models[1].OwnedBy; got != "anthropic" {
++		t.Fatalf("default owned_by = %q, want anthropic", got)
++	}
++	if got := models[1].ContextLength; got != 0 {
++		t.Fatalf("default context_length = %d, want 0 (registry default applies downstream)", got)
++	}
++}

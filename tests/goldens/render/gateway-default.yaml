@@ -1,0 +1,297 @@
+host: "127.0.0.1"
+port: 8317
+tls:
+  enable: false
+  cert: ""
+  key: ""
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: true
+  disable-auto-update-panel: true
+auth-dir: "/home/test/.local/share/claude-multi/auth"
+api-keys:
+  - "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+debug: false
+pprof:
+  enable: false
+  addr: "127.0.0.1:8316"
+plugins:
+  enabled: false
+  dir: ""
+  configs: {}
+discovery:
+  enabled: false
+commercial-mode: true
+logging-to-file: false
+usage-statistics-enabled: false
+proxy-url: ""
+passthrough-headers: false
+request-retry: 0
+max-retry-credentials: 1
+max-retry-interval: 0
+disable-cooling: true
+save-cooldown-status: false
+quota-exceeded:
+  switch-project: false
+  switch-preview-model: false
+  antigravity-credits: false
+routing:
+  strategy: "fill-first"
+  session-affinity: true
+  session-affinity-ttl: "24h"
+ws-auth: true
+oauth-model-alias:
+  claude:
+    - name: "claude-fable-5"
+      alias: "claude-fable-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-fable-5-1"
+      alias: "claude-fable-5-1"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-5"
+      alias: "claude-opus-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-5-5"
+      alias: "claude-opus-5-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-4-8"
+      alias: "claude-opus-4-8"
+      force-mapping: true
+      fork: true
+    - name: "claude-sonnet-5"
+      alias: "claude-sonnet-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-4-8"
+      alias: "claude-multi-opus-4-8"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-5"
+      alias: "claude-multi-opus-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-5-5"
+      alias: "claude-multi-opus-5-5"
+      force-mapping: true
+      fork: true
+  codex:
+    - name: "gpt-5.5"
+      alias: "gpt-multi-gpt55-high"
+      force-mapping: true
+      fork: false
+    - name: "gpt-5.6-sol"
+      alias: "gpt-multi-sol-high"
+      force-mapping: true
+      fork: false
+    - name: "gpt-5.6-sol"
+      alias: "gpt-multi-sol-xhigh"
+      force-mapping: true
+      fork: false
+claude-api-key:
+  - api-key: "dummy-kimi-key"
+    base-url: "https://api.kimi.com/coding"
+    auth-header: "x-api-key"
+    cloak:
+      mode: "never"
+    models:
+      - name: "k3"
+        alias: "claude-multi-kimi-k3"
+        display-name: "Kimi K3 · 1M selector"
+        owned-by: "moonshot"
+        context-length: 1000000
+        force-mapping: true
+  - api-key: "dummy-kimi-key"
+    base-url: "https://api.meta.ai"
+    cloak:
+      mode: "never"
+    models:
+      - name: "muse-spark-1.3"
+        alias: "claude-multi-muse-spark-high"
+        display-name: "Muse Spark 1.3"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3"
+        alias: "claude-multi-muse-spark-xhigh"
+        display-name: "Muse Spark 1.3"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+  - api-key: "dummy-kimi-key"
+    base-url: "https://openrouter.ai/api"
+    auth-header: "x-api-key"
+    cloak:
+      mode: "never"
+    models:
+      - name: "x-ai/grok-4.6"
+        alias: "claude-multi-grok46-high"
+        display-name: "Grok 4.6"
+        owned-by: "x-ai"
+        context-length: 500000
+        force-mapping: true
+      - name: "x-ai/grok-4.6"
+        alias: "claude-multi-grok46-xhigh"
+        display-name: "Grok 4.6"
+        owned-by: "x-ai"
+        context-length: 500000
+        force-mapping: true
+      - name: "deepseek/deepseek-v4-flash"
+        alias: "claude-multi-or-deepseek-high"
+        display-name: "DeepSeek V4 Flash · OpenRouter"
+        owned-by: "deepseek"
+        context-length: 1000000
+        force-mapping: true
+      - name: "deepseek/deepseek-v4-flash"
+        alias: "claude-multi-or-deepseek-xhigh"
+        display-name: "DeepSeek V4 Flash · OpenRouter"
+        owned-by: "deepseek"
+        context-length: 1000000
+        force-mapping: true
+      - name: "google/gemini-3-flash"
+        alias: "claude-multi-or-gemini-high"
+        display-name: "Gemini 3 Flash · OpenRouter"
+        owned-by: "google"
+        context-length: 1000000
+        force-mapping: true
+      - name: "google/gemini-3-flash"
+        alias: "claude-multi-or-gemini-xhigh"
+        display-name: "Gemini 3 Flash · OpenRouter"
+        owned-by: "google"
+        context-length: 1000000
+        force-mapping: true
+      - name: "openai/gpt-6-sol"
+        alias: "claude-multi-or-gpt-high"
+        display-name: "GPT-6 Sol · OpenRouter"
+        owned-by: "openai"
+        context-length: 1000000
+        force-mapping: true
+      - name: "openai/gpt-6-sol"
+        alias: "claude-multi-or-gpt-xhigh"
+        display-name: "GPT-6 Sol · OpenRouter"
+        owned-by: "openai"
+        context-length: 1000000
+        force-mapping: true
+      - name: "x-ai/grok-4.7"
+        alias: "claude-multi-or-grok-high"
+        display-name: "Grok 4.7 · OpenRouter"
+        owned-by: "x-ai"
+        context-length: 500000
+        force-mapping: true
+      - name: "x-ai/grok-4.7"
+        alias: "claude-multi-or-grok-xhigh"
+        display-name: "Grok 4.7 · OpenRouter"
+        owned-by: "x-ai"
+        context-length: 500000
+        force-mapping: true
+      - name: "anthropic/claude-opus-5.5"
+        alias: "claude-multi-or-opus-high"
+        display-name: "Opus 5.5 · OpenRouter"
+        owned-by: "anthropic"
+        context-length: 1000000
+        force-mapping: true
+      - name: "anthropic/claude-opus-5.5"
+        alias: "claude-multi-or-opus-xhigh"
+        display-name: "Opus 5.5 · OpenRouter"
+        owned-by: "anthropic"
+        context-length: 1000000
+        force-mapping: true
+  - api-key: "dummy-kimi-key"
+    base-url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic"
+    cloak:
+      mode: "never"
+    models:
+      - name: "qwen3.8-max"
+        alias: "claude-multi-qwen38-max"
+        display-name: "Qwen3.8 Max"
+        owned-by: "alibaba"
+        context-length: 983616
+        force-mapping: true
+openai-compatibility:
+  - name: "llm-local"
+    base-url: "http://llm-local.invalid:8010/v1"
+    models:
+      - name: "qwen3.8-flash-next"
+        alias: "claude-multi-qwen-flash-next"
+        display-name: "Qwen3.8 Flash Next (local)"
+        force-mapping: true
+  - name: "claude-multi-render"
+    base-url: "http://127.0.0.1:9/v1"
+    models:
+      - name: "claude-multi-render"
+        alias: "claude-multi-render-bf46dbcc"
+        force-mapping: true
+payload:
+  override:
+    - models:
+        - name: "claude-multi-kimi-k3"
+          protocol: "claude"
+      params:
+        "output_config.effort": "max"
+    - models:
+        - name: "claude-multi-muse-spark-high"
+          protocol: "claude"
+      params:
+        "output_config.effort": "high"
+    - models:
+        - name: "claude-multi-muse-spark-xhigh"
+          protocol: "claude"
+      params:
+        "output_config.effort": "xhigh"
+    - models:
+        - name: "gpt-multi-gpt55-high"
+          protocol: "codex"
+        - name: "gpt-multi-sol-high"
+          protocol: "codex"
+      params:
+        "reasoning.effort": "high"
+    - models:
+        - name: "gpt-multi-sol-xhigh"
+          protocol: "codex"
+      params:
+        "reasoning.effort": "xhigh"
+    - models:
+        - name: "claude-multi-grok46-high"
+          protocol: "claude"
+        - name: "claude-multi-or-deepseek-high"
+          protocol: "claude"
+        - name: "claude-multi-or-gemini-high"
+          protocol: "claude"
+        - name: "claude-multi-or-gpt-high"
+          protocol: "claude"
+        - name: "claude-multi-or-grok-high"
+          protocol: "claude"
+        - name: "claude-multi-or-opus-high"
+          protocol: "claude"
+      params:
+        "output_config.effort": "high"
+    - models:
+        - name: "claude-multi-grok46-xhigh"
+          protocol: "claude"
+        - name: "claude-multi-or-deepseek-xhigh"
+          protocol: "claude"
+        - name: "claude-multi-or-gemini-xhigh"
+          protocol: "claude"
+        - name: "claude-multi-or-gpt-xhigh"
+          protocol: "claude"
+        - name: "claude-multi-or-grok-xhigh"
+          protocol: "claude"
+        - name: "claude-multi-or-opus-xhigh"
+          protocol: "claude"
+      params:
+        "output_config.effort": "xhigh"
+    - models:
+        - name: "claude-multi-qwen38-max"
+          protocol: "claude"
+      params:
+        reasoning_effort: "xhigh"
+  filter:
+    - models:
+        - name: "claude-multi-kimi-k3"
+          protocol: "claude"
+      params:
+        - "thinking"

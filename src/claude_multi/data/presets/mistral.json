@@ -1,0 +1,26 @@
+{
+  "lines": {},
+  "notes": "Mistral AI's chat completions API. Declaration only: add models with claude-multi discover mistral --add WIRE (or claude-multi models add mistral WIRE …), then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://docs.mistral.ai/api/endpoint/models",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:MISTRAL_API_KEY"
+    },
+    "base_url": "https://api.mistral.ai/v1",
+    "display": "Mistral AI",
+    "independence_family": "mistral",
+    "kind": "openai-compatible",
+    "listing": {
+      "auth": "provider",
+      "shape": "openai",
+      "url": "https://api.mistral.ai/v1/models"
+    }
+  },
+  "version": 1
+}

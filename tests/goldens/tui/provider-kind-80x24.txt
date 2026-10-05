@@ -1,0 +1,24 @@
+
+  new provider
+  ─────────────────────────────────────────────────────────────────────────────
+
+  Step 2/10 — Generation protocol (Left/Right chooses)
+
+  > anthropic-compatible — recommended (Messages)
+    openai-compatible — with an API key
+    openai-compatible-lan — keyless LAN
+
+
+
+
+
+
+
+
+
+
+
+  Draft only — nothing written before declaration preview.
+
+
+  Enter next · Backspace previous · ? help · Esc cancel

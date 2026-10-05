@@ -1,0 +1,30 @@
+{
+  "catalog_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "catalog_version": 31,
+  "context_profile": "large",
+  "created_at": "2026-09-01T00:00:00Z",
+  "cwd": "/project/moved",
+  "forked_from": null,
+  "identity_state": "authoritative",
+  "last_event_source": "resume",
+  "last_seen_at": "2026-09-26T00:00:00Z",
+  "launch_epoch": 3,
+  "launcher_version": "2.26.0",
+  "managed_id": "a2222222-2222-4222-8222-222222222222",
+  "migrated_from_version": null,
+  "mode": "durable",
+  "mutation_token": "f1111111-1111-4111-8111-111111111111",
+  "ordinary_model": "qwen38",
+  "pending_forks": [],
+  "runtime_aliases": [
+    {
+      "observed_at": "2026-09-26T00:00:00Z",
+      "session_id": "a2222222-2222-4222-8222-222222222222",
+      "source": "end"
+    }
+  ],
+  "runtime_session_id": "b1111111-1111-4111-8111-111111111111",
+  "scope_generation": 1,
+  "session_type": "ordinary-gateway",
+  "version": 3
+}

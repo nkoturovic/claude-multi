@@ -1,0 +1,385 @@
+{
+  "acceptance": {
+    "U1": {
+      "note": "Supervisor-takeover respawn re-supplying --add-dir is binary-consistent and documented for backgrounding; takeover itself is unverified headlessly and moves to user acceptance.",
+      "status": "unverified"
+    },
+    "U10": {
+      "note": "SubagentStop hook contract at 2.1.220: fires on normal subagent completion and honors decision:block with stop_hook_active as the native loop guard; does NOT fire on API-error deaths (retry-exhaustion probe, twice incl. a 15s window) \u2014 no mechanical continue-hook at this pin (recovery = watchdog pin + lead contract). Radar: RealPinnedBinaryTests.test_subagent_stop_* in tests/test_scope_probe.py.",
+      "status": "verified"
+    },
+    "U11": {
+      "note": "Client check S1 (re-run on client 2.1.286): /reload-plugins re-reads an edited add-dir agent (model and body); agents are not hot-watched, so without it the next spawn keeps the old binding. Staged plugin update not stageable offline. Radar: tests/test_client_agents.py test_s1_reload_plugins_rebinds_next_spawn.",
+      "status": "verified"
+    },
+    "U12": {
+      "note": "Client check S2 (re-run on client 2.1.286): after a live change, /compact and a relaunch with the same --resume argv keep the new binding; relaunch waits for the compact boundary; supervisor takeover stays user acceptance (U1). Radar: tests/test_client_agents.py test_s2_*.",
+      "status": "verified"
+    },
+    "U13": {
+      "note": "Client check S3 (re-run on client 2.1.286) FAIL: a SendMessage-resumed agent is rebound to the current frontmatter model with its original prompt and transcript. Adopted fallback: lead-prompt wording and the lineup notice say spawn fresh after a lineup change, never SendMessage-continue. Radar: tests/test_client_agents.py test_s3_*.",
+      "status": "failed"
+    },
+    "U14": {
+      "note": "Client check S4 (re-run on client 2.1.286): the /cm skill runs the launcher at expansion with no model turn; body '$ARGUMENTS' is single-quoted and the launcher refuses more than one argument after --session <id> (balanced apostrophes word-split). Radar: tests/test_client_skill_workflow.py test_s4_cm_scope_skill_invocation.",
+      "status": "verified"
+    },
+    "U15": {
+      "note": "Client check S5 (re-run on client 2.1.286): hook additionalContext reaches the lead for SessionStart startup/resume/fork/compact/clear and UserPromptSubmit; notices replay until compaction; exit 2 blocks the prompt, so hooks never exit 2. Radar: tests/test_client_hooks.py.",
+      "status": "verified"
+    },
+    "U16": {
+      "note": "Client check S6 (re-run on client 2.1.286): PreModelSwitch/PostModelSwitch fire per surface; a picker Default row that resolves to the current model emits no switch event; a relaunch argv --model wins without PostModelSwitch and resume SessionStart carries no model, so takeover detection keeps the documented drift fallback; hint headers change headers only. Radar: tests/test_client_hooks.py.",
+      "status": "verified"
+    },
+    "U17": {
+      "note": "Client check S7a/b (re-run on client 2.1.286): canonical Anthropic ids are recognised (prompt bundle, output cap, fallback chain) while claude-multi-* Anthropic ids are unknown (32000 cap, no refusal fallback); bare family aliases resolve to the current generation (sonnet -> claude-sonnet-5-5 on 2.1.286). Radar: tests/test_client_models.py test_s7_selector_recognition.",
+      "status": "verified"
+    },
+    "U18": {
+      "note": "Client check S8 (re-run on client 2.1.286): agent frontmatter low, medium and xhigh are sent verbatim; ultracode is dropped silently to the session effort, visible only in the debug log. The catalog validator rejects agent ultracode. Radar: tests/test_client_models.py test_s8_agent_effort_vocabulary.",
+      "status": "verified"
+    },
+    "U19": {
+      "note": "Client check S9 (re-run on client 2.1.286): native Explore inherits an unrecognised (GPT) lead with or without CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP, and is capped to the Opus default under a Fable lead unless that flag is set (changed since 2.1.281); statusline-setup and claude-code-guide wires recorded. Radar: tests/test_client_models.py test_s9_native_agent_wires.",
+      "status": "verified"
+    },
+    "U2": {
+      "note": "--append-system-prompt-file is stored in the binary session-config bag with agent/agents; takeover survival rests on the belt-and-braces prompt-file floor plus acceptance.",
+      "status": "unverified"
+    },
+    "U20": {
+      "note": "Client check S10 (re-run on client 2.1.286): workflow agent() type, model and cwd behave as recorded; a workflow default binding must be inside availableModels; Workflow is on by default and disableWorkflows:true is the off control. Radar: tests/test_client_skill_workflow.py test_s10_*.",
+      "status": "verified"
+    },
+    "U21": {
+      "note": "Client check S11 (re-run on client 2.1.286): helper-only gateway auth rotates in-process with one 401 and a ~1 s retry using the new helper token; an env token outranks the helper and freezes it, so durable launches unset ANTHROPIC_AUTH_TOKEN. Radar: tests/test_client_gateway_auth.py test_s11_*.",
+      "status": "verified"
+    },
+    "U22": {
+      "note": "Client check S12 (re-run on client 2.1.286) PASS with caveat: the client strips [1m] from a codex selector, sends the 1M beta and books 1M; the gateway forwards the wire id with no window field and no 272K cap. Provider acceptance above 272K is not decidable offline (consent-gated live call). Radar: tests/test_client_gateway_auth.py test_s12_gpt6_1m_selector_client_and_gateway.",
+      "status": "verified"
+    },
+    "U23": {
+      "note": "Client check S7c (re-run on client 2.1.286): a categorized refusal retries once on the same wire, then switches only to a fenced hard-coded target (Opus/Fable: cyber -> claude-opus-4-8, bio, frontier_llm -> claude-opus-5; Sonnet 5.5: cyber, frontier_llm -> claude-sonnet-5); lead-only fences, server-named targets and switchModelsOnFlag:false never switch. Targets stay fallback-only passthrough routes. Radar: tests/test_client_models.py SelectorRecognitionProbe.",
+      "status": "verified"
+    },
+    "U5": {
+      "note": "availableModels compiles lead + every roster selector after the lead-only fence silently degraded all subagent dispatch to the lead; the offline delegation probe asserts the subagent's wire model through the production-shaped fence on the pinned binary every build (with the lead-only negative control preserved as the incident document).",
+      "status": "verified"
+    },
+    "U6": {
+      "note": "Nested spawning is documented on for 2.1.217 (depth 5 fixed) and prompts allow bounded delegation; spawn env keys stay unset pending acceptance.",
+      "status": "unverified"
+    }
+  },
+  "agent_efforts": {
+    "evidence": "Pinned client 2.1.281 accepts exactly low, medium, high, xhigh and max in agent frontmatter (static check). Client check S8 sent low, medium and xhigh verbatim on the subagent wire and silently dropped ultracode to the session effort, so the validator is the only guard. high and max rest on ordinary v1 operation.",
+    "status": "verified",
+    "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "capabilities": {
+    "background_supervisor_lifecycle": {
+      "status": "pending"
+    },
+    "onboarding_trust": {
+      "status": "pending"
+    },
+    "persistent_denies": {
+      "status": "pending"
+    },
+    "project_agent_collision": {
+      "status": "pending"
+    },
+    "root_agent_discovery": {
+      "status": "pending"
+    },
+    "root_memory_reinjection": {
+      "status": "pending"
+    },
+    "selectors_effort_tools_worktree": {
+      "status": "pending"
+    },
+    "transcript_location_exact_resume": {
+      "status": "pending"
+    }
+  },
+  "evidence_version": 3,
+  "generic_agent_aliases": {
+    "evidence": "Static strings in the inspected 2.1.217 binary name the generic native agent alias 'claude'; recorded per inspected version for policy compilation (Agent(claude) deny). Static presence is not functional verification; deny acceptance remains a probe item.",
+    "status": "provisionally-trusted",
+    "values": [
+      "claude"
+    ]
+  },
+  "lead_efforts": {
+    "evidence": "Lead efforts are the agent efforts plus ultracode; an ultracode lead sends xhigh on the wire. low and medium were not exercised as lead efforts on 2.1.281.",
+    "status": "provisionally-trusted",
+    "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultracode"
+    ]
+  },
+  "lifecycle_evidence": {
+    "evidence_id": "deepwork-claude-multi-durable-session-config-phase0-2.1.286",
+    "inspected_version": "2.1.286"
+  },
+  "nested_subagents": {
+    "concurrency_key": {
+      "name": "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
+      "status": "unverified"
+    },
+    "decision": "pending",
+    "depth_key": {
+      "name": "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH",
+      "status": "unverified"
+    },
+    "evidence": "Static strings in the inspected 2.1.217 binary name both keys; static presence is not functional verification. 2.1.217 disables nested spawning by default. Decision chain: positive and negative controls first, then the verified keys are compiled or the canonical prompts amended.",
+    "probe": "g1-p-bg"
+  },
+  "recorded_at": "2026-09-25",
+  "verified": [
+    {
+      "evidence": {
+        "linux-x64": "battery",
+        "others": "identity+smoke",
+        "receipt_sha256": "9410f9ebf106ba2a16dd8b763f0515e3cb80c6b37f1a2c55bfb89ec2da11892e"
+      },
+      "key_fingerprint": "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE",
+      "manifest_sha256": "c84e2bef8910fdec338c5e198192fc02d574182f71e57f2c262519541c697523",
+      "platforms": {
+        "darwin-arm64": {
+          "sha256": "75e3016e9d2570767b08e43a7467d4817a4f149232c169ca295f2c95fef21433",
+          "size": 225167728
+        },
+        "darwin-x64": {
+          "sha256": "53e6a936e89519d695230f9cc97943991286b72766674fba11bee845f0a7c047",
+          "size": 233607424
+        },
+        "linux-arm64": {
+          "sha256": "0292fa22ac2fd43e16be9d0e511ddd8347280d6e0ebaca744ef5b27e05d8d0f8",
+          "size": 241033208
+        },
+        "linux-arm64-musl": {
+          "sha256": "5b9b9e41b8b347ba573924342b29b1133d88a7bec51362d5a90a9f22cd6f76cf",
+          "size": 233387840
+        },
+        "linux-x64": {
+          "sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+          "size": 241667256
+        },
+        "linux-x64-musl": {
+          "sha256": "410780234cc3e54afe41a958ef26a4b4f1d253849b769c760f6bcf0bb525fb09",
+          "size": 235417688
+        },
+        "win32-arm64": {
+          "sha256": "9109c7b0a0de5b40fd013b9009411e517199c8275d2363b824e851cc1133d3c3",
+          "size": 232616096
+        },
+        "win32-x64": {
+          "sha256": "0b6ecec8edef1ce3069682f696c894d1553239faa6b84e56e167a3ced88fa333",
+          "size": 245092000
+        }
+      },
+      "settings_keys": [
+        "$schema",
+        "additionalMarketplaces",
+        "advisorModel",
+        "agent",
+        "agentPushNotifEnabled",
+        "allowAllClaudeAiMcps",
+        "allowClaudeInChromeWithManagedMcp",
+        "allowManagedHooksOnly",
+        "allowManagedMcpServersOnly",
+        "allowManagedPermissionRulesOnly",
+        "allowedChannelPlugins",
+        "allowedHttpHookUrls",
+        "allowedMarketplaces",
+        "allowedMcpServers",
+        "allowedProviders",
+        "alwaysThinkingEnabled",
+        "apiKeyHelper",
+        "appendPlugins",
+        "askUserQuestionTimeout",
+        "attribution",
+        "autoCompactEnabled",
+        "autoCompactWindow",
+        "autoContinueAtUsageLimit",
+        "autoDreamEnabled",
+        "autoMemoryDirectory",
+        "autoMemoryEnabled",
+        "autoScrollEnabled",
+        "autoUpdatesChannel",
+        "autoUploadSessions",
+        "availableModels",
+        "availableModelsMatch",
+        "awaySummaryEnabled",
+        "awsAuthRefresh",
+        "awsCredentialExport",
+        "bashEditDiffEnabled",
+        "bashOutputMaxChars",
+        "blockedMarketplaces",
+        "breakReminder",
+        "channelsEnabled",
+        "claudeMd",
+        "claudeMdExcludes",
+        "cleanupPeriodDays",
+        "companyAnnouncements",
+        "crossSessionInbound",
+        "daemonColdStart",
+        "defaultShell",
+        "deniedMcpServers",
+        "deniedModels",
+        "desktopSessionCleanupPeriodDays",
+        "dialogExpiry",
+        "disableAgentView",
+        "disableAllHooks",
+        "disableArtifact",
+        "disableAutoMode",
+        "disableBundledSkills",
+        "disableClaudeAiConnectors",
+        "disableCommandPluginSources",
+        "disableRemoteControl",
+        "disableSideloadFlags",
+        "disableSkillShellExecution",
+        "disableWorkflows",
+        "disabledMcpjsonServers",
+        "doneMeansMerged",
+        "editorMode",
+        "effortLevel",
+        "emojiCompletionEnabled",
+        "enableAllProjectMcpServers",
+        "enableArtifact",
+        "enableWorkflows",
+        "enabledMcpjsonServers",
+        "enabledPlugins",
+        "enforceAvailableModels",
+        "env",
+        "extraKnownMarketplaces",
+        "fallbackModel",
+        "fastMode",
+        "fastModePerSessionOptIn",
+        "feedbackDrafts",
+        "feedbackSurveyRate",
+        "fileCheckpointingEnabled",
+        "fileSuggestion",
+        "footerLinksRegexes",
+        "forceLoginGatewayUrl",
+        "forceLoginMethod",
+        "forceLoginOrgUUID",
+        "forceRemoteSettingsRefresh",
+        "gatewayInternalNetworks",
+        "gcpAuthRefresh",
+        "hooks",
+        "httpHookAllowedEnvVars",
+        "includeCoAuthoredBy",
+        "includeGitInstructions",
+        "inputNeededNotifEnabled",
+        "isolatePeerMachines",
+        "keybindingFlavor",
+        "language",
+        "managedMcpServers",
+        "managedSourcesBehavior",
+        "maxEffortLevel",
+        "maxProseWidth",
+        "minimumVersion",
+        "model",
+        "modelOverrides",
+        "modelPicker",
+        "modelPricing",
+        "modelProposedGoals",
+        "modelSettings",
+        "otelHeadersHelper",
+        "outputStyle",
+        "parentSettingsBehavior",
+        "permissions",
+        "plansDirectory",
+        "pluginConfigs",
+        "pluginSuggestionMarketplaces",
+        "pluginTrustMessage",
+        "policyHelper",
+        "policyHelpers",
+        "prUrlTemplate",
+        "precomputeCompactionEnabled",
+        "preferredNotifChannel",
+        "prefersReducedMotion",
+        "prependPlugins",
+        "processWrapper",
+        "promptCacheTtl",
+        "promptSuggestionEnabled",
+        "proxyAuthHelper",
+        "quietHours",
+        "remote",
+        "remoteControl",
+        "remoteControlAtStartup",
+        "remoteTools",
+        "requiredMaximumVersion",
+        "requiredMinimumVersion",
+        "respectGitignore",
+        "respondToBashCommands",
+        "sandbox",
+        "showClearContextOnPlanAccept",
+        "showMessageTimestamps",
+        "showThinkingSummaries",
+        "showTurnDuration",
+        "skillListingBudgetFraction",
+        "skillListingMaxDescChars",
+        "skillOverrides",
+        "skipDangerousModePermissionPrompt",
+        "skipWebFetchPreflight",
+        "skipWorkflowUsageWarning",
+        "spellcheck",
+        "spinnerTipsEnabled",
+        "spinnerTipsOverride",
+        "spinnerVerbs",
+        "sshConfigs",
+        "statusLine",
+        "strictKnownMarketplaces",
+        "strictPluginOnlyCustomization",
+        "subagentPromptCacheTtl",
+        "subagentStatusLine",
+        "switchModelsOnFlag",
+        "syncClaudeAiPlugins",
+        "syncClaudeAiSkills",
+        "syntaxHighlightingDisabled",
+        "taskOutputMaxChars",
+        "teammateMode",
+        "terminalProgressBarEnabled",
+        "terminalTitleFromRename",
+        "theme",
+        "timeFormat",
+        "timeZone",
+        "todoFeatureEnabled",
+        "totalTokensReminder",
+        "totalTokensReminderAfterUserTurn",
+        "totalTokensReminderBudget",
+        "tui",
+        "ultracode",
+        "verbose",
+        "viewMode",
+        "vimInsertModeRemaps",
+        "voice",
+        "wheelScrollAccelerationEnabled",
+        "workflowKeywordTriggerEnabled",
+        "workflowSizeGuideline",
+        "worktree",
+        "wslInheritsWindowsSettings",
+        "xaaIdp"
+      ],
+      "signature_sha256": "b0c7db2f8f7e185cc57a0bf0f6ed448359a7db095c3133773126275e3e911d22",
+      "verified_at": "2026-10-01",
+      "version": "2.1.286"
+    }
+  ],
+  "version": 2
+}

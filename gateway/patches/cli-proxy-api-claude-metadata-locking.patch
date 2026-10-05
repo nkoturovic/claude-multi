@@ -1,0 +1,275 @@
+diff --git a/internal/auth/claude/identity.go b/internal/auth/claude/identity.go
+index 3e4bde7..6aa13fd 100644
+--- a/internal/auth/claude/identity.go
++++ b/internal/auth/claude/identity.go
+@@ -189,6 +189,24 @@ func ReadMetadataString(metadata *map[string]any, key string) string {
+ 	return value
+ }
+ 
++// ReadMetadataBool reads a bool-valued metadata entry under the metadata lock,
++// so a request path cannot observe a map being concurrently written by another
++// path. A nil map, an absent key, a nil value or a value that is not a bool
++// reads as false.
++func ReadMetadataBool(metadata *map[string]any, key string) bool {
++	if metadata == nil {
++		return false
++	}
++	claudeDevicePoolMu.Lock()
++	defer claudeDevicePoolMu.Unlock()
++
++	if *metadata == nil {
++		return false
++	}
++	value, _ := (*metadata)[key].(bool)
++	return value
++}
++
+ // StoreMetadataString writes a string-valued metadata entry under the metadata
+ // lock, initializing the map when needed. Empty values are skipped so callers can
+ // forward optional fields without erasing a previously resolved value.
+diff --git a/internal/runtime/executor/claude_executor_auth.go b/internal/runtime/executor/claude_executor_auth.go
+index 0bc2a89..4dc4fff 100644
+--- a/internal/runtime/executor/claude_executor_auth.go
++++ b/internal/runtime/executor/claude_executor_auth.go
+@@ -34,13 +34,13 @@ func isClaudeSetupToken(auth *cliproxyauth.Auth, apiKey string) bool {
+ 	if !isClaudeOAuthToken(apiKey) || auth == nil {
+ 		return false
+ 	}
+-	if skip, _ := auth.Metadata["skip_account_profile"].(bool); skip {
++	if claudeauth.ReadMetadataBool(&auth.Metadata, "skip_account_profile") {
+ 		return true
+ 	}
+-	if isSetup, _ := auth.Metadata["is_setup_token"].(bool); isSetup {
++	if claudeauth.ReadMetadataBool(&auth.Metadata, "is_setup_token") {
+ 		return true
+ 	}
+-	if isSetup, _ := auth.Metadata["setup_token"].(bool); isSetup {
++	if claudeauth.ReadMetadataBool(&auth.Metadata, "setup_token") {
+ 		return true
+ 	}
+ 	if kind := strings.ToLower(auth.Attributes["auth_kind"]); kind == "setup_token" || kind == "setup-token" {
+diff --git a/internal/runtime/executor/claude_executor_auth_cm053_test.go b/internal/runtime/executor/claude_executor_auth_cm053_test.go
+new file mode 100644
+index 0000000..bc561bc
+--- /dev/null
++++ b/internal/runtime/executor/claude_executor_auth_cm053_test.go
+@@ -0,0 +1,219 @@
++package executor
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++)
++
++// claude-multi: the setup-token flags are read through the typed
++// reader under the existing Claude metadata mutex, so a request path that
++// prepares a shared setup-token credential cannot race the metadata writers.
++
++const cm053SetupTokenAPIKey = "sk-ant-oat-cm053-setup-token-probe"
++
++var cm053SetupTokenFlagKeys = []string{"skip_account_profile", "is_setup_token", "setup_token"}
++
++func TestCM053SetupTokenMetadataConcurrentPreparation(t *testing.T) {
++	executor := NewClaudeExecutor(&config.Config{})
++	var fetches atomic.Int64
++	executor.oauthProfileFetcher = func(context.Context, *cliproxyauth.Auth, string) (*claudeauth.OAuthProfile, error) {
++		fetches.Add(1)
++		return nil, errors.New("setup-token credentials never fetch the account profile")
++	}
++	ctx := context.Background()
++
++	const (
++		rounds     = 12
++		preparers  = 8
++		readers    = 8
++		writers    = 4
++		iterations = 32
++	)
++	for round := 0; round < rounds; round++ {
++		flag := cm053SetupTokenFlagKeys[round%len(cm053SetupTokenFlagKeys)]
++		auth := &cliproxyauth.Auth{
++			ID:         fmt.Sprintf("claude-cm053-setup-token-%d", round),
++			Attributes: map[string]string{"api_key": cm053SetupTokenAPIKey},
++			Metadata:   map[string]any{flag: true},
++		}
++
++		var prepared atomic.Int64
++		var wg sync.WaitGroup
++		start := make(chan struct{})
++		for i := 0; i < preparers; i++ {
++			wg.Add(1)
++			go func() {
++				defer wg.Done()
++				<-start
++				for j := 0; j < iterations; j++ {
++					if !executor.ShouldPrepareRequestAuth(auth) {
++						continue
++					}
++					got, err := executor.PrepareRequestAuth(ctx, auth)
++					if err != nil {
++						t.Errorf("round %d (%s): PrepareRequestAuth() error = %v", round, flag, err)
++						return
++					}
++					if got != auth {
++						t.Errorf("round %d (%s): PrepareRequestAuth() returned a different auth", round, flag)
++						return
++					}
++					prepared.Add(1)
++				}
++			}()
++		}
++		for i := 0; i < readers; i++ {
++			wg.Add(1)
++			go func() {
++				defer wg.Done()
++				<-start
++				for j := 0; j < iterations; j++ {
++					if !isClaudeSetupToken(auth, cm053SetupTokenAPIKey) {
++						t.Errorf("round %d (%s): isClaudeSetupToken() = false under concurrent writes", round, flag)
++						return
++					}
++				}
++			}()
++		}
++		for w := 0; w < writers; w++ {
++			wg.Add(1)
++			go func(w int) {
++				defer wg.Done()
++				<-start
++				for j := 0; j < iterations; j++ {
++					// Distinct keys grow the shared map while the readers run.
++					claudeauth.StoreMetadataValue(&auth.Metadata, fmt.Sprintf("cm053_probe_%d_%d", w, j), j)
++				}
++			}(w)
++		}
++		close(start)
++		wg.Wait()
++
++		if prepared.Load() == 0 {
++			t.Fatalf("round %d (%s): no goroutine ran the setup-token preparation", round, flag)
++		}
++		wantUUID := helps.StableClaudeCLIAccountUUID(helps.ClaudeCLIAuthIdentitySeed(auth))
++		if got := claudeauth.ReadMetadataString(&auth.Metadata, "account_uuid"); got != wantUUID {
++			t.Fatalf("round %d (%s): account_uuid = %q, want the stable setup-token identity %q", round, flag, got, wantUUID)
++		}
++		if claudeauth.ReadMetadataString(&auth.Metadata, claudeAccountProfileCheckedAtKey) == "" {
++			t.Fatalf("round %d (%s): %s was not recorded", round, flag, claudeAccountProfileCheckedAtKey)
++		}
++		if !claudeauth.HasCanonicalDeviceIDPool(claudeauth.ReadDeviceIDPool(&auth.Metadata)) {
++			t.Fatalf("round %d (%s): device ID pool was not established under concurrency", round, flag)
++		}
++	}
++	if n := fetches.Load(); n != 0 {
++		t.Fatalf("account profile fetched %d times for setup-token credentials, want 0", n)
++	}
++}
++
++// TestCM053SetupTokenMetadataFlagSemantics pins the upstream semantics the typed
++// reader preserves: only a real bool true marks a setup token; an absent key, a
++// nil value, a non-bool value and a nil map all read as false.
++func TestCM053SetupTokenMetadataFlagSemantics(t *testing.T) {
++	values := []struct {
++		name  string
++		value any
++		set   bool
++		want  bool
++	}{
++		{name: "absent", set: false, want: false},
++		{name: "nil", value: nil, set: true, want: false},
++		{name: "false", value: false, set: true, want: false},
++		{name: "true", value: true, set: true, want: true},
++		{name: "string-true", value: "true", set: true, want: false},
++		{name: "int-one", value: 1, set: true, want: false},
++		{name: "float-one", value: 1.0, set: true, want: false},
++		{name: "bool-pointer", value: new(bool), set: true, want: false},
++	}
++	for _, key := range cm053SetupTokenFlagKeys {
++		for _, tc := range values {
++			t.Run(key+"/"+tc.name, func(t *testing.T) {
++				metadata := map[string]any{}
++				if tc.set {
++					metadata[key] = tc.value
++				}
++				if got := claudeauth.ReadMetadataBool(&metadata, key); got != tc.want {
++					t.Fatalf("ReadMetadataBool(%s=%v) = %v, want %v", key, tc.value, got, tc.want)
++				}
++				auth := &cliproxyauth.Auth{ID: "claude-cm053-semantics", Metadata: metadata}
++				if got := isClaudeSetupToken(auth, cm053SetupTokenAPIKey); got != tc.want {
++					t.Fatalf("isClaudeSetupToken(%s=%v) = %v, want %v", key, tc.value, got, tc.want)
++				}
++				// A non-OAuth key is never a setup token, whatever the flags say.
++				if isClaudeSetupToken(auth, "sk-ant-api03-cm053-not-oauth") {
++					t.Fatalf("isClaudeSetupToken(%s=%v) with a non-OAuth key = true", key, tc.value)
++				}
++			})
++		}
++	}
++
++	if claudeauth.ReadMetadataBool(nil, "setup_token") {
++		t.Fatal("ReadMetadataBool(nil pointer) = true")
++	}
++	var nilMap map[string]any
++	if claudeauth.ReadMetadataBool(&nilMap, "setup_token") {
++		t.Fatal("ReadMetadataBool(nil map) = true")
++	}
++	if nilMap != nil {
++		t.Fatal("ReadMetadataBool allocated the metadata map")
++	}
++	if isClaudeSetupToken(&cliproxyauth.Auth{ID: "claude-cm053-nil-metadata"}, cm053SetupTokenAPIKey) {
++		t.Fatal("isClaudeSetupToken(nil metadata) = true")
++	}
++	if isClaudeSetupToken(nil, cm053SetupTokenAPIKey) {
++		t.Fatal("isClaudeSetupToken(nil auth) = true")
++	}
++}
++
++// TestCM053SetupTokenMetadataLockNotHeldAcrossProfileFetch proves the reader
++// releases the (non-reentrant) metadata mutex before the profile work: the fetch
++// callback takes the same lock and would deadlock if it were still held.
++func TestCM053SetupTokenMetadataLockNotHeldAcrossProfileFetch(t *testing.T) {
++	executor := NewClaudeExecutor(&config.Config{})
++	var fetches atomic.Int64
++	executor.oauthProfileFetcher = func(_ context.Context, auth *cliproxyauth.Auth, _ string) (*claudeauth.OAuthProfile, error) {
++		fetches.Add(1)
++		_ = claudeauth.ReadMetadataBool(&auth.Metadata, "setup_token")
++		claudeauth.StoreMetadataValue(&auth.Metadata, "cm053_fetch_probe", true)
++		profile := &claudeauth.OAuthProfile{}
++		profile.Account.UUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
++		return profile, nil
++	}
++	auth := &cliproxyauth.Auth{
++		ID:         "claude-cm053-profile-fetch",
++		Attributes: map[string]string{"api_key": cm053SetupTokenAPIKey},
++		Metadata:   map[string]any{"setup_token": false, "is_setup_token": "true"},
++	}
++
++	done := make(chan error, 1)
++	go func() {
++		_, err := executor.PrepareRequestAuth(context.Background(), auth)
++		done <- err
++	}()
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatalf("PrepareRequestAuth() error = %v", err)
++		}
++	case <-time.After(10 * time.Second):
++		t.Fatal("PrepareRequestAuth() blocked: the metadata lock is held across the profile fetch")
++	}
++	if n := fetches.Load(); n != 1 {
++		t.Fatalf("profile fetched %d times, want 1 (non-bool flags must not mark a setup token)", n)
++	}
++	if got := claudeauth.ReadMetadataString(&auth.Metadata, "account_uuid"); got != "dddddddd-dddd-4ddd-8ddd-dddddddddddd" {
++		t.Fatalf("account_uuid = %q, want the fetched profile account", got)
++	}
++}

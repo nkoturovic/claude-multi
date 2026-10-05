@@ -1,0 +1,823 @@
+{
+  "models": {
+    "astra": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "gpt-multi-astra-high[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1050000,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "1M-class candidate (sol D57 pattern): operator attests Astra 1M is enabled on their Codex subscription; public OpenAI docs say 1.05M/128K output; codex-route registry instead lists 272,000 normal / 872,000 configurable max, efforts low..max. Route acceptance verified 2026-09-05 (bounded ~310-token codex-route call returned the expected reply) — the route accepts Astra, but only ~310 input tokens were exercised, so validated_tokens stays 200,000 and the 1M fence is unverified near-limit. Joins the large profile without lowering its fence (stays qwen38's 983616). If a later probe rejects above 272,000, drop the fence to 272,000 (catalog-only).",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "high",
+      "display": "GPT-6 Astra",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "gpt-multi-astra-high[1m]",
+          "proxy_effort_contract": "reasoning-effort-high"
+        },
+        "xhigh": {
+          "agent_effort": "xhigh",
+          "client_selector": "gpt-multi-astra-xhigh[1m]",
+          "proxy_effort_contract": "reasoning-effort-xhigh"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openai",
+      "role_hints": {
+        "cm-analyst": "Use for demanding analysis and synthesis on the openai family; route acceptance verified 2026-09-05.",
+        "cm-implementer": "Use for broad implementation when an openai-family agent is wanted; route acceptance verified 2026-09-05.",
+        "cm-lead": "Use as an openai-family lead for demanding long-context work; 1M fence unverified near-limit.",
+        "cm-reviewer": "Use as an independent openai-family reviewer of alibaba/meta/deepseek-authored work; route acceptance verified 2026-09-05."
+      },
+      "routing_note": "Codex OAuth route; hidden in discovery. Route acceptance verified 2026-09-05 (~310-token probe). Declared 1M-class; near-limit unverified. Lead-capable since catalog22.",
+      "wire_model": "gpt-6-astra"
+    },
+    "deepseek-flash": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-deepseek-flash-high[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1000000,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Provider-documented bound: DeepSeek's Models & Pricing doc states 1M context and 384K max output for deepseek-flash (docs re-verified 2026-09-10, V4.1-Flash release). The [1m] client selector gives Claude Code extended-context classification; the compiler applies the 90% auto-compaction percentage to the provider window (composition leads get the full 1M; the ordinary large-profile fence derives the current min, 983616). Wire/auth/blocks smoke-verified 2026-08-12 (x-api-key and Bearer both answer; thinking+text blocks canonical); near-limit unverified until a live acceptance call, so validated_tokens stays at the conservative 200,000 docs floor (matching its Pro sibling). Vision is documented upstream for this model but is NOT verified through this gateway.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "high",
+      "display": "DeepSeek V4.1 Flash",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "claude-multi-deepseek-flash-high[1m]",
+          "proxy_effort_contract": "output-config-high"
+        },
+        "max": {
+          "agent_effort": "max",
+          "client_selector": "claude-multi-deepseek-flash-max[1m]",
+          "proxy_effort_contract": "output-config-max"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "deepseek",
+      "role_hints": {
+        "cm-analyst": "Use for fast, cheap exploration, analysis, and side-task sweeps.",
+        "cm-implementer": "Use for bounded, selective implementation tasks.",
+        "cm-reviewer": "Use for a quick second look; not the deepest review lane."
+      },
+      "routing_note": "DeepSeek flash: canonical id since 2026-09-10, currently V4.1-Flash. Retired deepseek-v4-flash still redirects here (no stated sunset). Thinking always on; effort pinned per lane. Fast, cheap side-task workhorse.",
+      "wire_model": "deepseek-flash"
+    },
+    "deepseek-pro": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-deepseek-pro-high[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1000000,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Provider-documented: stable alias deepseek-v4-pro; docs give 1M context and 384K max output (re-verified 2026-09-10). From 2026-09-14 04:00 UTC DeepSeek routes this wire to V4.1-Flash at V4.1-Flash prices until V4.1-Pro launches, so this entry then shares deepseek-flash's upstream model; no dated Pro callable id is documented. [1m] gives extended-context classification; leads use 1M, the large profile derives 983616. Live 2026-08-19 (then V4-Pro-0813): a named forced tool_choice was rejected in thinking mode; the corrected max call omitted tool_choice and returned HTTP 200 with thinking plus one model-selected tool_use. Route/auth/tool shape verified, not 1M. validated_tokens=200000 is a docs floor, not measured; near-limit unverified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "high",
+      "display": "DeepSeek V4 Pro",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "claude-multi-deepseek-pro-high[1m]",
+          "proxy_effort_contract": "output-config-high"
+        },
+        "max": {
+          "agent_effort": "max",
+          "client_selector": "claude-multi-deepseek-pro-max[1m]",
+          "proxy_effort_contract": "output-config-max"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "deepseek",
+      "role_hints": {
+        "cm-analyst": "Use for broad structural analysis, architecture, refactoring plans, and documentation after a Flash bug scan; Qwen/Sol remain stronger general escalations.",
+        "cm-implementer": "Use for careful production fixes, multi-file implementation, and finalization. After 2026-09-14 this wire serves the same model as deepseek-flash, so the Flash entry is the clearer choice.",
+        "cm-reviewer": "Use to fact-check Flash findings and verify implementation detail; same-family review does not satisfy independence for DeepSeek-authored work."
+      },
+      "routing_note": "DeepSeek Pro wire slot: from 2026-09-14 04:00 UTC DeepSeek reroutes deepseek-v4-pro to V4.1-Flash at Flash prices until V4.1-Pro ships. Thinking default-on. While the wire serves Flash, deepseek-flash is the same model under a clearer name.",
+      "wire_model": "deepseek-v4-pro"
+    },
+    "fable": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-fable-5[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-reviewer",
+        "cm-implementer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Selector-classified 1M in daily ordinary operation through the gateway; canonical first-party selector retained for the native refusal fallback.",
+        "scalar_tokens": null,
+        "validated_tokens": 1000000
+      },
+      "default_lane": "max",
+      "display": "Fable 5 · 1M selector",
+      "lanes": {
+        "max": {
+          "agent_effort": "max",
+          "client_selector": "claude-fable-5[1m]",
+          "proxy_effort_contract": null
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "role_hints": {
+        "cm-analyst": "Use for the hardest, most complex analysis and synthesis tasks.",
+        "cm-implementer": "Use for exceptional end-to-end scope requiring sustained coordination.",
+        "cm-reviewer": "Use as the finalizer for the hardest, most consequential verdicts."
+      },
+      "routing_note": "Sustained long-horizon, high-complexity synthesis and coordination.",
+      "wire_model": "claude-fable-5"
+    },
+    "fable51": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-fable-5-1[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-reviewer",
+        "cm-implementer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fable 5.1 (docs GA 1M/128K, $10/$50) on the canonical first-party selector; the 1M window is documented plus selector-classified, not near-limit measured, so the validated floor stays conservative.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "max",
+      "display": "Fable 5.1 · 1M selector",
+      "lanes": {
+        "max": {
+          "agent_effort": "max",
+          "client_selector": "claude-fable-5-1[1m]",
+          "proxy_effort_contract": null
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.257",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "role_hints": {
+        "cm-analyst": "Use for the hardest, most complex analysis and synthesis tasks.",
+        "cm-implementer": "Use for exceptional end-to-end scope requiring sustained coordination.",
+        "cm-reviewer": "Use as the finalizer for the hardest, most consequential verdicts."
+      },
+      "routing_note": "Fable 5.1: the current Fable generation for sustained long-horizon, high-complexity synthesis and coordination. Distinct from the legacy `fable` entry, which still targets Fable 5.",
+      "wire_model": "claude-fable-5-1"
+    },
+    "glm52": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-glm52-max[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "HF-documented 1M context (zai-org/GLM-5.2, 1M-token window); canary-verified served at the Qwen Token Plan apps/anthropic path with wire id glm-5.2 and default-on thinking (2026-07-29, one bounded approved call). [1m] client selector with the compiler's 90% auto-compaction percentage of the 1M window; near-limit real-provider behavior unverified until a separately approved live acceptance.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "max",
+      "display": "GLM-5.2",
+      "lanes": {
+        "max": {
+          "agent_effort": "max",
+          "client_selector": "claude-multi-glm52-max[1m]",
+          "proxy_effort_contract": "reasoning-effort-max"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "qwen",
+      "role_hints": {
+        "cm-analyst": "Use for broad architecture, security, or repository-wide synthesis.",
+        "cm-implementer": "Use when implementation requires broad context across many files.",
+        "cm-reviewer": "Use for architecture/plan validation, security review, and broad cross-cutting, complex, high-risk, or large-context changes."
+      },
+      "routing_note": "GLM-5.2 (Zhipu) flagship reasoning model; thinking default-on (canary-verified); reasoning_effort=max per HF docs. Served via the Qwen Token Plan (same apps/anthropic endpoint and key as qwen38).",
+      "wire_model": "glm-5.2"
+    },
+    "gpt55": {
+      "capabilities": [
+        "agents"
+      ],
+      "client_selector": "gpt-multi-gpt55-high",
+      "compatible_roles": [
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 258400,
+        "declared_tokens": 272000,
+        "ordinary_profile": null,
+        "provider_stated_limit_tokens": 272000,
+        "provider_tokens": 258400,
+        "qualification": "Same Codex subscription route as sol: server catalog 272000 with 95% effective → fence at 258,400 (corrected 2026-08-12 alongside sol; was 272K).",
+        "scalar_tokens": 258400,
+        "validated_tokens": 258400
+      },
+      "default_lane": "high",
+      "display": "GPT-5.5",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "gpt-multi-gpt55-high",
+          "proxy_effort_contract": "reasoning-effort-high"
+        }
+      },
+      "lead": null,
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openai",
+      "role_hints": {
+        "cm-reviewer": "Use for routine bounded review."
+      },
+      "routing_note": "Routine bounded independent review and tie-breaking.",
+      "wire_model": "gpt-5.5"
+    },
+    "grok46": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-grok46-xhigh",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 500000,
+        "declared_tokens": 500000,
+        "ordinary_profile": "grok",
+        "provider_tokens": 500000,
+        "qualification": "OpenRouter lists exact slug x-ai/grok-4.6 at 500K context and $2/$6 per 1M; prompts >=200K bill $4/$12 for ALL tokens (docs 2026-08-19). xAI documents low/medium/high/xhigh effort. The catalog pins the concrete slug; moving alias ~x-ai/grok-latest conflicts with D3 because a retarget could change context/effort without a catalog change. Live 2026-08-19: exact-slug high and xhigh output_config routes returned valid thinking/tool_use; xhigh streaming preserved ordered thinking, redacted_thinking, tool_use, and tool-use stop. validated_tokens=200000 remains a conservative docs floor; 500K near-limit/max completion are unverified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "xhigh",
+      "display": "Grok 4.6",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "claude-multi-grok46-high",
+          "proxy_effort_contract": "output-config-high"
+        },
+        "xhigh": {
+          "agent_effort": "xhigh",
+          "client_selector": "claude-multi-grok46-xhigh",
+          "proxy_effort_contract": "output-config-xhigh"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openrouter",
+      "role_hints": {
+        "cm-analyst": "Use for frontier long-running analysis and knowledge work from the x-ai family; on par with Qwen3.8 Max and GPT-5.6 Sol.",
+        "cm-implementer": "Use for long-running agentic coding and ambitious multi-step implementation when an x-ai-family route is wanted.",
+        "cm-reviewer": "Use for independent x-ai-family review of DeepSeek/alibaba/openai work; request xhigh pending route acceptance."
+      },
+      "routing_note": "Grok 4.6 via OpenRouter exact slug; long-running agents/coding/knowledge work, on par with Qwen3.8 Max and Sol. output_config xhigh requested (probe-pending). ~x-ai/grok-latest currently points here but is not wired (D3 moving authority).",
+      "wire_model": "x-ai/grok-4.6"
+    },
+    "kimi-k3": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-kimi-k3[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_stated_limit_tokens": 262144,
+        "provider_tokens": 1000000,
+        "qualification": "Client [1m] selector self-classifies extended context and Claude Code clamps it to 1,000,000; the canonical proxy route is intentionally operated as a 1M route from the user's supported subscription. The provider's Anthropic-shape GET /v1/models advertises context_length 1048576 for k3 (verified 2026-08-10 via an approval-gated read-only probe). Direct local benchmark: largest located success 208,034 tokens; two ~373K attempts failed HTTP 400 with a provider-stated 262,144 limit on an older pre-canonical-wire route. The 1M bound is provider-advertised but not benchmark-verified near the limit until a separately approved live acceptance call.",
+        "scalar_tokens": null,
+        "user_reported_tokens": 1000000,
+        "validated_tokens": 208034
+      },
+      "default_lane": "max",
+      "display": "Kimi K3 · 1M selector",
+      "lanes": {
+        "max": {
+          "agent_effort": "max",
+          "client_selector": "claude-multi-kimi-k3[1m]",
+          "proxy_effort_contract": "output-config-max"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "kimi",
+      "role_hints": {
+        "cm-analyst": "Use for broad architecture, security, or repository-wide synthesis.",
+        "cm-implementer": "Use when implementation requires broad context across many files.",
+        "cm-reviewer": "Use for architecture/plan validation, security review, and broad cross-cutting, complex, high-risk, or large-context changes."
+      },
+      "routing_note": "Broad-context analysis and coordinated multi-file implementation.",
+      "wire_model": "k3"
+    },
+    "muse-spark": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-muse-spark-xhigh[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Official Meta Model API documentation: muse-spark-1.3 carries 1,048,576 context on both variants; max output is not officially documented (131,072 appears only in the coding-agents guide — treat as unverified). Effort is output_config.effort low/medium/high/xhigh (no max); thinking always on (disabled errors). Route acceptance (auth, thinking, tool, streaming, effort passthrough) remains separately live-probe-gated; validated_tokens 200000 is the conservative floor until then. Near-limit 1M behavior unverified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "xhigh",
+      "display": "Muse Spark 1.3",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "claude-multi-muse-spark-high[1m]",
+          "proxy_effort_contract": "output-config-high"
+        },
+        "xhigh": {
+          "agent_effort": "xhigh",
+          "client_selector": "claude-multi-muse-spark-xhigh[1m]",
+          "proxy_effort_contract": "output-config-xhigh"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "meta",
+      "role_hints": {
+        "cm-analyst": "Use for broad architecture, security, or repository-wide synthesis from the meta family.",
+        "cm-implementer": "Use when implementation requires broad context across many files with meta-family independence.",
+        "cm-reviewer": "Use for independent meta-family review of alibaba/openai/deepseek-authored work; never for same-family review."
+      },
+      "routing_note": "Meta reasoning flagship through the Model API Messages adapter; thinking always on, xhigh top effort; independent meta family for cross-family review.",
+      "wire_model": "muse-spark-1.3"
+    },
+    "muse-spark-contributor": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-muse-spark-contributor-high[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Contributor tier of muse-spark-1.3: same 1,048,576 context; costs roughly one tenth of the standard tier, but outputs may be used to improve Meta products (privacy caveat) and the tier is capped near 100 RPM. Max output undocumented (131,072 unverified). Route acceptance remains separately live-probe-gated; validated_tokens 200000 is the conservative floor; near-limit behavior unverified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "high",
+      "display": "Muse Spark 1.3 Contributor",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "claude-multi-muse-spark-contributor-high[1m]",
+          "proxy_effort_contract": "output-config-high"
+        },
+        "xhigh": {
+          "agent_effort": "xhigh",
+          "client_selector": "claude-multi-muse-spark-contributor-xhigh[1m]",
+          "proxy_effort_contract": "output-config-xhigh"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "meta",
+      "role_hints": {
+        "cm-analyst": "Cheap broad analysis from the meta family; outputs may train Meta products — avoid confidential material.",
+        "cm-implementer": "Cheap broad implementation; 100 RPM tier — keep fan-outs small; outputs may train Meta products.",
+        "cm-reviewer": "Cheap independent meta-family review; outputs may train Meta products — avoid confidential material."
+      },
+      "routing_note": "Low-cost muse-spark tier: outputs may train Meta products (privacy), ~100 RPM cap; avoid confidential work; same 1M context.",
+      "wire_model": "muse-spark-1.3-contributor"
+    },
+    "opus": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-opus-4-8[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Selector-classified 1M in ordinary operation; canonical refusal fallback target for Fable-led sessions.",
+        "scalar_tokens": null,
+        "validated_tokens": 1000000
+      },
+      "default_lane": "xhigh",
+      "display": "Opus 4.8 · 1M selector",
+      "lanes": {
+        "xhigh": {
+          "agent_effort": "xhigh",
+          "client_selector": "claude-multi-opus-4-8[1m]",
+          "proxy_effort_contract": null
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "role_hints": {
+        "cm-reviewer": "Use for the optional Claude-native independent verdict."
+      },
+      "routing_note": "Claude-native independent check for high-risk review.",
+      "wire_model": "claude-opus-4-8"
+    },
+    "opus5": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-opus-5[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Opus-family 1M selector carried over from 4.8; the release announcement states no context bound — user-attested until near-limit acceptance.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "xhigh",
+      "display": "Opus 5 · 1M selector",
+      "lanes": {
+        "xhigh": {
+          "agent_effort": "xhigh",
+          "client_selector": "claude-multi-opus-5[1m]",
+          "proxy_effort_contract": null
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.218",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "role_hints": {
+        "cm-lead": "Use for the strongest cost-efficient default lead profile.",
+        "cm-reviewer": "Use for the optional Claude-native independent verdict."
+      },
+      "routing_note": "Near-Fable frontier intelligence at Opus cost; the strongest cost-efficient default lead and Claude-native verdict option.",
+      "wire_model": "claude-opus-5"
+    },
+    "opus55": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-opus-5-5[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Opus 5.5 (docs GA 1M/128K, default effort medium, $4/$20) on the claude-multi 1M selector; the 1M window is documented plus selector-classified, not near-limit measured, so the validated floor stays conservative.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "xhigh",
+      "display": "Opus 5.5 · 1M selector",
+      "lanes": {
+        "xhigh": {
+          "agent_effort": "xhigh",
+          "client_selector": "claude-multi-opus-5-5[1m]",
+          "proxy_effort_contract": null
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.280",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "role_hints": {
+        "cm-lead": "Use as the strongest cost-efficient default lead (cheaper than Opus 5).",
+        "cm-reviewer": "Use for the Claude-native independent verdict."
+      },
+      "routing_note": "Opus 5.5: the current Opus generation — cheaper than Opus 5 ($4/$20) with its own default effort; distinct from the legacy `opus` (4.8) and `opus5` entries, which remain selectable.",
+      "wire_model": "claude-opus-5-5"
+    },
+    "qwen-flash-next": {
+      "capabilities": [
+        "lead"
+      ],
+      "client_selector": "claude-multi-qwen-flash-next",
+      "compatible_roles": [
+        "cm-lead"
+      ],
+      "context": {
+        "client_tokens": 320032,
+        "declared_tokens": 431104,
+        "ordinary_profile": "flash431",
+        "provider_tokens": 320032,
+        "qualification": "Local ik_llama.cpp (LAN host, keyless OpenAI-compatible): live /props n_ctx=431104, completion reserve 131072 = 300032 input budget; fence 320032 adds Claude Code's 20K reserve (trigger 270028). Acceptance-probed 2026-09-06 direct + via gateway (server accepts the qwen3.8-flash-next name; force-mapping returns our alias). Production serves the GGUF-path id with no alias yet (a server --alias is future work); the GGUF id keeps working for direct LAN users. Near-limit unverified. Text-only; recall at depth unqualified per serving docs.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_lane": "high",
+      "display": "Qwen3.8 Flash Next (local)",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "claude-multi-qwen-flash-next",
+          "proxy_effort_contract": null
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "llm-local",
+      "role_hints": {
+        "cm-lead": "Use as a local keyless lead for long-context work after the alias/acceptance gates pass; unprobed routes must not serve real work."
+      },
+      "routing_note": "Keyless LAN lead for large local context; use only after listing confirms the served alias and an acceptance probe passes. Text-only.",
+      "wire_model": "qwen3.8-flash-next"
+    },
+    "qwen38": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "claude-multi-qwen38-max[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 983616,
+        "ordinary_profile": "large",
+        "provider_tokens": 983616,
+        "qualification": "Provider-documented bound: the official Token Plan Claude Code doc recommends 983616 for qwen3.8-max. The [1m] client selector gives Claude Code extended-context classification while the compiler applies a 90% auto-compaction percentage to the 983616-token provider window. Selector suffix stripping and exact wire-model mapping are covered offline; near-limit real-provider behavior remains unverified until a live acceptance call.",
+        "scalar_tokens": 983616,
+        "validated_tokens": 983616
+      },
+      "default_lane": "max",
+      "display": "Qwen3.8 Max",
+      "lanes": {
+        "max": {
+          "agent_effort": "max",
+          "client_selector": "claude-multi-qwen38-max[1m]",
+          "proxy_effort_contract": "reasoning-effort-xhigh"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "qwen",
+      "role_hints": {
+        "cm-analyst": "Use for broad architecture, security, or repository-wide synthesis.",
+        "cm-implementer": "Use when implementation requires broad context across many files.",
+        "cm-reviewer": "Use for architecture/plan validation, security review, and broad cross-cutting, complex, high-risk, or large-context changes."
+      },
+      "routing_note": "Qwen flagship; thinking always on (reasoning_effort pinned xhigh, provider max). Preferred max-lane escalation ahead of glm52.",
+      "wire_model": "qwen3.8-max"
+    },
+    "sol": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "client_selector": "gpt-multi-sol-high[1m]",
+      "compatible_roles": [
+        "cm-lead",
+        "cm-analyst",
+        "cm-implementer",
+        "cm-reviewer"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1050000,
+        "ordinary_profile": "large",
+        "provider_stated_limit_tokens": 1050000,
+        "provider_tokens": 1000000,
+        "qualification": "1M on the ChatGPT/Codex subscription route, documented 2026-08-12 by OpenAI (model_context_window=1000000, auto-compact ~900K): GPT-5.6 Sol's documented window is 1,050,000; we fence at 1M with the [1m] selector classifying extended context. Composition leads get the full 1M (reactive trigger 882,000); the ordinary large-profile fence derives the current min, 983,616 (trigger 867,254). History: 372K worked pre-July-2026; the metadata cuts forced D56's 258,400; the 1M enablement supersedes it. Acceptance verified 2026-08-18: 343,541 input tokens accepted through the codex pool (approval-gated bounded probe); near-limit (1M) behavior remains unverified.",
+        "scalar_tokens": null,
+        "validated_tokens": 343541
+      },
+      "default_lane": "high",
+      "display": "GPT-5.6 Sol",
+      "lanes": {
+        "high": {
+          "agent_effort": "high",
+          "client_selector": "gpt-multi-sol-high[1m]",
+          "proxy_effort_contract": "reasoning-effort-high"
+        },
+        "xhigh": {
+          "agent_effort": "xhigh",
+          "client_selector": "gpt-multi-sol-xhigh[1m]",
+          "proxy_effort_contract": "reasoning-effort-xhigh"
+        }
+      },
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openai",
+      "role_hints": {
+        "cm-analyst": "Use for routine reconnaissance and bounded reasoning.",
+        "cm-implementer": "Use for bounded implementation in an isolated worktree.",
+        "cm-reviewer": "Use for focused review of bounded small-to-medium changes; prefer xhigh for deeper review within bounded scope."
+      },
+      "routing_note": "Main implementation and bounded-reasoning workhorse.",
+      "wire_model": "gpt-5.6-sol"
+    }
+  },
+  "version": 1
+}

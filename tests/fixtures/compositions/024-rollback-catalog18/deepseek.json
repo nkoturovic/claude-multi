@@ -1,0 +1,56 @@
+{
+  "availability": {
+    "models": {
+      "deepseek-flash": "lead+agents",
+      "fable": "off",
+      "glm52": "off",
+      "gpt55": "off",
+      "grok45": "off",
+      "kimi-k3": "off",
+      "opus": "off",
+      "opus5": "off",
+      "qwen38": "off",
+      "sol": "off"
+    },
+    "providers": {
+      "anthropic": "off",
+      "deepseek": "lead+agents",
+      "kimi": "off",
+      "openai": "off",
+      "openrouter": "off",
+      "qwen": "off"
+    }
+  },
+  "description": "DeepSeek V4 Flash throughout — the fast, cheap side-task rig (exploration, analysis, bounded implementation)",
+  "name": "deepseek",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "slots": [
+    {
+      "model": "deepseek-flash",
+      "role": "cm-lead"
+    },
+    {
+      "lane": "high",
+      "model": "deepseek-flash",
+      "preferred": true,
+      "role": "cm-analyst"
+    },
+    {
+      "lane": "high",
+      "model": "deepseek-flash",
+      "preferred": true,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "max",
+      "model": "deepseek-flash",
+      "preferred": true,
+      "role": "cm-reviewer"
+    }
+  ],
+  "version": 1
+}

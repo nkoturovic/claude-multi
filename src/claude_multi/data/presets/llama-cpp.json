@@ -1,0 +1,25 @@
+{
+  "lines": {},
+  "notes": "llama.cpp's llama-server on this computer (no key; it listens on 127.0.0.1:8080 by default). Another computer: --base-url http://HOST:8080/v1. Declaration only: add models with claude-multi discover llama-cpp --add WIRE (or claude-multi models add llama-cpp WIRE …), then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "none"
+    },
+    "base_url": "http://localhost:8080/v1",
+    "display": "llama.cpp",
+    "independence_family": "local",
+    "kind": "openai-compatible-lan",
+    "listing": {
+      "auth": "none",
+      "shape": "openai",
+      "url": "http://localhost:8080/v1/models"
+    }
+  },
+  "version": 1
+}

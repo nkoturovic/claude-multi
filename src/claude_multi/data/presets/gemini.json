@@ -1,0 +1,26 @@
+{
+  "lines": {},
+  "notes": "The Gemini API's OpenAI compatibility, which Google's documentation calls beta. Declaration only: add models with claude-multi discover gemini --add WIRE (or claude-multi models add gemini WIRE …), then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://ai.google.dev/gemini-api/docs/openai",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:GEMINI_API_KEY"
+    },
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "display": "Google Gemini",
+    "independence_family": "google",
+    "kind": "openai-compatible",
+    "listing": {
+      "auth": "provider",
+      "shape": "openai",
+      "url": "https://generativelanguage.googleapis.com/v1beta/openai/models"
+    }
+  },
+  "version": 1
+}

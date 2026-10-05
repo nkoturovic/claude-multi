@@ -1,0 +1,10 @@
+{
+  "files": [
+    {
+      "provider": "codex",
+      "status": "error",
+      "unavailable": true,
+      "status_message": "private upstream body SENTINEL"
+    }
+  ]
+}

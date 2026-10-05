@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-analyst-strong": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-explorer": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-implementer": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-implementer-light": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-implementer-strong": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-reviewer": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-reviewer-strong": {
+      "effort": "xhigh",
+      "model": "opus55"
+    }
+  },
+  "description": "Fixture seed economy: frozen test data mirroring the shipped seed's slot families.",
+  "lead": {
+    "effort": "ultracode",
+    "model": "opus55"
+  },
+  "name": "economy",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "seed": {
+    "id": "economy",
+    "version": 3
+  },
+  "version": 2,
+  "workflows": "native"
+}

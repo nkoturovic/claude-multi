@@ -1,0 +1,18 @@
+diff --git a/internal/auth/claude/oauth_server.go b/internal/auth/claude/oauth_server.go
+--- a/internal/auth/claude/oauth_server.go
++++ b/internal/auth/claude/oauth_server.go
+@@ -90 +90 @@ func (s *OAuthServer) Start() error {
+-		Addr:         fmt.Sprintf(":%d", s.port),
++		Addr:         fmt.Sprintf("127.0.0.1:%d", s.port),
+@@ -301 +301 @@ func (s *OAuthServer) isPortAvailable() bool {
+-	addr := fmt.Sprintf(":%d", s.port)
++	addr := fmt.Sprintf("127.0.0.1:%d", s.port)
+diff --git a/internal/auth/codex/oauth_server.go b/internal/auth/codex/oauth_server.go
+--- a/internal/auth/codex/oauth_server.go
++++ b/internal/auth/codex/oauth_server.go
+@@ -87 +87 @@ func (s *OAuthServer) Start() error {
+-		Addr:         fmt.Sprintf(":%d", s.port),
++		Addr:         fmt.Sprintf("127.0.0.1:%d", s.port),
+@@ -298 +298 @@ func (s *OAuthServer) isPortAvailable() bool {
+-	addr := fmt.Sprintf(":%d", s.port)
++	addr := fmt.Sprintf("127.0.0.1:%d", s.port)

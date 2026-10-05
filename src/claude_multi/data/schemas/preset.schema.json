@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "support",
+        "source",
+        "source_ref",
+        "checked"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "support": {
+          "const": "preset"
+        },
+        "source": {
+          "const": "docs"
+        },
+        "source_ref": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 256,
+          "pattern": "^https://[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]+$"
+        },
+        "checked": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "support",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "support": {
+          "const": "preset"
+        },
+        "source": {
+          "const": "generic"
+        }
+      }
+    }
+  ]
+}

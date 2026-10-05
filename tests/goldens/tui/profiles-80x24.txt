@@ -1,0 +1,24 @@
+
+  profiles
+  ─────────────────────────────────────────────────────────────────────────────
+    profile     origin  state        used   notes
+  › openrouter  seed    connected    —      fallback
+    mine        yours   not checked  2 min  default
+    balanced    seed    not checked  —
+    claude      seed    not checked  —      fallback
+    direct      seed    not checked  —
+    economy     seed    not checked  —
+    max         seed    not checked  —
+    openai      seed    not checked  —      fallback
+    quality     seed    not checked  —
+
+
+
+
+
+  ─
+  Fixture seed openrouter: frozen test data mirroring the shipped seed's slot …
+  connected: every model this profile uses is served here
+
+  Enter use · N new · E edit · C copy · D default · F fallback only
+  B bindings · W get started · ? help · Esc back

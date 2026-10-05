@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "lines": {
+    "custom-kimi-next": {
+      "wire_model": "kimi-fixture-next",
+      "display": "Kimi next",
+      "efforts": {
+        "max": "output-config-max"
+      },
+      "default_effort": "max",
+      "context": {
+        "declared_tokens": 1000000,
+        "source": "operator"
+      }
+    }
+  }
+}

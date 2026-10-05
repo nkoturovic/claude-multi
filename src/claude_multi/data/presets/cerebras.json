@@ -1,0 +1,26 @@
+{
+  "lines": {},
+  "notes": "Cerebras' OpenAI-compatible API. It serves several model families. Declaration only: add models with claude-multi discover cerebras --add WIRE (or claude-multi models add cerebras WIRE …), then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://inference-docs.cerebras.ai/api-reference/models",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:CEREBRAS_API_KEY"
+    },
+    "base_url": "https://api.cerebras.ai/v1",
+    "display": "Cerebras",
+    "independence_family": "unknown",
+    "kind": "openai-compatible",
+    "listing": {
+      "auth": "provider",
+      "shape": "openai",
+      "url": "https://api.cerebras.ai/v1/models"
+    }
+  },
+  "version": 1
+}

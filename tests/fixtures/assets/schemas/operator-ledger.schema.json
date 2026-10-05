@@ -1,0 +1,348 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": [
+    "version",
+    "routes",
+    "admissions",
+    "aliases",
+    "pruned",
+    "removed",
+    "transport_choices"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "routes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "rd",
+          "secret_ref",
+          "auth",
+          "header",
+          "origin",
+          "listing_origin",
+          "approved_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "rd": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "secret_ref": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^env:[A-Z][A-Z0-9_]{2,63}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "auth": {
+            "enum": [
+              "bearer",
+              "header",
+              "none"
+            ]
+          },
+          "header": {
+            "oneOf": [
+              {
+                "const": "x-api-key"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin": {
+            "type": "string",
+            "pattern": "^(https?)://[a-z0-9.:\\[\\]-]+$",
+            "maxLength": 256
+          },
+          "listing_origin": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^(https?)://[a-z0-9.:\\[\\]-]+$",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "approved_at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+          }
+        }
+      }
+    },
+    "admissions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "digest",
+          "at",
+          "via",
+          "diagnostic"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+          },
+          "via": {
+            "enum": [
+              "admit",
+              "migrate"
+            ]
+          },
+          "diagnostic": {
+            "type": "object",
+            "required": [
+              "wire",
+              "fields"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "wire": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$"
+              },
+              "fields": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{16}$"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "aliases": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "provider",
+          "rd",
+          "wire",
+          "proxy_contract",
+          "display",
+          "context_tokens",
+          "source",
+          "since_catalog",
+          "overlay"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "rd": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "wire": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$"
+          },
+          "proxy_contract": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "context_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^operator:custom-[a-z0-9][a-z0-9-]{0,56}$"
+          },
+          "since_catalog": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "thinking_levels": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          },
+          "overlay": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "max_context_length"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "channel": {
+                    "enum": [
+                      "claude",
+                      "codex"
+                    ]
+                  },
+                  "max_context_length": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "max_completion_tokens": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "thinking_levels": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "uniqueItems": true,
+                    "items": {
+                      "enum": [
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max",
+                        "none",
+                        "auto"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "pruned": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "removed": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "successor",
+          "last_wire",
+          "at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "successor": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_wire": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$"
+          },
+          "at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+          }
+        }
+      }
+    },
+    "transport_choices": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*$"
+      }
+    },
+    "migration": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "source_sha256",
+            "started_at",
+            "targets"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "pending"
+            },
+            "source_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "started_at": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+            },
+            "targets": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

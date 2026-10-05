@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "name": "claude-multi",
+  "launchers": [
+    "claude-multi",
+    "claude-multi-proxy"
+  ],
+  "release_base_url": "https://github.com/nkoturovic/claude-multi/releases/download/v{version}",
+  "release_latest_url": "https://github.com/nkoturovic/claude-multi/releases/latest/download",
+  "targets": {
+    "darwin-arm64": {
+      "claude_code": "darwin-arm64",
+      "gateway": "darwin-arm64"
+    },
+    "darwin-x86_64": {
+      "claude_code": "darwin-x64",
+      "gateway": "darwin-amd64"
+    },
+    "linux-aarch64": {
+      "claude_code": "linux-arm64",
+      "gateway": "linux-arm64"
+    },
+    "linux-x86_64": {
+      "claude_code": "linux-x64",
+      "gateway": "linux-amd64"
+    }
+  }
+}

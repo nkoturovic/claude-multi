@@ -1,0 +1,1047 @@
+{
+  "format": 1,
+  "python": "3.14.8",
+  "release": "20261001",
+  "source": {
+    "flavor": "pgo+lto-full",
+    "versions": "pythonbuild/downloads.json of 20261001 (sha256 aa414fa00b86acf8c2ccec2afe27355d5f4d030965f760c693aae21164155d08)"
+  },
+  "targets": {
+    "darwin-arm64": {
+      "extensions_without_libraries": [
+        "_ctypes_test"
+      ],
+      "full_archive": {
+        "filename": "cpython-3.14.8+20261001-aarch64-apple-darwin-pgo+lto-full.tar.zst",
+        "sha256": "1135418d10836dc2ca298391f0a30901015017eacb98a3caf40b1cb29aa405ba",
+        "size": 61606054
+      },
+      "install_only": {
+        "filename": "cpython-3.14.8+20261001-aarch64-apple-darwin-install_only_stripped.tar.gz",
+        "sha256": "69e48cd7f54261df5b6abbd374f69fe6e496fa781d271592aeef49cd5ffbea6c"
+      },
+      "libraries": [
+        {
+          "extensions": [
+            "_bz2"
+          ],
+          "name": "bzip2",
+          "spdx": [
+            "bzip2-1.0.6"
+          ],
+          "texts": [
+            "LICENSE.bzip2.txt"
+          ],
+          "version": "1.0.8"
+        },
+        {
+          "extensions": [
+            "pyexpat"
+          ],
+          "name": "expat",
+          "spdx": [
+            "MIT"
+          ],
+          "texts": [
+            "LICENSE.expat.txt"
+          ],
+          "version": "2.8.5"
+        },
+        {
+          "extensions": [
+            "_ctypes"
+          ],
+          "name": "libffi",
+          "spdx": [
+            "MIT"
+          ],
+          "texts": [
+            "LICENSE.libffi.txt"
+          ],
+          "version": "3.4.8"
+        },
+        {
+          "extensions": [
+            "_decimal"
+          ],
+          "name": "mpdecimal",
+          "spdx": [
+            "BSD-2-Clause"
+          ],
+          "texts": [
+            "LICENSE.mpdecimal.txt"
+          ],
+          "version": "4.0.0"
+        },
+        {
+          "extensions": [
+            "_hashlib",
+            "_ssl"
+          ],
+          "name": "openssl-3.5",
+          "spdx": [
+            "Apache-2.0"
+          ],
+          "texts": [
+            "LICENSE.openssl-3.txt"
+          ],
+          "version": "3.5.9"
+        },
+        {
+          "extensions": [
+            "_sqlite3"
+          ],
+          "name": "sqlite",
+          "public_domain": true,
+          "spdx": [],
+          "texts": [
+            "LICENSE.sqlite.txt"
+          ],
+          "version": "3.53.1"
+        },
+        {
+          "extensions": [
+            "_uuid"
+          ],
+          "name": "uuid",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.libuuid.txt"
+          ],
+          "version": "1.0.3"
+        },
+        {
+          "extensions": [
+            "_lzma"
+          ],
+          "name": "xz",
+          "spdx": [
+            "0BSD"
+          ],
+          "texts": [
+            "LICENSE.liblzma.txt"
+          ],
+          "version": "5.8.4"
+        },
+        {
+          "extensions": [
+            "_zstd"
+          ],
+          "name": "zstd",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.zstd.txt"
+          ],
+          "version": "1.5.7"
+        }
+      ],
+      "pruned": [
+        {
+          "extension": "_dbm",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_dbm*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testbuffer",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testcapi",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testimportmultiple",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testlimitedcapi",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testmultiphase",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testsinglephase",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_tkinter",
+          "libraries": [
+            {
+              "name": "tcl",
+              "spdx": [
+                "TCL"
+              ],
+              "version": "9.0.4"
+            },
+            {
+              "name": "tk",
+              "spdx": [
+                "TCL"
+              ],
+              "version": "9.0.4"
+            }
+          ],
+          "pattern": "lib/python3.14/lib-dynload/_tkinter*",
+          "reason": "on the runtime's delete-only list"
+        }
+      ],
+      "runtime": {
+        "name": "cpython",
+        "spdx": [
+          "Python-2.0",
+          "CNRI-Python"
+        ],
+        "text": "LICENSE.txt",
+        "version": "3.14.8"
+      }
+    },
+    "darwin-x86_64": {
+      "extensions_without_libraries": [
+        "_ctypes_test"
+      ],
+      "full_archive": {
+        "filename": "cpython-3.14.8+20261001-x86_64-apple-darwin-pgo+lto-full.tar.zst",
+        "sha256": "6533ea7109c5f808dec73766bb520e6df14890cfcfe76c8b900c46603056cc55",
+        "size": 61198063
+      },
+      "install_only": {
+        "filename": "cpython-3.14.8+20261001-x86_64-apple-darwin-install_only_stripped.tar.gz",
+        "sha256": "d613a1cb9e31dd512298c73fd300975e689938cc39d1486250cf47918963061c"
+      },
+      "libraries": [
+        {
+          "extensions": [
+            "_bz2"
+          ],
+          "name": "bzip2",
+          "spdx": [
+            "bzip2-1.0.6"
+          ],
+          "texts": [
+            "LICENSE.bzip2.txt"
+          ],
+          "version": "1.0.8"
+        },
+        {
+          "extensions": [
+            "pyexpat"
+          ],
+          "name": "expat",
+          "spdx": [
+            "MIT"
+          ],
+          "texts": [
+            "LICENSE.expat.txt"
+          ],
+          "version": "2.8.5"
+        },
+        {
+          "extensions": [
+            "_ctypes"
+          ],
+          "name": "libffi",
+          "spdx": [
+            "MIT"
+          ],
+          "texts": [
+            "LICENSE.libffi.txt"
+          ],
+          "version": "3.4.8"
+        },
+        {
+          "extensions": [
+            "_decimal"
+          ],
+          "name": "mpdecimal",
+          "spdx": [
+            "BSD-2-Clause"
+          ],
+          "texts": [
+            "LICENSE.mpdecimal.txt"
+          ],
+          "version": "4.0.0"
+        },
+        {
+          "extensions": [
+            "_hashlib",
+            "_ssl"
+          ],
+          "name": "openssl-3.5",
+          "spdx": [
+            "Apache-2.0"
+          ],
+          "texts": [
+            "LICENSE.openssl-3.txt"
+          ],
+          "version": "3.5.9"
+        },
+        {
+          "extensions": [
+            "_sqlite3"
+          ],
+          "name": "sqlite",
+          "public_domain": true,
+          "spdx": [],
+          "texts": [
+            "LICENSE.sqlite.txt"
+          ],
+          "version": "3.53.1"
+        },
+        {
+          "extensions": [
+            "_uuid"
+          ],
+          "name": "uuid",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.libuuid.txt"
+          ],
+          "version": "1.0.3"
+        },
+        {
+          "extensions": [
+            "_lzma"
+          ],
+          "name": "xz",
+          "spdx": [
+            "0BSD"
+          ],
+          "texts": [
+            "LICENSE.liblzma.txt"
+          ],
+          "version": "5.8.4"
+        },
+        {
+          "extensions": [
+            "_zstd"
+          ],
+          "name": "zstd",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.zstd.txt"
+          ],
+          "version": "1.5.7"
+        }
+      ],
+      "pruned": [
+        {
+          "extension": "_dbm",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_dbm*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testbuffer",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testcapi",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testimportmultiple",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testlimitedcapi",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testmultiphase",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testsinglephase",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_tkinter",
+          "libraries": [
+            {
+              "name": "tcl",
+              "spdx": [
+                "TCL"
+              ],
+              "version": "9.0.4"
+            },
+            {
+              "name": "tk",
+              "spdx": [
+                "TCL"
+              ],
+              "version": "9.0.4"
+            }
+          ],
+          "pattern": "lib/python3.14/lib-dynload/_tkinter*",
+          "reason": "on the runtime's delete-only list"
+        }
+      ],
+      "runtime": {
+        "name": "cpython",
+        "spdx": [
+          "Python-2.0",
+          "CNRI-Python"
+        ],
+        "text": "LICENSE.txt",
+        "version": "3.14.8"
+      }
+    },
+    "linux-aarch64": {
+      "extensions_without_libraries": [
+        "_ctypes_test"
+      ],
+      "full_archive": {
+        "filename": "cpython-3.14.8+20261001-aarch64-unknown-linux-gnu-pgo+lto-full.tar.zst",
+        "sha256": "15f23cb65278486f65c718e0fe706d131dd25ffb8bed99ef5676daf4ffebd9d3",
+        "size": 96982577
+      },
+      "install_only": {
+        "filename": "cpython-3.14.8+20261001-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "4395ae16388f9d3409cba7e20161753ed3359b13d959345415029f874f675162"
+      },
+      "libraries": [
+        {
+          "extensions": [
+            "_bz2"
+          ],
+          "name": "bzip2",
+          "spdx": [
+            "bzip2-1.0.6"
+          ],
+          "texts": [
+            "LICENSE.bzip2.txt"
+          ],
+          "version": "1.0.8"
+        },
+        {
+          "extensions": [
+            "pyexpat"
+          ],
+          "name": "expat",
+          "spdx": [
+            "MIT"
+          ],
+          "texts": [
+            "LICENSE.expat.txt"
+          ],
+          "version": "2.8.5"
+        },
+        {
+          "extensions": [
+            "readline"
+          ],
+          "name": "libedit",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.libedit.txt"
+          ],
+          "version": "20240808-3.1"
+        },
+        {
+          "extensions": [
+            "_ctypes"
+          ],
+          "name": "libffi",
+          "spdx": [
+            "MIT"
+          ],
+          "texts": [
+            "LICENSE.libffi.txt"
+          ],
+          "version": "3.4.8"
+        },
+        {
+          "extensions": [
+            "_decimal"
+          ],
+          "name": "mpdecimal",
+          "spdx": [
+            "BSD-2-Clause"
+          ],
+          "texts": [
+            "LICENSE.mpdecimal.txt"
+          ],
+          "version": "4.0.0"
+        },
+        {
+          "extensions": [
+            "_curses",
+            "_curses_panel",
+            "readline"
+          ],
+          "name": "ncurses",
+          "spdx": [
+            "X11"
+          ],
+          "texts": [
+            "LICENSE.ncurses.txt"
+          ],
+          "version": "6.5"
+        },
+        {
+          "extensions": [
+            "_hashlib",
+            "_ssl"
+          ],
+          "name": "openssl-3.5",
+          "spdx": [
+            "Apache-2.0"
+          ],
+          "texts": [
+            "LICENSE.openssl-3.txt"
+          ],
+          "version": "3.5.9"
+        },
+        {
+          "extensions": [
+            "_sqlite3"
+          ],
+          "name": "sqlite",
+          "public_domain": true,
+          "spdx": [],
+          "texts": [
+            "LICENSE.sqlite.txt"
+          ],
+          "version": "3.53.1"
+        },
+        {
+          "extensions": [
+            "_uuid"
+          ],
+          "name": "uuid",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.libuuid.txt"
+          ],
+          "version": "1.0.3"
+        },
+        {
+          "extensions": [
+            "_lzma"
+          ],
+          "name": "xz",
+          "spdx": [
+            "0BSD"
+          ],
+          "texts": [
+            "LICENSE.liblzma.txt"
+          ],
+          "version": "5.8.4"
+        },
+        {
+          "extensions": [
+            "binascii",
+            "zlib"
+          ],
+          "name": "zlib",
+          "spdx": [
+            "Zlib"
+          ],
+          "texts": [
+            "LICENSE.zlib.txt"
+          ],
+          "version": "1.3.2"
+        },
+        {
+          "extensions": [
+            "_zstd"
+          ],
+          "name": "zstd",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.zstd.txt"
+          ],
+          "version": "1.5.7"
+        }
+      ],
+      "pruned": [
+        {
+          "extension": "_dbm",
+          "libraries": [
+            {
+              "name": "bdb",
+              "spdx": [
+                "Sleepycat"
+              ],
+              "version": "6.0.19"
+            }
+          ],
+          "pattern": "lib/python3.14/lib-dynload/_dbm*",
+          "reason": "strong copyleft; claude-multi never imports it"
+        },
+        {
+          "extension": "_testbuffer",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testcapi",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testimportmultiple",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testlimitedcapi",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testmultiphase",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testsinglephase",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_tkinter",
+          "libraries": [
+            {
+              "name": "libX11",
+              "spdx": [
+                "MIT",
+                "X11"
+              ],
+              "version": "1.8.13"
+            },
+            {
+              "name": "libXau",
+              "spdx": [
+                "MIT"
+              ],
+              "version": "1.0.12"
+            },
+            {
+              "name": "libxcb",
+              "spdx": [
+                "MIT"
+              ],
+              "version": "1.17.0"
+            },
+            {
+              "name": "tcl",
+              "spdx": [
+                "TCL"
+              ],
+              "version": "9.0.4"
+            },
+            {
+              "name": "tk",
+              "spdx": [
+                "TCL"
+              ],
+              "version": "9.0.4"
+            },
+            {
+              "name": "zlib",
+              "spdx": [
+                "Zlib"
+              ],
+              "version": "1.3.2"
+            }
+          ],
+          "pattern": "lib/python3.14/lib-dynload/_tkinter*",
+          "reason": "on the runtime's delete-only list"
+        }
+      ],
+      "runtime": {
+        "name": "cpython",
+        "spdx": [
+          "Python-2.0",
+          "CNRI-Python"
+        ],
+        "text": "LICENSE.txt",
+        "version": "3.14.8"
+      }
+    },
+    "linux-x86_64": {
+      "extensions_without_libraries": [
+        "_ctypes_test"
+      ],
+      "full_archive": {
+        "filename": "cpython-3.14.8+20261001-x86_64-unknown-linux-gnu-pgo+lto-full.tar.zst",
+        "sha256": "0f5cfcf664aa406ee958625ed5b29b1bfc76d553e8ad1304f48fec39b74e0554",
+        "size": 111212592
+      },
+      "install_only": {
+        "filename": "cpython-3.14.8+20261001-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "b373a4a4e4e70fc05f368c9b53d7738bf37637682b650d96c742805d2da26c32"
+      },
+      "libraries": [
+        {
+          "extensions": [
+            "_bz2"
+          ],
+          "name": "bzip2",
+          "spdx": [
+            "bzip2-1.0.6"
+          ],
+          "texts": [
+            "LICENSE.bzip2.txt"
+          ],
+          "version": "1.0.8"
+        },
+        {
+          "extensions": [
+            "pyexpat"
+          ],
+          "name": "expat",
+          "spdx": [
+            "MIT"
+          ],
+          "texts": [
+            "LICENSE.expat.txt"
+          ],
+          "version": "2.8.5"
+        },
+        {
+          "extensions": [
+            "readline"
+          ],
+          "name": "libedit",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.libedit.txt"
+          ],
+          "version": "20240808-3.1"
+        },
+        {
+          "extensions": [
+            "_ctypes"
+          ],
+          "name": "libffi",
+          "spdx": [
+            "MIT"
+          ],
+          "texts": [
+            "LICENSE.libffi.txt"
+          ],
+          "version": "3.4.8"
+        },
+        {
+          "extensions": [
+            "_decimal"
+          ],
+          "name": "mpdecimal",
+          "spdx": [
+            "BSD-2-Clause"
+          ],
+          "texts": [
+            "LICENSE.mpdecimal.txt"
+          ],
+          "version": "4.0.0"
+        },
+        {
+          "extensions": [
+            "_curses",
+            "_curses_panel",
+            "readline"
+          ],
+          "name": "ncurses",
+          "spdx": [
+            "X11"
+          ],
+          "texts": [
+            "LICENSE.ncurses.txt"
+          ],
+          "version": "6.5"
+        },
+        {
+          "extensions": [
+            "_hashlib",
+            "_ssl"
+          ],
+          "name": "openssl-3.5",
+          "spdx": [
+            "Apache-2.0"
+          ],
+          "texts": [
+            "LICENSE.openssl-3.txt"
+          ],
+          "version": "3.5.9"
+        },
+        {
+          "extensions": [
+            "_sqlite3"
+          ],
+          "name": "sqlite",
+          "public_domain": true,
+          "spdx": [],
+          "texts": [
+            "LICENSE.sqlite.txt"
+          ],
+          "version": "3.53.1"
+        },
+        {
+          "extensions": [
+            "_uuid"
+          ],
+          "name": "uuid",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.libuuid.txt"
+          ],
+          "version": "1.0.3"
+        },
+        {
+          "extensions": [
+            "_lzma"
+          ],
+          "name": "xz",
+          "spdx": [
+            "0BSD"
+          ],
+          "texts": [
+            "LICENSE.liblzma.txt"
+          ],
+          "version": "5.8.4"
+        },
+        {
+          "extensions": [
+            "binascii",
+            "zlib"
+          ],
+          "name": "zlib",
+          "spdx": [
+            "Zlib"
+          ],
+          "texts": [
+            "LICENSE.zlib.txt"
+          ],
+          "version": "1.3.2"
+        },
+        {
+          "extensions": [
+            "_zstd"
+          ],
+          "name": "zstd",
+          "spdx": [
+            "BSD-3-Clause"
+          ],
+          "texts": [
+            "LICENSE.zstd.txt"
+          ],
+          "version": "1.5.7"
+        }
+      ],
+      "pruned": [
+        {
+          "extension": "_dbm",
+          "libraries": [
+            {
+              "name": "bdb",
+              "spdx": [
+                "Sleepycat"
+              ],
+              "version": "6.0.19"
+            }
+          ],
+          "pattern": "lib/python3.14/lib-dynload/_dbm*",
+          "reason": "strong copyleft; claude-multi never imports it"
+        },
+        {
+          "extension": "_testbuffer",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testcapi",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testimportmultiple",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testlimitedcapi",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testmultiphase",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_testsinglephase",
+          "libraries": [],
+          "pattern": "lib/python3.14/lib-dynload/_test*",
+          "reason": "on the runtime's delete-only list"
+        },
+        {
+          "extension": "_tkinter",
+          "libraries": [
+            {
+              "name": "libX11",
+              "spdx": [
+                "MIT",
+                "X11"
+              ],
+              "version": "1.8.13"
+            },
+            {
+              "name": "libXau",
+              "spdx": [
+                "MIT"
+              ],
+              "version": "1.0.12"
+            },
+            {
+              "name": "libxcb",
+              "spdx": [
+                "MIT"
+              ],
+              "version": "1.17.0"
+            },
+            {
+              "name": "tcl",
+              "spdx": [
+                "TCL"
+              ],
+              "version": "9.0.4"
+            },
+            {
+              "name": "tk",
+              "spdx": [
+                "TCL"
+              ],
+              "version": "9.0.4"
+            },
+            {
+              "name": "zlib",
+              "spdx": [
+                "Zlib"
+              ],
+              "version": "1.3.2"
+            }
+          ],
+          "pattern": "lib/python3.14/lib-dynload/_tkinter*",
+          "reason": "on the runtime's delete-only list"
+        }
+      ],
+      "runtime": {
+        "name": "cpython",
+        "spdx": [
+          "Python-2.0",
+          "CNRI-Python"
+        ],
+        "text": "LICENSE.txt",
+        "version": "3.14.8"
+      }
+    }
+  },
+  "texts": {
+    "LICENSE.bzip2.txt": {
+      "sha256": "1f38bbc7caacafd65169276d759c0d88c991b753b643ce35d0e45ea1971dd441",
+      "source": "python/licenses/LICENSE.bzip2.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.expat.txt": {
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+      "source": "python/licenses/LICENSE.expat.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.libedit.txt": {
+      "sha256": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1",
+      "source": "python/licenses/LICENSE.libedit.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.libffi.txt": {
+      "sha256": "deaf3a42effb551a5b140fa9afefed183a27f1341c6d1bf430d106a5e6931fc0",
+      "source": "python/licenses/LICENSE.libffi.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.liblzma.txt": {
+      "sha256": "9a4062de0a2c388a98cf35a35d348b62fa97c838a71c3c28ee1a2d7d0a565b02",
+      "source": "python/licenses/LICENSE.liblzma.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.libuuid.txt": {
+      "sha256": "122ee1f7e258f2c3c0e538a75c037684f420454bf3850ddc74ce750bbf5fe86b",
+      "source": "python/licenses/LICENSE.libuuid.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.mpdecimal.txt": {
+      "sha256": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b",
+      "source": "python/licenses/LICENSE.mpdecimal.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.ncurses.txt": {
+      "sha256": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c",
+      "source": "python/licenses/LICENSE.ncurses.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.openssl-3.txt": {
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "source": "python/licenses/LICENSE.openssl-3.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.sqlite.txt": {
+      "sha256": "38bef3d28b24f145ea293bd3b6eb4b20396982abc8303128fb493986ea5bc719",
+      "source": "python/licenses/LICENSE.sqlite.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.zlib.txt": {
+      "sha256": "818922b2620f12801a12bf78e399644a30990e66824abd8ca8ec24d451d6f92c",
+      "source": "python/licenses/LICENSE.zlib.txt of each pgo+lto-full archive"
+    },
+    "LICENSE.zstd.txt": {
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "source": "the LICENSE of zstd 1.5.7 (the linked version), as installed by the libzstd 1.5.7 package's licence files; the archives' PYTHON.json names licenses/LICENSE.zstd.txt but the archives do not carry it"
+    }
+  }
+}

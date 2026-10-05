@@ -1,0 +1,4 @@
+relaunch needed: lead Grok 4.6 (claude-multi-grok46-high) is outside this session's lead set (lead class large); a lead outside the set needs a relaunch; lead class large → grok
+Recorded as a pending change for session 11111111; nothing in the running session changed.
+To switch the lead within the lead set without a relaunch, use /model (press s: this session only).
+lead: Grok 4.6 · high — at the next resume: claude-multi -r 11111111-1111-4111-8111-111111111111

@@ -1,0 +1,602 @@
+{
+  "models": {
+    "fable": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 1000000
+      },
+      "default_effort": "max",
+      "display": "Fable 5 · 1M selector",
+      "efforts": [
+        "max"
+      ],
+      "generation": "5",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line fable: frozen test data, never re-synced from the shipped catalog.",
+      "selector": "claude-fable-5[1m]",
+      "status": "active",
+      "wire_model": "claude-fable-5"
+    },
+    "gpt55": {
+      "capabilities": [
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 258400,
+        "declared_tokens": 272000,
+        "ordinary_profile": null,
+        "provider_stated_limit_tokens": 272000,
+        "provider_tokens": 258400,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": 258400,
+        "validated_tokens": 258400
+      },
+      "default_effort": "high",
+      "display": "GPT-5.5",
+      "efforts": {
+        "high": {
+          "proxy_contract": "reasoning-effort-high",
+          "selector": "gpt-multi-gpt55-high"
+        }
+      },
+      "generation": "5.5",
+      "lead": null,
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openai",
+      "registry_overlay": null,
+      "roles": [
+        "cm-reviewer"
+      ],
+      "routing_note": "Fixture line gpt55: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "gpt-5.5"
+    },
+    "grok46": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 500000,
+        "declared_tokens": 500000,
+        "ordinary_profile": "grok",
+        "provider_tokens": 500000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "xhigh",
+      "display": "Grok 4.6",
+      "efforts": {
+        "high": {
+          "proxy_contract": "output-config-high",
+          "selector": "claude-multi-grok46-high"
+        },
+        "xhigh": {
+          "proxy_contract": "output-config-xhigh",
+          "selector": "claude-multi-grok46-xhigh"
+        }
+      },
+      "family": "x-ai",
+      "generation": "4.6",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openrouter",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line grok46: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "x-ai/grok-4.6"
+    },
+    "kimi-k3": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_stated_limit_tokens": 262144,
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "user_reported_tokens": 1000000,
+        "validated_tokens": 208034
+      },
+      "default_effort": "max",
+      "display": "Kimi K3 · 1M selector",
+      "efforts": {
+        "max": {
+          "proxy_contract": "output-config-max",
+          "selector": "claude-multi-kimi-k3[1m]"
+        }
+      },
+      "generation": "3",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "kimi",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line kimi-k3: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "k3"
+    },
+    "opus": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 1000000
+      },
+      "default_effort": "xhigh",
+      "display": "Opus 4.8 · 1M selector",
+      "efforts": [
+        "xhigh"
+      ],
+      "generation": "4.8",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "registry_overlay": null,
+      "roles": [
+        "cm-reviewer"
+      ],
+      "routing_note": "Fixture line opus: frozen test data, never re-synced from the shipped catalog.",
+      "selector": "claude-multi-opus-4-8[1m]",
+      "status": "active",
+      "wire_model": "claude-opus-4-8"
+    },
+    "opus5": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "xhigh",
+      "display": "Opus 5 · 1M selector",
+      "efforts": [
+        "xhigh"
+      ],
+      "generation": "5",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.218",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line opus5: frozen test data, never re-synced from the shipped catalog.",
+      "selector": "claude-multi-opus-5[1m]",
+      "status": "active",
+      "wire_model": "claude-opus-5"
+    },
+    "opus55": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1048576,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "xhigh",
+      "display": "Opus 5.5 · 1M selector",
+      "efforts": [
+        "xhigh"
+      ],
+      "generation": "5.5",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.280",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "anthropic",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line opus55: frozen test data, never re-synced from the shipped catalog.",
+      "selector": "claude-multi-opus-5-5[1m]",
+      "status": "active",
+      "wire_model": "claude-opus-5-5"
+    },
+    "or-deepseek": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1000000,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "high",
+      "display": "DeepSeek V4 Flash · OpenRouter",
+      "efforts": {
+        "high": {
+          "proxy_contract": "output-config-high",
+          "selector": "claude-multi-or-deepseek-high[1m]"
+        },
+        "xhigh": {
+          "proxy_contract": "output-config-xhigh",
+          "selector": "claude-multi-or-deepseek-xhigh[1m]"
+        }
+      },
+      "family": "deepseek",
+      "generation": "4",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openrouter",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line or-deepseek: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "deepseek/deepseek-v4-flash"
+    },
+    "or-gemini": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1000000,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "high",
+      "display": "Gemini 3 Flash · OpenRouter",
+      "efforts": {
+        "high": {
+          "proxy_contract": "output-config-high",
+          "selector": "claude-multi-or-gemini-high[1m]"
+        },
+        "xhigh": {
+          "proxy_contract": "output-config-xhigh",
+          "selector": "claude-multi-or-gemini-xhigh[1m]"
+        }
+      },
+      "family": "google",
+      "generation": "3",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openrouter",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line or-gemini: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "google/gemini-3-flash"
+    },
+    "or-gpt": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1000000,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "high",
+      "display": "GPT-6 Sol · OpenRouter",
+      "efforts": {
+        "high": {
+          "proxy_contract": "output-config-high",
+          "selector": "claude-multi-or-gpt-high[1m]"
+        },
+        "xhigh": {
+          "proxy_contract": "output-config-xhigh",
+          "selector": "claude-multi-or-gpt-xhigh[1m]"
+        }
+      },
+      "family": "openai",
+      "generation": "6",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openrouter",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line or-gpt: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "openai/gpt-6-sol"
+    },
+    "or-grok": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 500000,
+        "declared_tokens": 500000,
+        "ordinary_profile": "grok",
+        "provider_tokens": 500000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "high",
+      "display": "Grok 4.7 · OpenRouter",
+      "efforts": {
+        "high": {
+          "proxy_contract": "output-config-high",
+          "selector": "claude-multi-or-grok-high"
+        },
+        "xhigh": {
+          "proxy_contract": "output-config-xhigh",
+          "selector": "claude-multi-or-grok-xhigh"
+        }
+      },
+      "family": "x-ai",
+      "generation": "4.7",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openrouter",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line or-grok: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "x-ai/grok-4.7"
+    },
+    "or-opus": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1000000,
+        "ordinary_profile": "large",
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "xhigh",
+      "display": "Opus 5.5 · OpenRouter",
+      "efforts": {
+        "high": {
+          "proxy_contract": "output-config-high",
+          "selector": "claude-multi-or-opus-high[1m]"
+        },
+        "xhigh": {
+          "proxy_contract": "output-config-xhigh",
+          "selector": "claude-multi-or-opus-xhigh[1m]"
+        }
+      },
+      "family": "anthropic",
+      "generation": "5.5",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openrouter",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line or-opus: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "anthropic/claude-opus-5.5"
+    },
+    "qwen-flash-next": {
+      "capabilities": [
+        "lead"
+      ],
+      "context": {
+        "client_tokens": 320032,
+        "declared_tokens": 431104,
+        "ordinary_profile": "flash431",
+        "provider_tokens": 320032,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 200000
+      },
+      "default_effort": "high",
+      "display": "Qwen3.8 Flash Next (local)",
+      "efforts": [
+        "high"
+      ],
+      "generation": "3.8",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "llm-local",
+      "registry_overlay": null,
+      "roles": [],
+      "routing_note": "Fixture line qwen-flash-next: frozen test data, never re-synced from the shipped catalog.",
+      "selector": "claude-multi-qwen-flash-next",
+      "status": "active",
+      "wire_model": "qwen3.8-flash-next"
+    },
+    "qwen38": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 983616,
+        "ordinary_profile": "large",
+        "provider_tokens": 983616,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": 983616,
+        "validated_tokens": 983616
+      },
+      "default_effort": "max",
+      "display": "Qwen3.8 Max",
+      "efforts": {
+        "max": {
+          "proxy_contract": "reasoning-effort-xhigh",
+          "selector": "claude-multi-qwen38-max[1m]"
+        }
+      },
+      "generation": "3.8",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "qwen",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line qwen38: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "qwen3.8-max"
+    },
+    "sol": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "client_tokens": 1000000,
+        "declared_tokens": 1050000,
+        "ordinary_profile": "large",
+        "provider_stated_limit_tokens": 1050000,
+        "provider_tokens": 1000000,
+        "qualification": "Fixture context; not benchmark-verified.",
+        "scalar_tokens": null,
+        "validated_tokens": 343541
+      },
+      "default_effort": "high",
+      "display": "GPT-5.6 Sol",
+      "efforts": {
+        "high": {
+          "proxy_contract": "reasoning-effort-high",
+          "selector": "gpt-multi-sol-high[1m]"
+        },
+        "xhigh": {
+          "proxy_contract": "reasoning-effort-xhigh",
+          "selector": "gpt-multi-sol-xhigh[1m]"
+        }
+      },
+      "generation": "5.6",
+      "lead": {
+        "effort": "ultracode",
+        "env": {}
+      },
+      "minimum_tested": {
+        "claude_code": "2.1.216",
+        "cliproxyapi": "7.2.80"
+      },
+      "provider": "openai",
+      "registry_overlay": null,
+      "roles": "all",
+      "routing_note": "Fixture line sol: frozen test data, never re-synced from the shipped catalog.",
+      "status": "active",
+      "wire_model": "gpt-5.6-sol"
+    }
+  },
+  "version": 2
+}

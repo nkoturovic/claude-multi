@@ -1,0 +1,14 @@
+Fallback target: openai · profile openai
+  lead: Opus 5.5 · 1M selector · ultracode → GPT-5.6 Sol · ultracode
+  cm-analyst-strong: Opus 5.5 · 1M selector · xhigh → GPT-5.6 Sol · xhigh
+  cm-reviewer: GPT-5.6 Sol · xhigh → GPT-5.6 Sol · high
+  cm-reviewer-strong: Opus 5.5 · 1M selector · xhigh → GPT-5.6 Sol · xhigh
+  lead providers: any → openai
+! review same-family (reduced independence)
+Effect: RELAUNCH
+  why: lead providers any → openai
+Existing agents keep their current task and model. Start fresh agents after the change.
+Fallback requires relaunch; the change is pending for the next resume.
+No running agent or lead was moved.
+pinned when the change applies: the session stops following profile balanced — /cm follow returns to it
+lead: GPT-5.6 Sol · ultracode — at the next resume: claude-multi -r 11111111-1111-4111-8111-111111111111

@@ -1,0 +1,14 @@
+claude-multi · /cm review high-stakes · lineup gen 1 · range: HEAD~3..HEAD
+Review routing (this session's lineup.md):
+  | Author | Normal change | High-stakes change |
+  |---|---|---|
+  | cm-implementer-light (openai) | — (its check) | cm-reviewer-strong |
+  | cm-implementer (openai) | cm-reviewer-strong (only other-family) | cm-reviewer-strong |
+  | cm-implementer-strong (openai) | cm-reviewer-strong | cm-reviewer-strong |
+  | lead (anthropic) | cm-reviewer (only other-family) | cm-reviewer (only other-family) |
+Lead brief — a report-only review; the operator decides on fixes:
+1. Diff: git diff HEAD~3..HEAD. Read it yourself first; do not change the tree.
+2. High stakes: spawn cm-reviewer and cm-reviewer-strong in parallel (both reviewer grades), each with a self-contained brief naming the diff; then arbitrate their findings yourself.
+3. Reviewers are report-only: no edits, no fix pass, no commits. Do not edit either.
+4. Return ranked, verified findings, most severe first, each with file:line, the failure scenario and a confidence; drop what you could not verify.
+5. Never use /code-review, /simplify or another skill that launches agents outside the lineup (they are denied to the model in managed sessions); never substitute a generic agent for a missing cm reviewer.

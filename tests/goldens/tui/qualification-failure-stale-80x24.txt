@@ -1,0 +1,24 @@
+
+  Action result
+  ─────────────────────────────────────────────────────────────────────────────
+  smoke custom-fixture-reviewer: failed (HTTP 400: rejected)
+  effort high custom-fixture-reviewer: failed (HTTP 400: rejected)
+  tools (forced) custom-fixture-reviewer: failed (HTTP 400: rejected)
+  stream custom-fixture-reviewer: failed (HTTP 400: rejected)
+  evidence recorded for 957ddafc0392ca34; qualification never admits or
+  enables agents
+  custom-fixture-reviewer: operator line in providers.d/openrouter.json ·
+  openrouter/vendor/fixture-reviewer
+    status admitted · agents requested (cm-reviewer; the agent gate needs
+  claude-multi models qualify custom-fixture-reviewer --agents) · class
+  custom-200000 · validated floor 200000
+    selectors custom-fixture-reviewer-high · default effort high
+    smoke evidence: stale or none · definition 957ddafc0392ca34
+
+
+
+
+
+
+
+  Up/Down scroll · PgUp/PgDn page · Home/End  · Esc back

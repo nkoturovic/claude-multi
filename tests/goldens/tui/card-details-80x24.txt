@@ -1,0 +1,24 @@
+
+  lineup — full details
+  ─────────────────────────────────────────────────────────────────────────────
+  claude-multi — profile: balanced · follows profile · Fresh
+  Fixture seed balanced: frozen test data mirroring the shipped seed's slot
+  families.
+  lead: Opus 5.5 · effort ultracode · 1M class   workflows: native
+  context: window 800K (lead and agents) · compacts at ~702K (90 %)
+  lineup: 8 agents · durable scope · Explore→cm-explorer · GP off
+    explorer · GPT-5.6 Sol · effort high · provider openai · read-only
+    analyst · GPT-5.6 Sol · effort high · provider openai
+    analyst-strong · Opus 5.5 · effort xhigh · provider anthropic
+    implementer-light · GPT-5.6 Sol · effort high · provider openai ·
+  (worktree)
+    implementer · GPT-5.6 Sol · effort high · provider openai · (worktree)
+    implementer-strong · GPT-5.6 Sol · effort xhigh · provider openai ·
+  (worktree)
+    reviewer · GPT-5.6 Sol · effort xhigh · provider openai · read-only
+    reviewer-strong · Opus 5.5 · effort xhigh · provider anthropic · read-only
+  review: writers(openai)→reviewer-strong · lead→reviewer   all cross-family ✓
+  spread: openai 6 · anthropic 2 (+lead)
+  health: gateway ok · Claude 2.1.281 · catalog 31
+  More below — arrows/PgDn scroll; Home/End
+  Up/Down scroll · PgUp/PgDn page · Home/End  · Esc back

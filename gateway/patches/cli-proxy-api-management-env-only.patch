@@ -1,0 +1,804 @@
+diff --git a/internal/api/handlers/management/handler.go b/internal/api/handlers/management/handler.go
+index 87063aa..c7f363d 100644
+--- a/internal/api/handlers/management/handler.go
++++ b/internal/api/handlers/management/handler.go
+@@ -21,7 +21,6 @@ import (
+ 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
+ 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+ 	log "github.com/sirupsen/logrus"
+-	"golang.org/x/crypto/bcrypt"
+ )
+ 
+ type attemptInfo struct {
+@@ -307,13 +306,9 @@ func (h *Handler) AuthenticateManagementKey(clientIP string, localClient bool, p
+ 	}
+ 
+ 	cfg := h.cfg
+-	var (
+-		allowRemote bool
+-		secretHash  string
+-	)
++	var allowRemote bool
+ 	if cfg != nil {
+ 		allowRemote = cfg.RemoteManagement.AllowRemote
+-		secretHash = cfg.RemoteManagement.SecretKey
+ 	}
+ 	if h.allowRemoteOverride {
+ 		allowRemote = true
+@@ -364,7 +359,11 @@ func (h *Handler) AuthenticateManagementKey(clientIP string, localClient bool, p
+ 		h.attemptsMu.Unlock()
+ 	}
+ 
+-	if secretHash == "" && envSecret == "" {
++	// claude-multi local patch (management-env-only): only MANAGEMENT_PASSWORD
++	// authenticates. The config secret-key is never a key, and neither is the
++	// runtime local password (-password / TUI, SetLocalPassword): it keeps
++	// guarding /keep-alive only.
++	if envSecret == "" {
+ 		return false, http.StatusForbidden, "remote management key not set"
+ 	}
+ 
+@@ -373,28 +372,13 @@ func (h *Handler) AuthenticateManagementKey(clientIP string, localClient bool, p
+ 		return false, http.StatusUnauthorized, "missing management key"
+ 	}
+ 
+-	if localClient {
+-		if lp := h.localPassword; lp != "" {
+-			if subtle.ConstantTimeCompare([]byte(provided), []byte(lp)) == 1 {
+-				reset()
+-				return true, 0, ""
+-			}
+-		}
+-	}
+-
+ 	if envSecret != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(envSecret)) == 1 {
+ 		reset()
+ 		return true, 0, ""
+ 	}
+ 
+-	if secretHash == "" || bcrypt.CompareHashAndPassword([]byte(secretHash), []byte(provided)) != nil {
+-		fail()
+-		return false, http.StatusUnauthorized, "invalid management key"
+-	}
+-
+-	reset()
+-
+-	return true, 0, ""
++	fail()
++	return false, http.StatusUnauthorized, "invalid management key"
+ }
+ 
+ // persist saves the current in-memory config to disk.
+diff --git a/internal/api/server.go b/internal/api/server.go
+index 990c18a..f3a2343 100644
+--- a/internal/api/server.go
++++ b/internal/api/server.go
+@@ -238,9 +238,11 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
+ 		optionState.routerConfigurator(engine, s.handlers, cfg)
+ 	}
+ 
+-	// Register management routes when configuration or environment secrets are available,
+-	// or when a local management password is provided (e.g. TUI mode).
+-	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || s.localPassword != ""
++	// Register management routes only when the environment secret is available.
++	// claude-multi local patch (management-env-only): neither a config
++	// secret-key nor a local management password (-password / TUI mode)
++	// enables them.
++	hasManagementSecret := envManagementSecret
+ 	s.managementRoutesEnabled.Store(hasManagementSecret)
+ 	redisqueue.SetEnabled(hasManagementSecret || (cfg != nil && cfg.Home.Enabled))
+ 	if hasManagementSecret {
+diff --git a/internal/api/server_management_env_only_test.go b/internal/api/server_management_env_only_test.go
+new file mode 100644
+index 0000000..b780552
+--- /dev/null
++++ b/internal/api/server_management_env_only_test.go
+@@ -0,0 +1,497 @@
++package api
++
++import (
++	"context"
++	"fmt"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	managementHandlers "github.com/router-for-me/CLIProxyAPI/v7/internal/api/handlers/management"
++	proxyconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher"
++	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	"golang.org/x/crypto/bcrypt"
++)
++
++// claude-multi local patch (management-env-only) gate. The management API
++// authenticates only with the MANAGEMENT_PASSWORD environment secret, at
++// start and after every config reload; a remote-management secret-key from
++// config.yaml, plaintext or bcrypt, and a runtime local management password
++// (-password / TUI mode) never enable it and never authenticate. Network-free: requests go through server.engine.ServeHTTP,
++// hot reloads through a real config watcher (fsnotify on a temp dir) whose
++// callback is Server.UpdateClients, as in production.
++
++const (
++	envOnlyEnvKey    = "env-only-management-env-key"
++	envOnlyConfigKey = "env-only-management-config-key"
++	envOnlyClientKey = "env-only-client-api-key"
++	envOnlyLocalKey  = "env-only-local-management-password"
++	envOnlyTimeout   = 5 * time.Second
++)
++
++type envOnlySecret struct {
++	name  string
++	value string // the secret-key value written into config.yaml
++}
++
++// envOnlySecrets returns the config secret shapes: the plaintext key and a
++// bcrypt hash of it (both authenticate on the six-patch build).
++func envOnlySecrets(t *testing.T, key string) []envOnlySecret {
++	t.Helper()
++	hashed, err := bcrypt.GenerateFromPassword([]byte(key), bcrypt.MinCost)
++	if err != nil {
++		t.Fatalf("bcrypt: %v", err)
++	}
++	return []envOnlySecret{{"plaintext", key}, {"bcrypt", string(hashed)}}
++}
++
++// envOnlyUnsetEnv removes MANAGEMENT_PASSWORD for the test (restored after).
++func envOnlyUnsetEnv(t *testing.T) {
++	t.Helper()
++	t.Setenv("MANAGEMENT_PASSWORD", "")
++	if err := os.Unsetenv("MANAGEMENT_PASSWORD"); err != nil {
++		t.Fatalf("unsetenv: %v", err)
++	}
++}
++
++// envOnlyYAML renders a claude-multi-shaped config; secret "" omits the key.
++func envOnlyYAML(authDir string, port int, secret string) []byte {
++	var b strings.Builder
++	fmt.Fprintf(&b, "host: \"127.0.0.1\"\nport: %d\nauth-dir: %q\napi-keys:\n  - %q\n", port, authDir, envOnlyClientKey)
++	b.WriteString("remote-management:\n  allow-remote: false\n")
++	if secret != "" {
++		fmt.Fprintf(&b, "  secret-key: %q\n", secret)
++	}
++	b.WriteString("  disable-control-panel: true\n  disable-auto-update-panel: true\n")
++	return []byte(b.String())
++}
++
++type envOnlyFixture struct {
++	t       *testing.T
++	root    string
++	cfgPath string
++	authDir string
++}
++
++func newEnvOnlyFixture(t *testing.T) *envOnlyFixture {
++	t.Helper()
++	root := t.TempDir()
++	f := &envOnlyFixture{
++		t:       t,
++		root:    root,
++		cfgPath: filepath.Join(root, "cfg", "config.yaml"),
++		authDir: filepath.Join(root, "auth"),
++	}
++	for _, dir := range []string{filepath.Dir(f.cfgPath), f.authDir} {
++		if err := os.MkdirAll(dir, 0o700); err != nil {
++			t.Fatalf("mkdir %s: %v", dir, err)
++		}
++	}
++	return f
++}
++
++// write seeds config.yaml and loads it through the production start path.
++func (f *envOnlyFixture) write(secret string) *proxyconfig.Config {
++	f.t.Helper()
++	data := envOnlyYAML(f.authDir, 1, secret)
++	if err := os.WriteFile(f.cfgPath, data, 0o600); err != nil {
++		f.t.Fatalf("write config: %v", err)
++	}
++	cfg, err := proxyconfig.LoadConfig(f.cfgPath)
++	if err != nil {
++		f.t.Fatalf("load config: %v", err)
++	}
++	if after, _ := os.ReadFile(f.cfgPath); string(after) != string(data) {
++		f.t.Errorf("loading the config rewrote config.yaml (%d -> %d bytes)", len(data), len(after))
++	}
++	return cfg
++}
++
++// parse loads config bytes through the reload path without touching
++// config.yaml (a running watcher must not see these).
++func (f *envOnlyFixture) parse(port int) *proxyconfig.Config {
++	f.t.Helper()
++	cfg, err := proxyconfig.LoadConfigBytes(envOnlyYAML(f.authDir, port, ""))
++	if err != nil {
++		f.t.Fatalf("load config bytes: %v", err)
++	}
++	cfg.AuthDir = f.authDir
++	return cfg
++}
++
++// server builds a production-shaped server (plugin host wired as
++// sdk/cliproxy/builder.go does) over cfg and the fixture's config path.
++func (f *envOnlyFixture) server(cfg *proxyconfig.Config, opts ...ServerOption) *Server {
++	f.t.Helper()
++	gin.SetMode(gin.TestMode)
++	cfg.Port = 0
++	cfg.AuthDir = f.authDir
++	cfg.LoggingToFile = false
++	cfg.UsageStatisticsEnabled = false
++	host := pluginhost.New()
++	host.ApplyConfig(context.Background(), cfg)
++	host.RegisterFrontendAuthProviders()
++	opts = append([]ServerOption{WithPluginHost(host)}, opts...)
++	s := NewServer(cfg, auth.NewManager(nil, nil, nil), sdkaccess.NewManager(), f.cfgPath, opts...)
++	if s.pluginHost != host || s.mgmt == nil {
++		f.t.Fatal("server is not production-shaped: plugin host or management handler missing")
++	}
++	return s
++}
++
++// watch starts a real config watcher whose callback applies each reload to s
++// and then reports the config it applied.
++func (f *envOnlyFixture) watch(s *Server, running *proxyconfig.Config) <-chan *proxyconfig.Config {
++	f.t.Helper()
++	applied := make(chan *proxyconfig.Config, 16)
++	w, err := watcher.NewWatcher(f.cfgPath, f.authDir, func(cfg *proxyconfig.Config) {
++		s.UpdateClients(cfg)
++		applied <- cfg
++	})
++	if err != nil {
++		f.t.Fatalf("NewWatcher: %v", err)
++	}
++	w.SetConfig(running)
++	ctx, cancel := context.WithCancel(context.Background())
++	f.t.Cleanup(func() {
++		cancel()
++		_ = w.Stop()
++	})
++	if err = w.Start(ctx); err != nil {
++		f.t.Fatalf("watcher Start: %v", err)
++	}
++	f.expectApplied(applied, "initial load")
++	return applied
++}
++
++func (f *envOnlyFixture) expectApplied(applied <-chan *proxyconfig.Config, label string) *proxyconfig.Config {
++	f.t.Helper()
++	select {
++	case cfg := <-applied:
++		return cfg
++	case <-time.After(envOnlyTimeout):
++		f.t.Fatalf("%s: no config reload applied within %s", label, envOnlyTimeout)
++		return nil
++	}
++}
++
++// replace rename-replaces config.yaml (claude-multi's atomic write pattern)
++// and waits until the watcher has applied it.
++func (f *envOnlyFixture) replace(applied <-chan *proxyconfig.Config, port int, secret, label string) *proxyconfig.Config {
++	f.t.Helper()
++	tmp := filepath.Join(filepath.Dir(f.cfgPath), ".config.yaml.envonly.tmp")
++	if err := os.WriteFile(tmp, envOnlyYAML(f.authDir, port, secret), 0o600); err != nil {
++		f.t.Fatalf("write temp config: %v", err)
++	}
++	if err := os.Rename(tmp, f.cfgPath); err != nil {
++		f.t.Fatalf("rename config: %v", err)
++	}
++	cfg := f.expectApplied(applied, label)
++	if cfg.Port != port {
++		f.t.Fatalf("%s: applied port %d, want %d", label, cfg.Port, port)
++	}
++	return cfg
++}
++
++func envOnlyGet(s *Server, key string) (int, string) {
++	rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/auth-files", key, ""))
++	return rr.Code, rr.Body.String()
++}
++
++// assertManagementOff: the allowlisted route answers the bare 404 of an
++// unavailable management API for the config key, a wrong key and no key.
++func assertManagementOff(t *testing.T, s *Server, label string) {
++	t.Helper()
++	if s.managementRoutesEnabled.Load() {
++		t.Fatalf("%s: management routes enabled without MANAGEMENT_PASSWORD", label)
++	}
++	for _, key := range []string{envOnlyConfigKey, envOnlyLocalKey, "wrong", ""} {
++		rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/auth-files", key, ""))
++		assertRefused(t, rr, fmt.Sprintf("%s: key %q", label, key))
++	}
++}
++
++// assertEnvKeyOnly: the config key is refused as an invalid key and the env
++// key is accepted (the accepted request also resets the failure count).
++func assertEnvKeyOnly(t *testing.T, s *Server, label string) {
++	t.Helper()
++	if code, body := envOnlyGet(s, envOnlyConfigKey); code != http.StatusUnauthorized || !strings.Contains(body, "invalid management key") {
++		t.Fatalf("%s: config key: status = %d body=%q, want 401 invalid management key", label, code, body)
++	}
++	if code, body := envOnlyGet(s, envOnlyEnvKey); code != http.StatusOK {
++		t.Fatalf("%s: env key: status = %d body=%q, want 200", label, code, body)
++	}
++}
++
++// (1) A secret-key in the initial config, plaintext or bcrypt, does not
++// enable management: it is dropped at load (never hashed, never written
++// back) and the server leaves management off.
++func TestManagementEnvOnly_InitialConfigSecretDoesNotEnableManagement(t *testing.T) {
++	envOnlyUnsetEnv(t)
++	for _, secret := range envOnlySecrets(t, envOnlyConfigKey) {
++		t.Run(secret.name, func(t *testing.T) {
++			f := newEnvOnlyFixture(t)
++			cfg := f.write(secret.value)
++			if cfg.RemoteManagement.SecretKey != "" {
++				t.Error("the config secret-key survived the load")
++			}
++			assertManagementOff(t, f.server(cfg), "initial "+secret.name+" secret-key")
++		})
++	}
++}
++
++// (1) The server itself never treats a config secret as a management secret,
++// whatever built the config.
++func TestManagementEnvOnly_ServerIgnoresConfigSecretAtStart(t *testing.T) {
++	envOnlyUnsetEnv(t)
++	for _, secret := range envOnlySecrets(t, envOnlyConfigKey) {
++		t.Run(secret.name, func(t *testing.T) {
++			f := newEnvOnlyFixture(t)
++			cfg := f.write("")
++			cfg.RemoteManagement.SecretKey = secret.value
++			assertManagementOff(t, f.server(cfg), "start with a "+secret.name+" config secret")
++		})
++	}
++}
++
++// (2) A hot-reloaded config that adds a secret-key, plaintext or bcrypt,
++// does not enable management or authenticate.
++func TestManagementEnvOnly_HotReloadedConfigSecretDoesNotEnableManagement(t *testing.T) {
++	envOnlyUnsetEnv(t)
++	f := newEnvOnlyFixture(t)
++	running := f.write("")
++	s := f.server(running)
++	applied := f.watch(s, running)
++	assertManagementOff(t, s, "before reload")
++	for i, secret := range envOnlySecrets(t, envOnlyConfigKey) {
++		cfg := f.replace(applied, 10+i, secret.value, "reload adding a "+secret.name+" secret-key")
++		if cfg.RemoteManagement.SecretKey != "" {
++			t.Errorf("reload with a %s secret-key: the value survived the reload load", secret.name)
++		}
++		assertManagementOff(t, s, "after a reload adding a "+secret.name+" secret-key")
++	}
++	f.replace(applied, 20, "", "reload removing the secret-key")
++	assertManagementOff(t, s, "after a reload removing the secret-key")
++}
++
++// (2) The reload path itself never treats a config secret as a management
++// secret, whatever built the reloaded config.
++func TestManagementEnvOnly_ReloadIgnoresConfigSecret(t *testing.T) {
++	envOnlyUnsetEnv(t)
++	f := newEnvOnlyFixture(t)
++	s := f.server(f.write(""))
++	for i, secret := range envOnlySecrets(t, envOnlyConfigKey) {
++		next := f.parse(60 + i)
++		next.RemoteManagement.SecretKey = secret.value
++		s.UpdateClients(next)
++		assertManagementOff(t, s, "reload of a config carrying a "+secret.name+" secret")
++	}
++}
++
++// (3) With MANAGEMENT_PASSWORD set, only the env value authenticates; a
++// config secret-key, initial or hot-reloaded, plaintext or bcrypt, never
++// does.
++func TestManagementEnvOnly_EnvSecretIsTheOnlyKey(t *testing.T) {
++	t.Setenv("MANAGEMENT_PASSWORD", envOnlyEnvKey)
++	secrets := envOnlySecrets(t, envOnlyConfigKey)
++	for _, secret := range secrets {
++		t.Run("initial-"+secret.name, func(t *testing.T) {
++			f := newEnvOnlyFixture(t)
++			assertEnvKeyOnly(t, f.server(f.write(secret.value)), "initial "+secret.name+" secret-key")
++		})
++	}
++	t.Run("hot-reload", func(t *testing.T) {
++		f := newEnvOnlyFixture(t)
++		running := f.write("")
++		s := f.server(running)
++		applied := f.watch(s, running)
++		assertEnvKeyOnly(t, s, "before reload")
++		for i, secret := range secrets {
++			f.replace(applied, 30+i, secret.value, "reload adding a "+secret.name+" secret-key")
++			assertEnvKeyOnly(t, s, "after a reload adding a "+secret.name+" secret-key")
++		}
++		for i, secret := range secrets {
++			next := f.parse(70 + i)
++			next.RemoteManagement.SecretKey = secret.value
++			s.UpdateClients(next)
++			assertEnvKeyOnly(t, s, "reload of a config carrying a "+secret.name+" secret")
++		}
++	})
++}
++
++// (3) The management key check never accepts a config secret-key, with or
++// without the env secret, whatever built the config.
++func TestManagementEnvOnly_AuthenticateManagementKeyIgnoresConfigSecret(t *testing.T) {
++	for _, secret := range envOnlySecrets(t, envOnlyConfigKey) {
++		cfg := &proxyconfig.Config{}
++		cfg.RemoteManagement.SecretKey = secret.value
++
++		t.Run("env-set-"+secret.name, func(t *testing.T) {
++			t.Setenv("MANAGEMENT_PASSWORD", envOnlyEnvKey)
++			h := managementHandlers.NewHandler(cfg, "", nil)
++			if ok, code, msg := h.AuthenticateManagementKey("127.0.0.1", true, envOnlyConfigKey); ok || code != http.StatusUnauthorized {
++				t.Fatalf("config key with env set: ok=%v status=%d msg=%q, want 401", ok, code, msg)
++			}
++			if ok, code, msg := h.AuthenticateManagementKey("127.0.0.1", true, envOnlyEnvKey); !ok {
++				t.Fatalf("env key: ok=%v status=%d msg=%q, want accepted", ok, code, msg)
++			}
++		})
++		t.Run("env-unset-"+secret.name, func(t *testing.T) {
++			envOnlyUnsetEnv(t)
++			h := managementHandlers.NewHandler(cfg, "", nil)
++			ok, code, msg := h.AuthenticateManagementKey("127.0.0.1", true, envOnlyConfigKey)
++			if ok || code != http.StatusForbidden || msg != "remote management key not set" {
++				t.Fatalf("config key without env: ok=%v status=%d msg=%q, want 403 remote management key not set", ok, code, msg)
++			}
++		})
++	}
++}
++
++// (4) No regression: env-only management serves the read-only allowlist at
++// start and across reloads, refused routes stay bare 404s, and with no env
++// secret management stays off across reloads.
++func TestManagementEnvOnly_EnvOnlyManagementUnchanged(t *testing.T) {
++	t.Run("env-set", func(t *testing.T) {
++		t.Setenv("MANAGEMENT_PASSWORD", envOnlyEnvKey)
++		f := newEnvOnlyFixture(t)
++		running := f.write("")
++		s := f.server(running)
++		check := func(label string) {
++			t.Helper()
++			if !s.managementRoutesEnabled.Load() {
++				t.Fatalf("%s: management routes disabled with MANAGEMENT_PASSWORD set", label)
++			}
++			for route, target := range allowlistedManagementRoutes {
++				rr := serveAllowlist(s, allowlistRequest(http.MethodGet, target, envOnlyEnvKey, ""))
++				if rr.Code == http.StatusNotFound && rr.Body.Len() == 0 {
++					t.Fatalf("%s: %s refused with the env key", label, route)
++				}
++				if rr.Code == http.StatusUnauthorized || rr.Code == http.StatusForbidden {
++					t.Fatalf("%s: %s with the env key: status = %d body=%q", label, route, rr.Code, rr.Body.String())
++				}
++			}
++			if rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/auth-files", "", "")); rr.Code != http.StatusUnauthorized {
++				t.Fatalf("%s: no key: status = %d, want 401", label, rr.Code)
++			}
++			assertRefused(t, serveAllowlist(s, allowlistRequest(http.MethodGet, "/v0/management/config.yaml", envOnlyEnvKey, "")), label+": refused route")
++			assertRefused(t, serveAllowlist(s, allowlistRequest(http.MethodPut, "/v0/management/debug", envOnlyEnvKey, "")), label+": refused write")
++			if code, body := envOnlyGet(s, envOnlyEnvKey); code != http.StatusOK {
++				t.Fatalf("%s: env key after the checks: status = %d body=%q, want 200 (not banned)", label, code, body)
++			}
++		}
++		check("start")
++		applied := f.watch(s, running)
++		check("after the initial watcher load")
++		f.replace(applied, 40, "", "reload without a secret-key")
++		check("after a reload")
++	})
++	t.Run("env-unset", func(t *testing.T) {
++		envOnlyUnsetEnv(t)
++		f := newEnvOnlyFixture(t)
++		running := f.write("")
++		s := f.server(running)
++		assertManagementOff(t, s, "start")
++		applied := f.watch(s, running)
++		f.replace(applied, 50, "", "reload without a secret-key")
++		assertManagementOff(t, s, "after a reload")
++	})
++}
++
++// assertLocalKeyRefused: with MANAGEMENT_PASSWORD set, a distinct local
++// management password is refused as an invalid key (from loopback, where
++// upstream accepts it) and the env key is accepted (resetting the count).
++func assertLocalKeyRefused(t *testing.T, s *Server, label string) {
++	t.Helper()
++	if !s.managementRoutesEnabled.Load() {
++		t.Fatalf("%s: management routes disabled with MANAGEMENT_PASSWORD set", label)
++	}
++	if code, body := envOnlyGet(s, envOnlyLocalKey); code != http.StatusUnauthorized || !strings.Contains(body, "invalid management key") {
++		t.Fatalf("%s: local password: status = %d body=%q, want 401 invalid management key", label, code, body)
++	}
++	if code, body := envOnlyGet(s, envOnlyEnvKey); code != http.StatusOK {
++		t.Fatalf("%s: env key: status = %d body=%q, want 200", label, code, body)
++	}
++}
++
++// (5) A runtime local management password (the -password flag, TUI mode;
++// WithLocalManagementPassword) is never a management key: with
++// MANAGEMENT_PASSWORD set only the env value authenticates, at start, after
++// hot reloads through the config watcher and after direct reloads; without
++// it the local password does not enable management (bare 404), at start or
++// after a reload.
++func TestManagementEnvOnly_LocalPasswordNeverAuthenticates(t *testing.T) {
++	t.Run("env-set", func(t *testing.T) {
++		t.Setenv("MANAGEMENT_PASSWORD", envOnlyEnvKey)
++		f := newEnvOnlyFixture(t)
++		running := f.write("")
++		s := f.server(running, WithLocalManagementPassword(envOnlyLocalKey))
++		assertLocalKeyRefused(t, s, "start")
++		applied := f.watch(s, running)
++		assertLocalKeyRefused(t, s, "after the initial watcher load")
++		f.replace(applied, 80, "", "hot reload")
++		assertLocalKeyRefused(t, s, "after a hot reload")
++		s.UpdateClients(f.parse(81))
++		assertLocalKeyRefused(t, s, "after a direct reload")
++	})
++	t.Run("env-unset", func(t *testing.T) {
++		envOnlyUnsetEnv(t)
++		f := newEnvOnlyFixture(t)
++		running := f.write("")
++		s := f.server(running, WithLocalManagementPassword(envOnlyLocalKey))
++		assertManagementOff(t, s, "start with a local password")
++		applied := f.watch(s, running)
++		assertManagementOff(t, s, "after the initial watcher load")
++		f.replace(applied, 82, "", "hot reload")
++		assertManagementOff(t, s, "after a hot reload")
++		s.UpdateClients(f.parse(83))
++		assertManagementOff(t, s, "after a direct reload")
++	})
++}
++
++// (5) The management key check never accepts the local password, loopback
++// or not, with or without the env secret.
++func TestManagementEnvOnly_AuthenticateManagementKeyIgnoresLocalPassword(t *testing.T) {
++	t.Run("env-set", func(t *testing.T) {
++		t.Setenv("MANAGEMENT_PASSWORD", envOnlyEnvKey)
++		h := managementHandlers.NewHandler(&proxyconfig.Config{}, "", nil)
++		h.SetLocalPassword(envOnlyLocalKey)
++		if ok, code, msg := h.AuthenticateManagementKey("127.0.0.1", true, envOnlyLocalKey); ok || code != http.StatusUnauthorized {
++			t.Fatalf("local password with env set: ok=%v status=%d msg=%q, want 401", ok, code, msg)
++		}
++		if ok, code, msg := h.AuthenticateManagementKey("127.0.0.1", true, envOnlyEnvKey); !ok {
++			t.Fatalf("env key: ok=%v status=%d msg=%q, want accepted", ok, code, msg)
++		}
++	})
++	t.Run("env-unset", func(t *testing.T) {
++		envOnlyUnsetEnv(t)
++		h := managementHandlers.NewHandler(&proxyconfig.Config{}, "", nil)
++		h.SetLocalPassword(envOnlyLocalKey)
++		ok, code, msg := h.AuthenticateManagementKey("127.0.0.1", true, envOnlyLocalKey)
++		if ok || code != http.StatusForbidden || msg != "remote management key not set" {
++			t.Fatalf("local password without env: ok=%v status=%d msg=%q, want 403 remote management key not set", ok, code, msg)
++		}
++	})
++}
++
++// (5) No regression: the local password still guards the keep-alive
++// endpoint it was made for (TUI / background mode), while management stays
++// off without MANAGEMENT_PASSWORD.
++func TestManagementEnvOnly_LocalPasswordStillGuardsKeepAlive(t *testing.T) {
++	envOnlyUnsetEnv(t)
++	f := newEnvOnlyFixture(t)
++	s := f.server(f.write(""), WithLocalManagementPassword(envOnlyLocalKey), WithKeepAliveEndpoint(time.Hour, func() {}))
++	if rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/keep-alive", envOnlyLocalKey, "")); rr.Code != http.StatusOK {
++		t.Fatalf("keep-alive with the local password: status = %d body=%q, want 200", rr.Code, rr.Body.String())
++	}
++	if rr := serveAllowlist(s, allowlistRequest(http.MethodGet, "/keep-alive", "wrong", "")); rr.Code != http.StatusUnauthorized {
++		t.Fatalf("keep-alive with a wrong password: status = %d body=%q, want 401", rr.Code, rr.Body.String())
++	}
++	assertManagementOff(t, s, "keep-alive server without MANAGEMENT_PASSWORD")
++}
+diff --git a/internal/api/server_reload.go b/internal/api/server_reload.go
+index c875ce8..a79a604 100644
+--- a/internal/api/server_reload.go
++++ b/internal/api/server_reload.go
+@@ -126,11 +126,9 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
+ 		util.SetLogLevel(cfg)
+ 	}
+ 
+-	prevSecretEmpty := true
+-	if oldCfg != nil {
+-		prevSecretEmpty = oldCfg.RemoteManagement.SecretKey == ""
+-	}
+-	newSecretEmpty := cfg.RemoteManagement.SecretKey == ""
++	// claude-multi local patch (management-env-only): only MANAGEMENT_PASSWORD
++	// keeps management enabled across a reload; a reloaded config secret-key
++	// never enables it (upstream's no-secret branch).
+ 	if s.envManagementSecret {
+ 		s.registerManagementRoutes()
+ 		if s.managementRoutesEnabled.CompareAndSwap(false, true) {
+@@ -139,23 +137,7 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
+ 			s.managementRoutesEnabled.Store(true)
+ 		}
+ 	} else {
+-		switch {
+-		case prevSecretEmpty && !newSecretEmpty:
+-			s.registerManagementRoutes()
+-			if s.managementRoutesEnabled.CompareAndSwap(false, true) {
+-				log.Info("management routes enabled after secret key update")
+-			} else {
+-				s.managementRoutesEnabled.Store(true)
+-			}
+-		case !prevSecretEmpty && newSecretEmpty:
+-			if s.managementRoutesEnabled.CompareAndSwap(true, false) {
+-				log.Info("management routes disabled after secret key removal")
+-			} else {
+-				s.managementRoutesEnabled.Store(false)
+-			}
+-		default:
+-			s.managementRoutesEnabled.Store(!newSecretEmpty)
+-		}
++		s.managementRoutesEnabled.Store(false)
+ 	}
+ 	redisqueue.SetEnabled(s.managementRoutesEnabled.Load() || (cfg != nil && cfg.Home.Enabled))
+ 
+diff --git a/internal/config/config_load.go b/internal/config/config_load.go
+index 552567c..ac5d0e1 100644
+--- a/internal/config/config_load.go
++++ b/internal/config/config_load.go
+@@ -122,21 +122,9 @@ func loadConfigBytes(configFile string, data []byte, optional bool) (*Config, er
+ 		return nil, errValidate
+ 	}
+ 
+-	// Hash remote management key if plaintext is detected (nested)
+-	// We consider a value to be already hashed if it looks like a bcrypt hash ($2a$, $2b$, or $2y$ prefix).
+-	if cfg.RemoteManagement.SecretKey != "" && !looksLikeBcrypt(cfg.RemoteManagement.SecretKey) {
+-		hashed, errHash := hashSecret(cfg.RemoteManagement.SecretKey)
+-		if errHash != nil {
+-			return nil, fmt.Errorf("failed to hash remote management key: %w", errHash)
+-		}
+-		cfg.RemoteManagement.SecretKey = hashed
+-
+-		// Persist the hashed value back to the config file to avoid re-hashing on next startup.
+-		// Preserve YAML comments and ordering; update only the nested key.
+-		if configFile != "" {
+-			_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"remote-management", "secret-key"}, hashed)
+-		}
+-	}
++	// claude-multi local patch (management-env-only): a config secret-key is
++	// dropped, never hashed and never written back.
++	dropConfigManagementSecret(&cfg)
+ 
+ 	cfg.RemoteManagement.PanelGitHubRepository = strings.TrimSpace(cfg.RemoteManagement.PanelGitHubRepository)
+ 	if cfg.RemoteManagement.PanelGitHubRepository == "" {
+diff --git a/internal/config/management_env_only.go b/internal/config/management_env_only.go
+new file mode 100644
+index 0000000..98fd5f5
+--- /dev/null
++++ b/internal/config/management_env_only.go
+@@ -0,0 +1,17 @@
++package config
++
++import log "github.com/sirupsen/logrus"
++
++// claude-multi local patch (management-env-only): the management API
++// authenticates only with the MANAGEMENT_PASSWORD environment secret. A
++// remote-management secret-key from a config file or payload, plaintext or
++// bcrypt, is dropped at every load (start and hot reload): it never enables
++// the management API, never authenticates, is never hashed and is never
++// written back. The value itself is never logged.
++func dropConfigManagementSecret(cfg *Config) {
++	if cfg == nil || cfg.RemoteManagement.SecretKey == "" {
++		return
++	}
++	cfg.RemoteManagement.SecretKey = ""
++	log.Warn("remote-management.secret-key is ignored: management authenticates only with MANAGEMENT_PASSWORD")
++}
+diff --git a/internal/config/management_env_only_test.go b/internal/config/management_env_only_test.go
+new file mode 100644
+index 0000000..ef0025c
+--- /dev/null
++++ b/internal/config/management_env_only_test.go
+@@ -0,0 +1,79 @@
++package config
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"golang.org/x/crypto/bcrypt"
++)
++
++// claude-multi local patch (management-env-only) gate: every config load
++// drops a remote-management secret-key, plaintext or bcrypt; it is never
++// hashed and config.yaml is never rewritten.
++
++const envOnlyConfigTestKey = "env-only-config-test-key"
++
++func envOnlyConfigYAML(secret string) []byte {
++	return []byte("port: 8317\napi-keys:\n  - \"client-key\"\nremote-management:\n  allow-remote: false\n  secret-key: \"" + secret + "\"\n")
++}
++
++func envOnlyConfigSecrets(t *testing.T) map[string]string {
++	t.Helper()
++	hashed, err := bcrypt.GenerateFromPassword([]byte(envOnlyConfigTestKey), bcrypt.MinCost)
++	if err != nil {
++		t.Fatalf("bcrypt: %v", err)
++	}
++	return map[string]string{"plaintext": envOnlyConfigTestKey, "bcrypt": string(hashed)}
++}
++
++func TestManagementEnvOnly_LoadConfigDropsSecretKeyWithoutWriteBack(t *testing.T) {
++	for name, secret := range envOnlyConfigSecrets(t) {
++		t.Run(name, func(t *testing.T) {
++			path := filepath.Join(t.TempDir(), "config.yaml")
++			data := envOnlyConfigYAML(secret)
++			if err := os.WriteFile(path, data, 0o600); err != nil {
++				t.Fatalf("write config: %v", err)
++			}
++			cfg, err := LoadConfig(path)
++			if err != nil {
++				t.Fatalf("LoadConfig: %v", err)
++			}
++			if cfg.RemoteManagement.SecretKey != "" {
++				t.Fatalf("LoadConfig kept a %s secret-key (len %d)", name, len(cfg.RemoteManagement.SecretKey))
++			}
++			if len(cfg.APIKeys) != 1 || cfg.Port != 8317 {
++				t.Fatalf("the rest of the config did not load: port=%d api-keys=%d", cfg.Port, len(cfg.APIKeys))
++			}
++			after, errRead := os.ReadFile(path)
++			if errRead != nil {
++				t.Fatalf("read config: %v", errRead)
++			}
++			if string(after) != string(data) {
++				t.Fatalf("LoadConfig rewrote config.yaml:\n%s", after)
++			}
++		})
++	}
++}
++
++func TestManagementEnvOnly_ReloadAndPayloadLoadsDropSecretKey(t *testing.T) {
++	for name, secret := range envOnlyConfigSecrets(t) {
++		t.Run(name, func(t *testing.T) {
++			data := envOnlyConfigYAML(secret)
++			cfg, err := LoadConfigBytes(data)
++			if err != nil {
++				t.Fatalf("LoadConfigBytes: %v", err)
++			}
++			if cfg.RemoteManagement.SecretKey != "" {
++				t.Fatalf("LoadConfigBytes (the watcher reload path) kept a %s secret-key", name)
++			}
++			parsed, err := ParseConfigBytes(data)
++			if err != nil {
++				t.Fatalf("ParseConfigBytes: %v", err)
++			}
++			if parsed.RemoteManagement.SecretKey != "" {
++				t.Fatalf("ParseConfigBytes kept a %s secret-key", name)
++			}
++		})
++	}
++}
+diff --git a/internal/config/parse.go b/internal/config/parse.go
+index 86b5e75..8b2f22a 100644
+--- a/internal/config/parse.go
++++ b/internal/config/parse.go
+@@ -5,7 +5,6 @@ import (
+ 	"strings"
+ 
+ 	log "github.com/sirupsen/logrus"
+-	"golang.org/x/crypto/bcrypt"
+ 	"gopkg.in/yaml.v3"
+ )
+ 
+@@ -62,14 +61,9 @@ func ParseConfigBytes(data []byte) (*Config, error) {
+ 		cfg.Discovery.Subtypes = []string{"_chat-completions", "_responses", "_messages", "_generate-content", "_interactions"}
+ 	}
+ 
+-	// Hash remote management key if plaintext is detected (nested), but do NOT persist.
+-	if cfg.RemoteManagement.SecretKey != "" && !looksLikeBcrypt(cfg.RemoteManagement.SecretKey) {
+-		hashed, errHash := bcrypt.GenerateFromPassword([]byte(cfg.RemoteManagement.SecretKey), bcrypt.DefaultCost)
+-		if errHash != nil {
+-			return nil, fmt.Errorf("hash remote management key: %w", errHash)
+-		}
+-		cfg.RemoteManagement.SecretKey = string(hashed)
+-	}
++	// claude-multi local patch (management-env-only): a config secret-key is
++	// dropped, never hashed.
++	dropConfigManagementSecret(&cfg)
+ 
+ 	cfg.RemoteManagement.PanelGitHubRepository = strings.TrimSpace(cfg.RemoteManagement.PanelGitHubRepository)
+ 	if cfg.RemoteManagement.PanelGitHubRepository == "" {

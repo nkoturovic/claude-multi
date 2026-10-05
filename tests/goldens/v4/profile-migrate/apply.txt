@@ -1,0 +1,43 @@
+claude-multi profile migrate --apply: config /config
+catalog 31 (launcher 2.25.1); state marker absent (state 3)
+compositions: 7 files in /config/compositions (0 unreadable)
+profiles: 0 user files; seeds absent 8 (balanced, quality, max, economy, claude, openai, openrouter, direct)
+
+presets:
+  default      drop        (legacy default composition; the default is the balanced seed)
+  fx-convert   convert     → fx-team
+  fx-direct    convert     → fx-direct
+  fx-drop      drop        (lead muse-spark removed (no successor))
+  fx-judgment  drop        (judgment row (lead kimi-k3 → kimi-k3 survives); records → profile null)
+  fx-merge     merge-into  → fx-team (source fx-convert)
+  fx-seed      seed-map    → balanced (lead sol → opus55)
+
+targets:
+  fx-direct  written  (source fx-direct)
+    lead qwen38·ultracode  lead_providers [qwen]
+    agents: none
+    native: explore native, plan native, general_purpose on
+    notes: none
+    not carried: none
+    warnings: none
+    notices: none
+    expected warnings: none
+  fx-lost  skipped  (source fx-lost-src)
+  fx-team  written  (source fx-convert; members fx-convert, fx-merge)
+    lead opus55·ultracode  lead_providers [anthropic]
+    agents: explorer sol·xhigh, analyst sol·xhigh, implementer sol·xhigh, implementer-strong opus55·xhigh, reviewer gpt55·high, reviewer-strong kimi-k3·max
+    native: explore replace, plan native, general_purpose off
+    notes: implementer-strong: row override opus55·xhigh; expected fan-out-quota not produced
+    not carried: fx-convert: analyst qwen38@default; fx-convert: reviewer muse-spark@xhigh (removed); fx-convert: availability.models (2 entries); fx-merge: analyst sol@default
+    differs (fx-merge): lead sol·ultracode (source opus55·ultracode); explorer unbound (source sol·xhigh); analyst sol·high (source sol·xhigh); implementer unbound (source sol·xhigh); reviewer-strong unbound (source kimi-k3·max); native explore native (source replace); native general_purpose on (source off); lead_providers [openai] (source [anthropic]); description differs
+    warnings: context-below-lead-class: reviewer: context 258K is below the lead's 1M class (allowed)
+    notices: none
+    expected warnings: fan-out-quota
+
+summary:
+  presets 7: seed-map 1 (balanced 1), convert 2, merge-into 1, drop 3, unmapped 0; unreadable 0
+  targets 3: write 0, written 2, already-migrated 0, conflict 0, failed 0, skipped 1
+  seeds 8: installed 8, present 0; profiles after: 10
+  warnings: context-below-lead-class 1; notices: none
+  compositions: untouched (7 files read, none written)
+applied: wrote 2 profiles, installed 8 seeds; compositions untouched

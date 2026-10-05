@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": [
+    "version"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "claude": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": [
+            "auto",
+            "copy",
+            "download"
+          ]
+        },
+        "from": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          ]
+        },
+        "accept_download": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "boolean"
+        }
+      }
+    },
+    "keys_file": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      ]
+    },
+    "providers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,62}$"
+          },
+          "api_key_file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "transport": {
+            "enum": [
+              "api-key",
+              "oauth-pool"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "object",
+            "required": [
+              "kind",
+              "base_url"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "anthropic-compatible",
+                  "openai-compatible"
+                ]
+              },
+              "base_url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "auth": {
+                "enum": [
+                  "header",
+                  "bearer"
+                ]
+              },
+              "family": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "listing": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  }
+                ]
+              }
+            }
+          },
+          "server": {
+            "type": "object",
+            "required": [
+              "preset",
+              "base_url"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "preset": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "base_url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            }
+          }
+        }
+      }
+    },
+    "profile": {
+      "type": "string",
+      "pattern": "^(auto|starter|[a-z0-9][a-z0-9._-]{0,63})$"
+    },
+    "default_profile": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+        }
+      ]
+    }
+  }
+}

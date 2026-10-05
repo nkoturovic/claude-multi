@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "lines": {
+    "custom-acme-small": {
+      "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+      "host": "api.acme.example",
+      "versions": {
+        "launcher": "3.1.0",
+        "client": "2.1.281",
+        "gateway": "7.3.15"
+      },
+      "checks": {
+        "smoke": {
+          "result": "pass",
+          "http": 200,
+          "at": "2026-09-30T00:00:00Z"
+        }
+      }
+    }
+  }
+}

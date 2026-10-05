@@ -1,0 +1,40 @@
+
+  change lineup — "api design" (unknown)
+  ──────────────────────────────────────────────────────────────────────────────
+  from  balanced (gen 1)
+  to    [claude ▾]   per-agent edit ▸   direct (no agents)   keep current   fallback [anthropic ▾]
+  diff  explorer             GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+        analyst              GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+        implementer-light    GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+        implementer          GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+        implementer-strong   GPT-5.6 Sol · xhigh → Opus 5.5 · 1M selector · xhigh
+        reviewer             GPT-5.6 Sol · xhigh → Opus 5 · 1M selector · xhigh
+        reviewer-strong      Opus 5.5 · 1M selector · xhigh → Fable 5 · 1M selector · max
+  mode  LIVE — running agents keep their model; new spawns use the new lineup
+  next  run /reload-plugins in that session
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Enter apply · Tab target · ← → choose · Space pick · ? help · Esc cancel

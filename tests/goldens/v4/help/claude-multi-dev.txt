@@ -1,0 +1,71 @@
+claude-multi-dev — catalog onboarding pipeline (draft → check → review → promote)
+
+  claude-multi-dev --version   the release identity (launcher, catalog, gateway, Claude Code)
+
+Two tracks:
+  Existing-provider model release:
+    claude-multi-dev model add --like astra --id NEWID --wire-id WIRE --name DRAFT
+      (scaffolds a draft from the like-model with QUALIFY markers at the
+       judgment fields — fill those before check)
+    or: model add --from-json FILE --name DRAFT (a complete hand-written entry)
+    or: hand-edit the checkout's src/claude_multi/data/catalog/models.json
+        with the full battery (AGENTS.md §5)
+  New provider / provider kind:
+    claude-multi-dev provider add --from-json FILE --name DRAFT
+
+  Prefill from observations (review context, never catalog verification):
+    claude-multi-dev model add --from-registry CHANNEL:WIRE --id KEY [--provider P] [--name DRAFT]
+      (a pinned-registry candidate: claude-multi models --candidates)
+    claude-multi-dev model add --from-operator KEY --id CATALOG_KEY [--name DRAFT]
+      (an operator declaration; a line on a T2-only provider becomes a provider draft)
+    The four sources (--like, --from-json, --from-registry, --from-operator) are
+    mutually exclusive.
+
+Then:  check DRAFT → review DRAFT → promote DRAFT --repo PATH
+Developer promotion installs a New · Off catalog line (status "new"); operator
+admission enables that installed line locally (Models, or `claude-multi models
+admit KEY`). Selectors follow the catalog-33 shape: Anthropic =
+canonical wire[1m], gateway-effort = <prefix><key>-<effort>[1m].
+`check` also reports every OAuth-pool line whose wire is absent from the
+pinned gateway registry (package data; a report, never a refusal).
+`promote` notes each gateway-effort line whose generation differs from the
+installed catalog: shared aliases retarget at reload; renamed aliases retain
+the old generation through continuity until resume. Reviewed generation moves
+use generation-tagged aliases and retire the old ones. --like refuses a
+generation-tagged sibling; use --from-json and review the new entry.
+
+Version 1 drafts:
+  claude-multi-dev drafts migrate [--apply] [--repo PATH]
+    (dry run by default; --apply archives promoted/unconvertible drafts and
+     converts v1 model drafts to v2 under drafts/archive-2x/ — never deletes)
+No test pin or golden moves for a shipped line: the behavioural suite and
+the goldens run on the frozen test fixture (tests/check_fixture_isolation.py
+proves it), and the shipped-shape/evidence tests in tests/test_catalog.py
+derive from the loaded catalog (only a minimum_tested.claude_code above the
+baseline goes into its locked `floors` map). Removing, renaming or moving a
+line (an Anthropic generation move) needs an entry in the checkout's
+src/claude_multi/data/catalog/retired.json instead (AGENTS.md §5); the
+frozen legacy selector table (FrozenSelectorCoverageTests) must stay covered —
+never edit it to pass.
+
+Claude Code re-pin (maintainers, from a source checkout):
+  claude-multi-dev repin [--repo PATH] [--manifest-dir DIR]
+                         [--settings-keys FILE]
+    Finds a Claude Code newer than the pin (the claude on PATH, then the native
+    versions directories), verifies it against Anthropic's signed release
+    manifest (GnuPG; the download is asked first, or --manifest-dir reads
+    <version>/manifest.json(.sig) offline), inspects it, writes the next
+    contract into the checkout (--repo; default: the checkout this command runs
+    from), runs the evidence suite and restores the checkout on any failure.
+    A new pin records the settings keys its build knows, read from the file;
+    when they cannot be read it stops, and --settings-keys FILE records a
+    reviewed JSON array of key names instead. The new pin reaches users with
+    the next release built from the checkout; repin builds and installs nothing.
+  python3 tools/pin_claude.py writes the next contract from a verified manifest
+  pair without running the battery (see its --help).
+
+Never performed by promote: builds, activations, restarts, secret reads.
+`check` runs the sandbox builds in a candidate tree — that is the gate.
+Live provider calls need per-call approval (a listing via `claude-multi
+discover PROVIDER`, in a terminal outside Claude Code sessions). Promotion
+writes trusted repository JSON only.

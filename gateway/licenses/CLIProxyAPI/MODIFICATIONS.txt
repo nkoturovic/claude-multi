@@ -1,0 +1,245 @@
+cli-proxy-api is CLIProxyAPI 7.3.15 (https://github.com/router-for-me/CLIProxyAPI,
+commit 673131f57484517c3a1eae7e36c4cfa7b9bb4efc), distributed under the MIT licence
+in LICENSE next to this file, modified by the patches below. They are applied
+in this order; each lists the files it modifies, adds or deletes.
+
+ 1. cli-proxy-api-loopback-oauth.patch
+    sha256 2eb510b85f5204820d7a3d70c9b9a7bce283b1a7f23ead305ddfe28d500163a5
+      modified  internal/auth/claude/oauth_server.go
+      modified  internal/auth/codex/oauth_server.go
+
+ 2. cli-proxy-api-kimi-claude-compat.patch
+    sha256 d8b4be92c5fd496980c4ad02e3e973cabb5570dc19f416b6336a608a044d2d44
+      added     internal/config/claude_compat_fields_test.go
+      modified  internal/config/config_types.go
+      modified  internal/runtime/executor/claude_executor.go
+      added     internal/runtime/executor/claude_executor_auth_header_test.go
+      modified  internal/runtime/executor/claude_executor_request.go
+      modified  internal/watcher/synthesizer/config.go
+      modified  internal/watcher/synthesizer/config_test.go
+      modified  sdk/cliproxy/service_models.go
+      modified  sdk/cliproxy/service_oauth_model_alias_test.go
+
+ 3. cli-proxy-api-non-claude-cache-retention.patch
+    sha256 6e022c54355322e5a307156ec1301710d50faff3f75dfc058506b17c6145128b
+      modified  internal/runtime/executor/claude_executor_execute.go
+      modified  internal/runtime/executor/claude_executor_stream.go
+      modified  internal/runtime/executor/claude_executor_tokens.go
+      modified  internal/runtime/executor/codex_executor_request.go
+      modified  internal/runtime/executor/codex_websockets_execute.go
+      modified  internal/runtime/executor/codex_websockets_stream.go
+      modified  internal/runtime/executor/meta_executor_execute.go
+      added     internal/runtime/executor/non_claude_cache_retention.go
+      added     internal/runtime/executor/non_claude_cache_retention_test.go
+      added     internal/runtime/executor/openai_compat_chat_retention_cm053_test.go
+      modified  internal/runtime/executor/openai_compat_executor.go
+      modified  internal/runtime/executor/xai_executor_request.go
+
+ 4. cli-proxy-api-management-readonly-allowlist.patch
+    sha256 c51d077d12280eee9419e7f928293c43a82b6839e279539ff9195a5fd885b59c
+      modified  internal/api/handlers/management/handler.go
+      modified  internal/api/redis_queue_protocol.go
+      modified  internal/api/server.go
+      modified  internal/api/server_devin_oauth_test.go
+      modified  internal/api/server_kimi_oauth_test.go
+      added     internal/api/server_management_allowlist.go
+      added     internal/api/server_management_allowlist_test.go
+      modified  internal/api/server_test.go
+
+ 5. cli-proxy-api-watcher-parentdir.patch
+    sha256 a31e05f009b66c6b74a4d6767073553f05edad8de362542899773955672c7b5c
+      modified  internal/config/config_load.go
+      modified  internal/watcher/clients.go
+      added     internal/watcher/config_dir_watch_test.go
+      modified  internal/watcher/config_reload.go
+      added     internal/watcher/config_reload_transaction_test.go
+      modified  internal/watcher/events.go
+      modified  internal/watcher/watcher.go
+
+ 6. cli-proxy-api-serve-after-initial-auth-load.patch
+    sha256 600f4c5bc0cf90dbd11ad5a48b84c007050a948efcc754b30648856f4e8bba70
+      modified  internal/watcher/dispatcher.go
+      added     internal/watcher/dispatcher_barrier_test.go
+      modified  internal/watcher/watcher.go
+      modified  sdk/cliproxy/service.go
+      modified  sdk/cliproxy/service_auth.go
+      modified  sdk/cliproxy/service_lifecycle.go
+      added     sdk/cliproxy/startup_gate.go
+      added     sdk/cliproxy/startup_gate_test.go
+      modified  sdk/cliproxy/types.go
+      modified  sdk/cliproxy/watcher.go
+
+ 7. cli-proxy-api-management-env-only.patch
+    sha256 09e56ff25352761b2f7c3b208876e09c108daf259def78e47a260d9e9cf564cd
+      modified  internal/api/handlers/management/handler.go
+      modified  internal/api/server.go
+      added     internal/api/server_management_env_only_test.go
+      modified  internal/api/server_reload.go
+      modified  internal/config/config_load.go
+      added     internal/config/management_env_only.go
+      added     internal/config/management_env_only_test.go
+      modified  internal/config/parse.go
+
+ 8. cli-proxy-api-credential-save-report.patch
+    sha256 c04cc0fc0af41dca57a801e87ee8cf4e4aba8377c716a8ca2ff1621d0f8d5107
+      added     sdk/auth/export_cm053_test.go
+      modified  sdk/auth/filestore.go
+      added     sdk/auth/filestore_cm053_fsize_test.go
+      added     sdk/auth/filestore_cm053_manager_test.go
+      added     sdk/auth/filestore_cm053_test.go
+      added     sdk/auth/filestore_cm053_watcher_test.go
+      added     sdk/auth/filestore_save.go
+      added     sdk/auth/filestore_save_other.go
+      added     sdk/auth/filestore_save_unix.go
+      modified  sdk/cliproxy/auth/conductor_cooldown.go
+      modified  sdk/cliproxy/auth/conductor_lifecycle.go
+      modified  sdk/cliproxy/auth/conductor_scheduler_refresh_test.go
+      modified  sdk/cliproxy/auth/conductor_selection.go
+      added     sdk/cliproxy/auth/credential_save.go
+      added     sdk/cliproxy/auth/credential_save_cm053_test.go
+
+ 9. cli-proxy-api-credentialed-redirects.patch
+    sha256 211c8157076a8a5e640796aae913853ba7719a5d9222349e58b98fe8102a40b1
+      modified  internal/auth/claude/anthropic_auth.go
+      added     internal/auth/claude/oauth_redirect_cm053_test.go
+      modified  internal/auth/claude/utls_transport.go
+      added     internal/auth/codex/oauth_redirect_cm053_test.go
+      modified  internal/auth/codex/openai_auth.go
+      modified  internal/runtime/executor/antigravity_executor.go
+      modified  internal/runtime/executor/antigravity_executor_auth.go
+      modified  internal/runtime/executor/antigravity_executor_credits.go
+      modified  internal/runtime/executor/antigravity_executor_execute.go
+      modified  internal/runtime/executor/antigravity_executor_stream.go
+      modified  internal/runtime/executor/antigravity_executor_tokens.go
+      modified  internal/runtime/executor/claude_executor.go
+      modified  internal/runtime/executor/claude_executor_fast_error.go
+      modified  internal/runtime/executor/claude_executor_request.go
+      modified  internal/runtime/executor/codex_executor_execute.go
+      modified  internal/runtime/executor/codex_executor_request.go
+      modified  internal/runtime/executor/codex_executor_stream.go
+      modified  internal/runtime/executor/codex_openai_images.go
+      modified  internal/runtime/executor/devin_executor.go
+      modified  internal/runtime/executor/gemini_executor.go
+      modified  internal/runtime/executor/gemini_vertex_executor.go
+      modified  internal/runtime/executor/helps/proxy_helpers.go
+      added     internal/runtime/executor/helps/upstream_redirect_cm053_test.go
+      modified  internal/runtime/executor/helps/utls_client.go
+      modified  internal/runtime/executor/kimi_executor.go
+      modified  internal/runtime/executor/meta_executor.go
+      modified  internal/runtime/executor/meta_executor_execute.go
+      modified  internal/runtime/executor/meta_executor_stream.go
+      modified  internal/runtime/executor/openai_compat_executor.go
+      added     internal/runtime/executor/openai_compat_redirect.go
+      added     internal/runtime/executor/upstream_redirect_cm053_test.go
+      modified  internal/runtime/executor/xai_executor.go
+      modified  internal/runtime/executor/xai_executor_execute.go
+      modified  internal/runtime/executor/xai_executor_media.go
+      modified  internal/runtime/executor/xai_executor_stream.go
+      added     internal/upstreamredirect/upstreamredirect.go
+      added     internal/upstreamredirect/upstreamredirect_cm053_test.go
+
+10. cli-proxy-api-openai-compat-keyed-safety.patch
+    sha256 70878f4df3027f322aa2be2298b6f9472d9815ab3d3411578e9bcdf1cabf9f20
+      added     internal/compatsafe/compatsafe.go
+      added     internal/compatsafe/compatsafe_cm053_test.go
+      modified  internal/runtime/executor/helps/usage_helpers.go
+      modified  internal/runtime/executor/openai_compat_executor.go
+      modified  internal/runtime/executor/openai_compat_executor_compact_test.go
+      added     internal/runtime/executor/openai_compat_keyed_safety.go
+      added     internal/runtime/executor/openai_compat_keyed_safety_cm053_test.go
+      modified  sdk/cliproxy/auth/conductor_execution.go
+      added     sdk/cliproxy/auth/openai_compat_keyed_cm053_test.go
+
+11. cli-proxy-api-auth-snapshot-locking.patch
+    sha256 a6ecd426d45d91d74ef4c830982c1b0ad3b6f7dfcad3c0f1ff6123fbfe29dbfd
+      added     internal/runtime/executor/claude_manager_prepare_cm053_test.go
+      added     sdk/cliproxy/auth/auth_snapshot_cm053_test.go
+      modified  sdk/cliproxy/auth/conductor_lifecycle.go
+      modified  sdk/cliproxy/auth/types.go
+
+12. cli-proxy-api-server-config-snapshot.patch
+    sha256 aa5106979d08018c80e0c3fabd7784f7b44c49bac5350ff5a760bac2e7279c0d
+      modified  internal/api/redis_queue_protocol.go
+      modified  internal/api/server.go
+      added     internal/api/server_config_snapshot.go
+      added     internal/api/server_config_snapshot_cm053_test.go
+      modified  internal/api/server_management.go
+      modified  internal/api/server_middleware.go
+      modified  internal/api/server_reload.go
+      modified  internal/api/server_routes.go
+      modified  sdk/api/handlers/claude/code_handlers.go
+      added     sdk/api/handlers/config_snapshot_cm053_test.go
+      modified  sdk/api/handlers/handlers.go
+      added     sdk/api/handlers/handlers_config_snapshot.go
+      modified  sdk/api/handlers/handlers_errors.go
+      modified  sdk/api/handlers/handlers_execution.go
+      modified  sdk/api/handlers/handlers_stream.go
+      modified  sdk/api/handlers/openai/codex_client_models.go
+      added     sdk/api/handlers/openai/openai_config_snapshot.go
+      added     sdk/api/handlers/openai/openai_config_snapshot_cm053_test.go
+      modified  sdk/api/handlers/openai/openai_images_handlers.go
+      modified  sdk/api/handlers/openai/openai_responses_handlers.go
+      modified  sdk/api/handlers/openai/openai_responses_websocket.go
+      modified  sdk/api/handlers/openai/openai_responses_websocket_forward.go
+      modified  sdk/api/handlers/openai/openai_videos_handlers.go
+      modified  sdk/api/handlers/openai/openai_videos_handlers_test.go
+      modified  sdk/api/handlers/stream_forwarder.go
+
+13. cli-proxy-api-plugin-host-locking.patch
+    sha256 d7ec5447735613fa64ce21269ebbd578ea70561d091120de8fc26379de756567
+      modified  internal/api/server_routes.go
+      modified  sdk/api/handlers/handlers.go
+      modified  sdk/api/handlers/handlers_execution.go
+      modified  sdk/api/handlers/handlers_interceptors.go
+      modified  sdk/api/handlers/handlers_routing.go
+      added     sdk/api/handlers/plugin_host_cm053_test.go
+
+14. cli-proxy-api-claude-metadata-locking.patch
+    sha256 35b69fdcfac2223f76a71956c82f772e3608af20dea68dd1ff393443d707e4e0
+      modified  internal/auth/claude/identity.go
+      modified  internal/runtime/executor/claude_executor_auth.go
+      added     internal/runtime/executor/claude_executor_auth_cm053_test.go
+
+15. cli-proxy-api-oauth-model-overlay.patch
+    sha256 ee11e0e82bbe81b4953b02d0c7e881e84a5d0d78425420e5cca1d76cb4228a2f
+      modified  internal/config/config.go
+      modified  internal/config/config_load.go
+      added     internal/config/oauth_extra_models.go
+      added     internal/config/oauth_extra_models_cm053_test.go
+      modified  internal/config/parse.go
+      added     internal/modelconfig/oauth_extra_models.go
+      modified  internal/watcher/config_reload.go
+      modified  internal/watcher/diff/config_diff.go
+      added     internal/watcher/oauth_extra_models_cm053_test.go
+      modified  sdk/cliproxy/auth/api_key_model_capabilities.go
+      added     sdk/cliproxy/oauth_extra_models_cm053_test.go
+      modified  sdk/cliproxy/service.go
+      modified  sdk/cliproxy/service_models.go
+      modified  sdk/config/config.go
+
+16. cli-proxy-api-no-antigravity-egress.patch
+    sha256 233443d22a411ee935b4c0776c26992543a5b97d1241784db5bf726ca80464c6
+      modified  cmd/server/main.go
+      added     cmd/server/antigravity_version_cm053_test.go
+
+17. cli-proxy-api-codex-client-identity.patch
+    sha256 b4ffbda891ee82dbd0441dfa6a6b1d154fd82be33dc4c5e2edb2526eeb041c65
+      modified  internal/runtime/executor/codex_executor_request.go
+      modified  internal/runtime/executor/codex_websockets_request.go
+      added     internal/runtime/executor/codex_client_identity_cm055_test.go
+      modified  internal/runtime/executor/codex_websockets_executor_test.go
+
+18. cli-proxy-api-antigravity-loopback-callback.patch
+    sha256 f728ba3eb999266d30137cd7d4501d54cdb9613c2cc33579194a6d7b9a23a523
+      modified  sdk/auth/antigravity.go
+      added     sdk/auth/antigravity_callback_loopback_test.go
+
+19. cli-proxy-api-codex-api-key-safety.patch
+    sha256 b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628
+      modified  internal/runtime/executor/codex_executor_execute.go
+      modified  internal/runtime/executor/codex_executor_request.go
+      modified  internal/runtime/executor/codex_executor_stream.go
+      modified  internal/runtime/executor/codex_executor_stream_output_test.go
+      added     internal/runtime/executor/codex_key_safety.go
+      added     internal/runtime/executor/codex_key_safety_test.go
+      modified  internal/runtime/executor/codex_websockets_request.go

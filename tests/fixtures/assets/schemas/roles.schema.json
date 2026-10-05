@@ -1,0 +1,85 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "roles": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "disallowed_tools": {
+            "items": {
+              "pattern": "^[A-Z][A-Za-z0-9]*$",
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "function": {
+            "enum": [
+              "lead",
+              "explorer",
+              "analyst",
+              "implementer",
+              "reviewer",
+              "designer"
+            ]
+          },
+          "grade": {
+            "enum": [
+              "light",
+              "plain",
+              "strong"
+            ]
+          },
+          "isolation": {
+            "oneOf": [
+              {
+                "const": "worktree"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prompt_file": {
+            "pattern": "^prompts/cm-[a-z]+\\.md$",
+            "type": "string"
+          },
+          "requires": {
+            "items": {
+              "pattern": "^cm-[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "function",
+          "grade",
+          "prompt_file",
+          "isolation",
+          "disallowed_tools",
+          "description",
+          "requires"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "version": {
+      "const": 2
+    }
+  },
+  "required": [
+    "version",
+    "roles"
+  ],
+  "type": "object",
+  "version": 1
+}

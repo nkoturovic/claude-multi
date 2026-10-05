@@ -1,0 +1,24 @@
+
+  providers — local status
+  ─────────────────────────────────────────────────────────────────────────────
+  credential: API key or sign-in · served: models the local gateway serves now
+  (not a test of the provider)
+    provider   on credential      quota models served src route
+  › anthropic  on sign-in failing —     4      9/9    cat n/a
+    deepseek   on key set               0      no models yet — A adds models
+    kimi       on key set               1      1/1    cat n/a
+    llm-local  on keyless               1      1/1    cat n/a
+    meta       on key set               0      no models yet — A adds models
+    openai     on not signed in   —     2      3/3    cat n/a
+    openrouter on key set               6      12/12  cat n/a
+    qwen       on key set               1      1/1    cat n/a
+  transport: oauth-pool
+  sign in: L (personal use; it runs in this terminal)
+
+
+
+
+
+
+  Enter connect · L sign in/out · T test · Space on/off · Q details · N new
+  ? help · Esc back

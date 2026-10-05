@@ -1,0 +1,24 @@
+
+  Declaration preview
+  ─────────────────────────────────────────────────────────────────────────────
+  Declaration preview — off until admitted; requested roles are not grants.
+  {
+    "custom-fixture-reviewer": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context": {
+        "declared_tokens": 200000,
+        "source": "operator"
+      },
+      "default_effort": "high",
+      "display": "Fixture Reviewer",
+      "efforts": {
+        "high": "output-config-high"
+      },
+      "family": "openai",
+      "roles": [
+        "cm-reviewer"
+  More below — arrows/PgDn scroll; Home/End
+  Enter declare · Esc cancel

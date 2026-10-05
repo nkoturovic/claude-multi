@@ -1,0 +1,24 @@
+
+  model — full details
+  ─────────────────────────────────────────────────────────────────────────────
+  Candidates — advisory only; nothing declared or admitted
+  unattributed  fixture-unattributed  registry-stated context unknown  max
+  output unknown
+    served candidate · owned_by unknown (advisory) · created unknown
+  next: claude-multi models add PROVIDER WIRE --context N --source registry
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Up/Down scroll · PgUp/PgDn page · Home/End  · Esc back

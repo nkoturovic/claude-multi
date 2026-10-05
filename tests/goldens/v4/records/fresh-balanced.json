@@ -1,0 +1,123 @@
+{
+  "applied": {
+    "agents": {
+      "cm-analyst": {
+        "effort": "high",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-high[1m]"
+      },
+      "cm-analyst-strong": {
+        "effort": "xhigh",
+        "generation": "5.5",
+        "key": "opus55",
+        "selector": "claude-multi-opus-5-5[1m]"
+      },
+      "cm-explorer": {
+        "effort": "high",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-high[1m]"
+      },
+      "cm-implementer": {
+        "effort": "high",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-high[1m]"
+      },
+      "cm-implementer-light": {
+        "effort": "high",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-high[1m]"
+      },
+      "cm-implementer-strong": {
+        "effort": "xhigh",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-xhigh[1m]"
+      },
+      "cm-reviewer": {
+        "effort": "xhigh",
+        "generation": "5.6",
+        "key": "sol",
+        "selector": "gpt-multi-sol-xhigh[1m]"
+      },
+      "cm-reviewer-strong": {
+        "effort": "xhigh",
+        "generation": "5.5",
+        "key": "opus55",
+        "selector": "claude-multi-opus-5-5[1m]"
+      }
+    },
+    "lead": {
+      "compaction": {
+        "client_tokens": 1000000,
+        "percent": 90,
+        "provider_tokens": 1000000,
+        "scalar": null,
+        "trigger": 702000,
+        "window": 800000
+      },
+      "effort": "ultracode",
+      "env": {},
+      "generation": "5.5",
+      "key": "opus55",
+      "selector": "claude-multi-opus-5-5[1m]"
+    },
+    "lead_providers": null,
+    "native_agents": {
+      "explore": "replace",
+      "general_purpose": "off",
+      "plan": "native"
+    },
+    "no_subagents": false,
+    "settings": {
+      "admitted_lines": [],
+      "compaction_percent": 90,
+      "explore_inherit_cap_disabled": true,
+      "providers_enabled": {
+        "anthropic": true,
+        "deepseek": true,
+        "kimi": true,
+        "llm-local": true,
+        "meta": true,
+        "openai": true,
+        "openrouter": true,
+        "qwen": true
+      },
+      "review_round_cap": 2,
+      "version": 1,
+      "workflow_default_binding": null
+    },
+    "settings_overrides": {},
+    "workflows": "native"
+  },
+  "applied_hash": "sha256:7e6398c95501b26ee42bd71952a51b68ee472e2c0bd933cd8c54eacdb31945ef",
+  "catalog_hash": "sha256:ba572bfe05f9ce9c371e8911a8172f3374e40acfa650f7fa57f63923ce645f4a",
+  "catalog_version": 31,
+  "created_at": "2026-09-25T00:00:00Z",
+  "cwd": "/project",
+  "follow": true,
+  "forked_from": null,
+  "identity_state": "unverified",
+  "last_event_source": null,
+  "last_seen_at": "2026-09-25T00:00:00Z",
+  "launch_epoch": 1,
+  "launch_fence": "sha256:cd9734d81461291ce56910912a2b502556504884369b9e50f5e9b10e129b7ba2",
+  "launcher_version": "2.25.1",
+  "lead_class": "large",
+  "lineup_generation": 1,
+  "managed_id": "11111111-1111-4111-8111-111111111111",
+  "migrated_from_version": null,
+  "pending_forks": [],
+  "profile": "balanced",
+  "runtime_aliases": [],
+  "runtime_session_id": "11111111-1111-4111-8111-111111111111",
+  "scope_lead": {
+    "effort": "ultracode",
+    "key": "opus55",
+    "selector": "claude-multi-opus-5-5[1m]"
+  },
+  "version": 4
+}

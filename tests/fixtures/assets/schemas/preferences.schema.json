@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "claude_feedback_drafts": { "enum": ["off", "notify"] }
+  }
+}

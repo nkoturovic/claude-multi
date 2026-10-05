@@ -1,0 +1,54 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "high",
+      "model": "opus"
+    },
+    "cm-analyst-strong": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "cm-explorer": {
+      "effort": "medium",
+      "model": "sonnet"
+    },
+    "cm-implementer": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "cm-implementer-light": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "cm-implementer-strong": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "cm-reviewer": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "cm-reviewer-strong": {
+      "effort": "xhigh",
+      "model": "fable"
+    }
+  },
+  "description": "Anthropic only: Opus lead, Sonnet writers and volume, Opus strong writer, Opus+Fable reviewers",
+  "lead": {
+    "effort": "ultracode",
+    "model": "opus"
+  },
+  "name": "claude",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "primary_provider": "anthropic",
+  "seed": {
+    "id": "claude",
+    "version": 2
+  },
+  "version": 2,
+  "workflows": "native"
+}

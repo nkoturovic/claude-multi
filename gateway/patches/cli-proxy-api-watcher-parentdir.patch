@@ -1,0 +1,1071 @@
+diff --git a/internal/config/config_load.go b/internal/config/config_load.go
+--- a/internal/config/config_load.go
++++ b/internal/config/config_load.go
+@@ -44,6 +44,17 @@
+ 		return nil, fmt.Errorf("failed to read config file: %w", err)
+ 	}
+ 
++	return loadConfigBytes(configFile, data, optional)
++}
++
++// LoadConfigBytes applies the exact LoadConfig validation/defaulting pipeline to
++// an immutable snapshot. Reloads must hash and parse these same bytes. Unlike
++// LoadConfig, it never rewrites the file (including management-key hashing).
++func LoadConfigBytes(data []byte) (*Config, error) {
++	return loadConfigBytes("", data, false)
++}
++
++func loadConfigBytes(configFile string, data []byte, optional bool) (*Config, error) {
+ 	// In cloud deploy mode (optional=true), if file is empty or contains only whitespace, return empty config.
+ 	if optional && len(bytes.TrimSpace(data)) == 0 {
+ 		cfg := &Config{CredentialInFlight: DefaultCredentialInFlightConfig()}
+@@ -81,7 +92,7 @@
+ 	cfg.Discovery.Subtypes = []string{"_chat-completions", "_responses", "_messages", "_generate-content", "_interactions"}
+ 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
+ 	cfg.CredentialInFlight = DefaultCredentialInFlightConfig()
+-	if err = yaml.Unmarshal(data, &cfg); err != nil {
++	if err := yaml.Unmarshal(data, &cfg); err != nil {
+ 		if optional {
+ 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
+ 			cfgOptional := &Config{CredentialInFlight: DefaultCredentialInFlightConfig()}
+@@ -122,7 +133,9 @@
+ 
+ 		// Persist the hashed value back to the config file to avoid re-hashing on next startup.
+ 		// Preserve YAML comments and ordering; update only the nested key.
+-		_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"remote-management", "secret-key"}, hashed)
++		if configFile != "" {
++			_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"remote-management", "secret-key"}, hashed)
++		}
+ 	}
+ 
+ 	cfg.RemoteManagement.PanelGitHubRepository = strings.TrimSpace(cfg.RemoteManagement.PanelGitHubRepository)
+diff --git a/internal/watcher/clients.go b/internal/watcher/clients.go
+--- a/internal/watcher/clients.go
++++ b/internal/watcher/clients.go
+@@ -23,6 +23,13 @@
+ )
+ 
+ func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string, forceAuthRefresh bool) {
++	w.configApplyMu.Lock()
++	defer w.configApplyMu.Unlock()
++	w.reloadClientsLocked(rescanAuth, affectedOAuthProviders, forceAuthRefresh)
++}
++
++// reloadClientsLocked includes the callback in the config application transaction.
++func (w *Watcher) reloadClientsLocked(rescanAuth bool, affectedOAuthProviders []string, forceAuthRefresh bool) {
+ 	log.Debugf("starting full client load process")
+ 
+ 	w.clientsMutex.RLock()
+@@ -492,7 +499,7 @@
+ 		}
+ 		w.serverUpdatePend = false
+ 		w.serverUpdateMu.Unlock()
+-		w.reloadCallback(cfg)
++		w.notifyLatestConfig()
+ 		return
+ 	}
+ 
+@@ -515,10 +522,6 @@
+ 		if w.stopped.Load() {
+ 			return
+ 		}
+-		w.clientsMutex.RLock()
+-		latestCfg := w.config
+-		w.clientsMutex.RUnlock()
+-
+ 		w.serverUpdateMu.Lock()
+ 		if w.serverUpdateTimer != timer || !w.serverUpdatePend {
+ 			w.serverUpdateMu.Unlock()
+@@ -526,15 +529,29 @@
+ 		}
+ 		w.serverUpdateTimer = nil
+ 		w.serverUpdatePend = false
+-		if latestCfg == nil || w.reloadCallback == nil || w.stopped.Load() {
++		if w.reloadCallback == nil || w.stopped.Load() {
+ 			w.serverUpdateMu.Unlock()
+ 			return
+ 		}
+ 
+ 		w.serverUpdateLast = time.Now()
+ 		w.serverUpdateMu.Unlock()
+-		w.reloadCallback(latestCfg)
++		w.notifyLatestConfig()
+ 	})
+ 	w.serverUpdateTimer = timer
+ 	w.serverUpdateMu.Unlock()
+ }
++
++// notifyLatestConfig selects the current config only after acquiring the same
++// transaction lock as file reloads. A delayed auth notification must not apply
++// the caller's captured (and possibly retired) credentials.
++func (w *Watcher) notifyLatestConfig() {
++	w.configApplyMu.Lock()
++	defer w.configApplyMu.Unlock()
++	w.clientsMutex.RLock()
++	cfg := w.config
++	w.clientsMutex.RUnlock()
++	if cfg != nil && w.reloadCallback != nil && !w.stopped.Load() {
++		w.reloadCallback(cfg)
++	}
++}
+diff --git a/internal/watcher/config_dir_watch_test.go b/internal/watcher/config_dir_watch_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/watcher/config_dir_watch_test.go
+@@ -0,0 +1,559 @@
++package watcher
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	log "github.com/sirupsen/logrus"
++)
++
++// These tests drive the real fsnotify watch with an atomic rename-replace:
++// a same-directory ".config.yaml.<rand>.tmp" temp file, fsync, rename over the
++// config, then a directory fsync (the writer pattern of claude-multi's
++// state.atomic_write).
++
++const (
++	// configWatchEventTimeout bounds every wait for an expected event; it is
++	// reached only when the expectation fails.
++	configWatchEventTimeout = 5 * time.Second
++	// configWatchQuietWindow is how long a negative check keeps listening for
++	// an unexpected reload after the event barrier (one debounce period plus
++	// margin for a reload that was already in flight).
++	configWatchQuietWindow = 2 * configReloadDebounce
++	// Log messages emitted by the reload guards.
++	logEmptyConfig   = "ignoring empty config file"
++	logMissingRead   = "failed to read config file for hash check"
++	logAPIKeyRefusal = "removes every api-key"
++	// Logged once per applied config reload.
++	logReloadApplied = "config successfully reloaded"
++)
++
++type reloadRecord struct {
++	port    int
++	apiKeys []string
++}
++
++type logCapture struct {
++	mu       sync.Mutex
++	messages []string
++}
++
++func (c *logCapture) Levels() []log.Level { return log.AllLevels }
++
++func (c *logCapture) Fire(entry *log.Entry) error {
++	c.mu.Lock()
++	c.messages = append(c.messages, entry.Message)
++	c.mu.Unlock()
++	return nil
++}
++
++func (c *logCapture) count(substr string) int {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	n := 0
++	for _, message := range c.messages {
++		if strings.Contains(message, substr) {
++			n++
++		}
++	}
++	return n
++}
++
++func installLogCapture(t *testing.T) *logCapture {
++	t.Helper()
++	capture := &logCapture{}
++	logger := log.StandardLogger()
++	savedHooks := make(log.LevelHooks)
++	for level, hooks := range logger.Hooks {
++		savedHooks[level] = append([]log.Hook(nil), hooks...)
++	}
++	savedLevel := logger.GetLevel()
++	logger.SetLevel(log.InfoLevel)
++	logger.AddHook(capture)
++	t.Cleanup(func() {
++		logger.ReplaceHooks(savedHooks)
++		logger.SetLevel(savedLevel)
++	})
++	return capture
++}
++
++type configDirWatchFixture struct {
++	t        *testing.T
++	w        *Watcher
++	cfgPath  string
++	authDir  string
++	reloads  chan reloadRecord
++	logs     *logCapture
++	barriers int
++}
++
++// startConfigDirWatcher starts a real watcher on <tmp>/cfg/config.yaml with an
++// auth dir <tmp>/auth, seeded with port 1 and the given api-keys.
++func startConfigDirWatcher(t *testing.T, apiKeys []string) *configDirWatchFixture {
++	t.Helper()
++	return startConfigDirWatcherWithHook(t, apiKeys, nil)
++}
++
++// startConfigDirWatcherWithHook is startConfigDirWatcher with a hook that runs
++// inside every reload callback, on the watcher's goroutine.
++func startConfigDirWatcherWithHook(t *testing.T, apiKeys []string, hook func(*configDirWatchFixture, reloadRecord)) *configDirWatchFixture {
++	t.Helper()
++	root := t.TempDir()
++	f := &configDirWatchFixture{
++		t:       t,
++		cfgPath: filepath.Join(root, "cfg", "config.yaml"),
++		authDir: filepath.Join(root, "auth"),
++		reloads: make(chan reloadRecord, 256),
++	}
++	f.logs = installLogCapture(t)
++	for _, dir := range []string{filepath.Dir(f.cfgPath), f.authDir} {
++		if err := os.MkdirAll(dir, 0o700); err != nil {
++			t.Fatalf("mkdir %s: %v", dir, err)
++		}
++	}
++	if err := os.WriteFile(f.cfgPath, f.render(1, apiKeys), 0o600); err != nil {
++		t.Fatalf("seed config: %v", err)
++	}
++	running, err := config.LoadConfig(f.cfgPath)
++	if err != nil {
++		t.Fatalf("load seed config: %v", err)
++	}
++	w, err := NewWatcher(f.cfgPath, f.authDir, func(cfg *config.Config) {
++		record := reloadRecord{}
++		if cfg != nil {
++			record.port = cfg.Port
++			record.apiKeys = append([]string(nil), cfg.APIKeys...)
++		}
++		if hook != nil {
++			hook(f, record)
++		}
++		select {
++		case f.reloads <- record:
++		default:
++		}
++	})
++	if err != nil {
++		t.Fatalf("NewWatcher: %v", err)
++	}
++	f.w = w
++	w.SetConfig(running)
++	ctx, cancel := context.WithCancel(context.Background())
++	t.Cleanup(func() {
++		cancel()
++		_ = w.Stop()
++	})
++	if err = w.Start(ctx); err != nil {
++		t.Fatalf("Start: %v", err)
++	}
++	// Start performs one initial client load, which invokes the callback.
++	f.expectReload(1, apiKeys)
++	return f
++}
++
++func (f *configDirWatchFixture) render(port int, apiKeys []string) []byte {
++	var b strings.Builder
++	fmt.Fprintf(&b, "auth-dir: %q\nport: %d\n", f.authDir, port)
++	if len(apiKeys) > 0 {
++		b.WriteString("api-keys:\n")
++		for _, key := range apiKeys {
++			fmt.Fprintf(&b, "  - %q\n", key)
++		}
++	}
++	return []byte(b.String())
++}
++
++// atomicReplace replaces target the way state.atomic_write does.
++func atomicReplace(target string, data []byte) error {
++	dir := filepath.Dir(target)
++	tmp, err := os.CreateTemp(dir, "."+filepath.Base(target)+".*.tmp")
++	if err != nil {
++		return fmt.Errorf("create temp: %w", err)
++	}
++	if err = tmp.Chmod(0o600); err == nil {
++		_, err = tmp.Write(data)
++	}
++	if err == nil {
++		err = tmp.Sync()
++	}
++	if errClose := tmp.Close(); err == nil {
++		err = errClose
++	}
++	if err == nil {
++		err = os.Rename(tmp.Name(), target)
++	}
++	if err != nil {
++		_ = os.Remove(tmp.Name())
++		return fmt.Errorf("replace %s: %w", target, err)
++	}
++	dirHandle, err := os.Open(dir)
++	if err != nil {
++		return fmt.Errorf("open dir: %w", err)
++	}
++	defer dirHandle.Close()
++	return dirHandle.Sync()
++}
++
++func renameReplace(t *testing.T, target string, data []byte) {
++	t.Helper()
++	if err := atomicReplace(target, data); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func sameKeys(a, b []string) bool {
++	if len(a) != len(b) {
++		return false
++	}
++	for i := range a {
++		if a[i] != b[i] {
++			return false
++		}
++	}
++	return true
++}
++
++// expectReload waits for the next reload callback and checks what it applied.
++func (f *configDirWatchFixture) expectReload(wantPort int, wantKeys []string) {
++	f.t.Helper()
++	select {
++	case got := <-f.reloads:
++		if got.port != wantPort || !sameKeys(got.apiKeys, wantKeys) {
++			f.t.Fatalf("reload applied port=%d api-keys=%q, want port=%d api-keys=%q", got.port, got.apiKeys, wantPort, wantKeys)
++		}
++	case <-time.After(configWatchEventTimeout):
++		f.t.Fatalf("no reload within %s (want port=%d)", configWatchEventTimeout, wantPort)
++	}
++}
++
++// expectNoCallbackYet fails if any reload callback is queued right now.
++func (f *configDirWatchFixture) expectNoCallbackYet(context string) {
++	f.t.Helper()
++	select {
++	case got := <-f.reloads:
++		f.t.Fatalf("%s: unexpected reload applied port=%d api-keys=%q", context, got.port, got.apiKeys)
++	default:
++	}
++}
++
++// waitLog waits until at least want log messages contain substr.
++func (f *configDirWatchFixture) waitLog(substr string, want int) {
++	f.t.Helper()
++	deadline := time.Now().Add(configWatchEventTimeout)
++	for f.logs.count(substr) < want {
++		if time.Now().After(deadline) {
++			f.t.Fatalf("log %q seen %d times within %s, want %d", substr, f.logs.count(substr), configWatchEventTimeout, want)
++		}
++		time.Sleep(2 * time.Millisecond)
++	}
++}
++
++// barrier writes a file into the auth dir and waits until the watcher has
++// handled it. All watches share one inotify queue that is handled in order, so
++// every earlier event has been handled once the barrier is seen. It also
++// proves the auth-dir watch still works next to the config-dir watch.
++func (f *configDirWatchFixture) barrier() {
++	f.t.Helper()
++	f.barriers++
++	path := filepath.Join(f.authDir, fmt.Sprintf("barrier-%d.json", f.barriers))
++	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
++		f.t.Fatalf("write barrier: %v", err)
++	}
++	key := f.w.normalizeAuthPath(path)
++	deadline := time.Now().Add(configWatchEventTimeout)
++	for {
++		f.w.clientsMutex.RLock()
++		_, seen := f.w.lastAuthHashes[key]
++		f.w.clientsMutex.RUnlock()
++		if seen {
++			return
++		}
++		if time.Now().After(deadline) {
++			f.t.Fatalf("auth-dir barrier %s not handled within %s", filepath.Base(path), configWatchEventTimeout)
++		}
++		time.Sleep(2 * time.Millisecond)
++	}
++}
++
++// expectNotScheduled proves that no config reload was scheduled or applied for
++// the events so far.
++func (f *configDirWatchFixture) expectNotScheduled(context string) {
++	f.t.Helper()
++	f.barrier()
++	f.w.configReloadMu.Lock()
++	pending := f.w.configReloadTimer != nil
++	f.w.configReloadMu.Unlock()
++	if pending {
++		f.t.Fatalf("%s: a config reload was scheduled", context)
++	}
++	select {
++	case got := <-f.reloads:
++		f.t.Fatalf("%s: unexpected reload applied port=%d api-keys=%q", context, got.port, got.apiKeys)
++	case <-time.After(configWatchQuietWindow):
++	}
++}
++
++// expectRunning checks the watcher's running config.
++func (f *configDirWatchFixture) expectRunning(wantPort int, wantKeys []string) {
++	f.t.Helper()
++	f.w.clientsMutex.RLock()
++	defer f.w.clientsMutex.RUnlock()
++	if f.w.config == nil || f.w.config.Port != wantPort || !sameKeys(f.w.config.APIKeys, wantKeys) {
++		f.t.Fatalf("running config = %+v, want port=%d api-keys=%q", f.w.config, wantPort, wantKeys)
++	}
++}
++
++func TestConfigDirWatchReloadsOncePerRenameReplace(t *testing.T) {
++	f := startConfigDirWatcher(t, nil)
++	const replaces = 5
++	for i := 0; i < replaces; i++ {
++		port := 10 + i
++		renameReplace(t, f.cfgPath, f.render(port, nil))
++		// The next callback must be exactly this replace: a missing reload
++		// times out, and a duplicate of the previous one fails the port check.
++		f.expectReload(port, nil)
++	}
++	f.expectNotScheduled("after the last rename-replace")
++	f.expectRunning(10+replaces-1, nil)
++	if got := f.logs.count(logReloadApplied); got != replaces {
++		t.Fatalf("config reloads applied = %d, want %d (one per rename-replace)", got, replaces)
++	}
++}
++
++func TestConfigDirWatchReloadsWhileOldInodeHeldOpen(t *testing.T) {
++	f := startConfigDirWatcher(t, nil)
++	held, err := os.Open(f.cfgPath)
++	if err != nil {
++		t.Fatalf("open config: %v", err)
++	}
++	defer held.Close()
++	renameReplace(t, f.cfgPath, f.render(7, nil))
++	f.expectReload(7, nil)
++	renameReplace(t, f.cfgPath, f.render(8, nil))
++	f.expectReload(8, nil)
++	f.expectNotScheduled("with the replaced inode still open")
++	f.expectRunning(8, nil)
++	if got := f.logs.count(logReloadApplied); got != 2 {
++		t.Fatalf("config reloads applied = %d, want 2", got)
++	}
++}
++
++func TestConfigDirWatchReplaceDuringReloadIsApplied(t *testing.T) {
++	var once sync.Once
++	f := startConfigDirWatcherWithHook(t, nil, func(f *configDirWatchFixture, applied reloadRecord) {
++		if applied.port != 2 {
++			return
++		}
++		// The next render lands while the reload of port 2 is still running.
++		once.Do(func() {
++			if err := atomicReplace(f.cfgPath, f.render(3, nil)); err != nil {
++				f.t.Error(err)
++			}
++		})
++	})
++	renameReplace(t, f.cfgPath, f.render(2, nil))
++	f.expectReload(2, nil)
++	f.expectReload(3, nil)
++	f.expectNotScheduled("after the overlapping replace")
++	f.expectRunning(3, nil)
++	if got := f.logs.count(logReloadApplied); got != 2 {
++		t.Fatalf("config reloads applied = %d, want 2", got)
++	}
++}
++
++func TestConfigDirWatchRelativeConfigPath(t *testing.T) {
++	dir := t.TempDir()
++	t.Chdir(dir)
++	authDir := filepath.Join(dir, "auth")
++	if err := os.Mkdir(authDir, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	render := func(port int) []byte { return []byte(fmt.Sprintf("auth-dir: %q\nport: %d\n", authDir, port)) }
++	if err := os.WriteFile("config.yaml", render(1), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	reloads := make(chan int, 16)
++	w, err := NewWatcher("config.yaml", authDir, func(cfg *config.Config) { reloads <- cfg.Port })
++	if err != nil {
++		t.Fatalf("NewWatcher: %v", err)
++	}
++	w.SetConfig(&config.Config{AuthDir: authDir, Port: 1})
++	ctx, cancel := context.WithCancel(context.Background())
++	t.Cleanup(func() {
++		cancel()
++		_ = w.Stop()
++	})
++	if err = w.Start(ctx); err != nil {
++		t.Fatalf("Start: %v", err)
++	}
++	for _, want := range []int{1, 2} {
++		if want == 2 {
++			renameReplace(t, "config.yaml", render(2))
++		}
++		select {
++		case got := <-reloads:
++			if got != want {
++				t.Fatalf("reload applied port=%d, want %d", got, want)
++			}
++		case <-time.After(configWatchEventTimeout):
++			t.Fatalf("no reload within %s (want port=%d)", configWatchEventTimeout, want)
++		}
++	}
++}
++
++func TestConfigDirWatchIgnoresTempAndSiblingFiles(t *testing.T) {
++	f := startConfigDirWatcher(t, nil)
++	dir := filepath.Dir(f.cfgPath)
++	body := []byte("port: 99\n")
++
++	// An abandoned writer temp file (created, written, never renamed in).
++	tmp, err := os.CreateTemp(dir, ".config.yaml.*.tmp")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = tmp.Write(body); err != nil {
++		t.Fatal(err)
++	}
++	if err = tmp.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if err = os.Remove(tmp.Name()); err != nil {
++		t.Fatal(err)
++	}
++	// Sibling files: claude-multi state next to its config, and look-alikes.
++	for _, name := range []string{
++		"api-key", "api-key.lock", "previous-key", "custom.json", "native-contract.json",
++		"config.yaml.bak", "config.yaml~", ".config.yaml.swp", "xconfig.yaml", "config.yml",
++	} {
++		if err = os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err = os.Rename(filepath.Join(dir, "config.yaml.bak"), filepath.Join(dir, "config.yaml.old")); err != nil {
++		t.Fatal(err)
++	}
++	if err = os.Remove(filepath.Join(dir, "config.yml")); err != nil {
++		t.Fatal(err)
++	}
++	// A nested directory (not watched) and a metadata-only change of the config.
++	if err = os.Mkdir(filepath.Join(dir, "compositions"), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err = os.WriteFile(filepath.Join(dir, "compositions", "config.yaml"), body, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err = os.Chmod(f.cfgPath, 0o640); err != nil {
++		t.Fatal(err)
++	}
++	f.expectNotScheduled("temp, sibling and chmod events")
++	f.expectRunning(1, nil)
++	if got := f.logs.count("config file changed, reloading"); got != 0 {
++		t.Fatalf("a config reload was attempted %d times for temp/sibling events", got)
++	}
++
++	// The watch is still live: a real replace reloads.
++	renameReplace(t, f.cfgPath, f.render(2, nil))
++	f.expectReload(2, nil)
++}
++
++func TestConfigDirWatchNeverLoadsEmptyOrMissing(t *testing.T) {
++	f := startConfigDirWatcher(t, nil)
++
++	// Empty and whitespace-only rename-replaces, then an in-place truncation.
++	renameReplace(t, f.cfgPath, []byte(""))
++	f.waitLog(logEmptyConfig, 1)
++	f.expectNoCallbackYet("empty rename-replace")
++	renameReplace(t, f.cfgPath, []byte(" \n\t\n  \n"))
++	f.waitLog(logEmptyConfig, 2)
++	f.expectNoCallbackYet("whitespace-only rename-replace")
++	if err := os.WriteFile(f.cfgPath, nil, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	f.waitLog(logEmptyConfig, 3)
++	f.expectNoCallbackYet("in-place truncation")
++	f.expectRunning(1, nil)
++
++	// Deleted: the Remove event schedules nothing, and an explicit reload
++	// request (the management-save path) cannot load a missing file.
++	if err := os.Remove(f.cfgPath); err != nil {
++		t.Fatal(err)
++	}
++	f.expectNotScheduled("config deleted")
++	f.w.ReloadConfigIfChanged()
++	f.waitLog(logMissingRead, 1)
++	f.expectNoCallbackYet("explicit reload of a missing config")
++
++	// Renamed away: the Rename event reloads, finds no file, loads nothing.
++	renameReplace(t, f.cfgPath, []byte("\n"))
++	f.waitLog(logEmptyConfig, 4)
++	if err := os.Rename(f.cfgPath, f.cfgPath+".moved"); err != nil {
++		t.Fatal(err)
++	}
++	f.waitLog(logMissingRead, 2)
++	f.expectNoCallbackYet("config renamed away")
++	f.expectRunning(1, nil)
++
++	// A valid config put back is applied, exactly once.
++	renameReplace(t, f.cfgPath, f.render(5, nil))
++	f.expectReload(5, nil)
++	f.expectNotScheduled("after restoring the config")
++	if got := f.logs.count(logReloadApplied); got != 1 {
++		t.Fatalf("config reloads applied = %d, want 1 (only the restored config)", got)
++	}
++}
++
++func TestConfigReloadRefusesDroppingEveryAPIKey(t *testing.T) {
++	running := []string{"old-key"}
++	f := startConfigDirWatcher(t, running)
++	authDir := fmt.Sprintf("auth-dir: %q\n", f.authDir)
++	for i, tc := range []struct {
++		name string
++		body string
++	}{
++		{"empty list", authDir + "port: 2\napi-keys: []\n"},
++		{"key absent", authDir + "port: 3\n"},
++		{"blank entries only", authDir + "port: 4\napi-keys:\n  - \"\"\n  - \"   \"\n"},
++		{"comment only", "# api-keys removed\n"},
++		{"null document", "~\n"},
++	} {
++		renameReplace(t, f.cfgPath, []byte(tc.body))
++		f.waitLog(logAPIKeyRefusal, i+1)
++		f.expectNoCallbackYet(tc.name)
++		f.expectRunning(1, running)
++	}
++	// Refusing keeps the watch and the guard state intact: a keyed config applies.
++	renameReplace(t, f.cfgPath, f.render(6, []string{"old-key", "new-key"}))
++	f.expectReload(6, []string{"old-key", "new-key"})
++	f.expectRunning(6, []string{"old-key", "new-key"})
++	f.expectNotScheduled("after the accepted reload")
++	if got := f.logs.count(logReloadApplied); got != 1 {
++		t.Fatalf("config reloads applied = %d, want 1 (only the keyed config)", got)
++	}
++}
++
++func TestConfigReloadAppliesAPIKeyRotation(t *testing.T) {
++	f := startConfigDirWatcher(t, []string{"key-1"})
++	for i, keys := range [][]string{
++		{"key-2"},          // old -> new
++		{"key-2", "key-3"}, // dual-key window
++		{"key-3"},          // [old,new] -> [new]
++	} {
++		port := 2 + i
++		renameReplace(t, f.cfgPath, f.render(port, keys))
++		f.expectReload(port, keys)
++		f.expectRunning(port, keys)
++	}
++	f.expectNotScheduled("after the rotation")
++	if got := f.logs.count(logAPIKeyRefusal); got != 0 {
++		t.Fatalf("api-key refusal logged %d times during a normal rotation", got)
++	}
++	if got := f.logs.count(logReloadApplied); got != 3 {
++		t.Fatalf("config reloads applied = %d, want 3", got)
++	}
++}
+diff --git a/internal/watcher/config_reload.go b/internal/watcher/config_reload.go
+--- a/internal/watcher/config_reload.go
++++ b/internal/watcher/config_reload.go
+@@ -3,10 +3,12 @@
+ package watcher
+ 
+ import (
++	"bytes"
+ 	"crypto/sha256"
+ 	"encoding/hex"
+ 	"os"
+ 	"reflect"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+@@ -49,13 +51,17 @@
+ }
+ 
+ func (w *Watcher) reloadConfigIfChanged() {
++	// A newer callback must never finish before an older one. The same lock
++	// also covers startup and auth-triggered server callbacks.
++	w.configApplyMu.Lock()
++	defer w.configApplyMu.Unlock()
+ 	data, err := os.ReadFile(w.configPath)
+ 	if err != nil {
+ 		log.Errorf("failed to read config file for hash check: %v", err)
+ 		return
+ 	}
+-	if len(data) == 0 {
+-		log.Debugf("ignoring empty config file write event")
++	if len(bytes.TrimSpace(data)) == 0 {
++		log.Warnf("ignoring empty config file %s; keeping the running config", w.configPath)
+ 		return
+ 	}
+ 	sum := sha256.Sum256(data)
+@@ -70,26 +76,38 @@
+ 		return
+ 	}
+ 	log.Infof("config file changed, reloading: %s", w.configPath)
+-	if w.reloadConfig() {
+-		finalHash := newHash
+-		if updatedData, errRead := os.ReadFile(w.configPath); errRead == nil && len(updatedData) > 0 {
+-			sumUpdated := sha256.Sum256(updatedData)
+-			finalHash = hex.EncodeToString(sumUpdated[:])
+-		} else if errRead != nil {
+-			log.WithError(errRead).Debug("failed to compute updated config hash after reload")
+-		}
++	if w.reloadConfigBytes(data) {
++		// Record the hash of the bytes this reload read. Re-reading the file here
++		// would record a replace that landed during the reload as applied, and
++		// that replace's own event would then be skipped as unchanged.
+ 		w.clientsMutex.Lock()
+-		w.lastConfigHash = finalHash
++		w.lastConfigHash = newHash
+ 		w.clientsMutex.Unlock()
+ 		w.persistConfigAsync()
+ 	}
+ }
+ 
+ func (w *Watcher) reloadConfig() bool {
++	w.configApplyMu.Lock()
++	defer w.configApplyMu.Unlock()
++	data, err := os.ReadFile(w.configPath)
++	if err != nil {
++		log.Errorf("failed to read config for reload: %v", err)
++		return false
++	}
++	if len(bytes.TrimSpace(data)) == 0 {
++		return false
++	}
++	return w.reloadConfigBytes(data)
++}
++
++// reloadConfigBytes requires configApplyMu, through the client callback and
++// auth refresh. Never reopen configPath: it may already hold the next render.
++func (w *Watcher) reloadConfigBytes(data []byte) bool {
+ 	log.Debug("=========================== CONFIG RELOAD ============================")
+ 	log.Debugf("starting config reload from: %s", w.configPath)
+ 
+-	newConfig, errLoadConfig := config.LoadConfig(w.configPath)
++	newConfig, errLoadConfig := config.LoadConfigBytes(data)
+ 	if errLoadConfig != nil {
+ 		log.Errorf("failed to reload config: %v", errLoadConfig)
+ 		return false
+@@ -106,6 +124,13 @@
+ 	}
+ 
+ 	w.clientsMutex.Lock()
++	if w.config != nil && countNonBlank(w.config.APIKeys) > 0 && countNonBlank(newConfig.APIKeys) == 0 {
++		// With no api-keys the config access provider is unregistered and every
++		// request is served unauthenticated. Never hot-apply that transition.
++		w.clientsMutex.Unlock()
++		log.Errorf("refusing config reload from %s: it removes every api-key and would disable client authentication; keeping the running config (restart the server to apply it deliberately)", w.configPath)
++		return false
++	}
+ 	var oldConfig *config.Config
+ 	_ = yaml.Unmarshal(w.oldConfigYaml, &oldConfig)
+ 	w.oldConfigYaml, _ = yaml.Marshal(newConfig)
+@@ -139,6 +164,17 @@
+ 	forceAuthRefresh := oldConfig != nil && (oldConfig.ForceModelPrefix != newConfig.ForceModelPrefix || !reflect.DeepEqual(oldConfig.OAuthModelAlias, newConfig.OAuthModelAlias) || retryConfigChanged)
+ 
+ 	log.Infof("config successfully reloaded, triggering client reload")
+-	w.reloadClients(authDirChanged, affectedOAuthProviders, forceAuthRefresh)
++	w.reloadClientsLocked(authDirChanged, affectedOAuthProviders, forceAuthRefresh)
+ 	return true
+ }
++
++// countNonBlank counts the values the config access provider would keep.
++func countNonBlank(values []string) int {
++	count := 0
++	for _, value := range values {
++		if strings.TrimSpace(value) != "" {
++			count++
++		}
++	}
++	return count
++}
+diff --git a/internal/watcher/config_reload_transaction_test.go b/internal/watcher/config_reload_transaction_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/watcher/config_reload_transaction_test.go
+@@ -0,0 +1,202 @@
++package watcher
++
++import (
++	"crypto/sha256"
++	"encoding/hex"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	log "github.com/sirupsen/logrus"
++)
++
++// Manual triggers avoid scheduler/debounce races in the regression itself.
++func transactionWatcher(t *testing.T, callback func(*config.Config)) (*Watcher, string, string) {
++	t.Helper()
++	root := t.TempDir()
++	path := filepath.Join(root, "config.yaml")
++	authDir := filepath.Join(root, "auth")
++	if err := os.Mkdir(authDir, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	w, err := NewWatcher(path, authDir, callback)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = w.Stop() })
++	w.SetConfig(&config.Config{Port: 1, AuthDir: authDir, SDKConfig: config.SDKConfig{APIKeys: []string{"old"}}})
++	return w, path, authDir
++}
++
++func transactionBody(authDir string, port int, keys []string) []byte {
++	cfg := &configDirWatchFixture{authDir: authDir}
++	return cfg.render(port, keys)
++}
++
++func waitTransaction(t *testing.T, done <-chan struct{}) {
++	t.Helper()
++	select {
++	case <-done:
++	case <-time.After(configWatchEventTimeout):
++		t.Fatal("config transaction did not finish")
++	}
++}
++
++type replaceBetweenHashAndParse struct {
++	once sync.Once
++	path string
++	body []byte
++	err  error
++}
++
++func (h *replaceBetweenHashAndParse) Levels() []log.Level { return []log.Level{log.InfoLevel} }
++func (h *replaceBetweenHashAndParse) Fire(entry *log.Entry) error {
++	if strings.HasPrefix(entry.Message, "config file changed, reloading:") {
++		h.once.Do(func() { h.err = atomicReplace(h.path, h.body) })
++	}
++	return nil
++}
++
++func TestConfigTransactionHashAndParserUseOneSnapshot(t *testing.T) {
++	ports := []int{}
++	w, path, authDir := transactionWatcher(t, func(c *config.Config) { ports = append(ports, c.Port) })
++	b := transactionBody(authDir, 2, []string{"old", "new"})
++	c := transactionBody(authDir, 3, []string{"new"})
++	renameReplace(t, path, b)
++	// This log is after the hash read but before parsing: replace the path
++	// synchronously there, rather than hoping a goroutine wins a tiny window.
++	installLogCapture(t)
++	hook := &replaceBetweenHashAndParse{path: path, body: c}
++	log.AddHook(hook)
++	w.ReloadConfigIfChanged()
++	if hook.err != nil {
++		t.Fatal(hook.err)
++	}
++	if len(ports) != 1 || ports[0] != 2 {
++		t.Fatalf("applied ports=%v, want only snapshot B (2)", ports)
++	}
++	sum := sha256.Sum256(b)
++	if w.lastConfigHash != hex.EncodeToString(sum[:]) {
++		t.Fatal("hash does not describe applied snapshot B")
++	}
++	// Restoring B must be a genuine no-op, not an incorrectly skipped repair
++	// of C (the double-read regression).
++	renameReplace(t, path, b)
++	w.ReloadConfigIfChanged()
++	if len(ports) != 1 || w.config.Port != 2 {
++		t.Fatal("restored B did not converge")
++	}
++	renameReplace(t, path, c)
++	w.ReloadConfigIfChanged()
++	if len(ports) != 2 || ports[1] != 3 {
++		t.Fatalf("subsequent C not applied: %v", ports)
++	}
++}
++
++func TestConfigTransactionSerializesStartupAndReloadCallbacks(t *testing.T) {
++	for _, startup := range []bool{false, true} {
++		name := "reload"
++		if startup {
++			name = "startup"
++		}
++		t.Run(name, func(t *testing.T) {
++			entered, release := make(chan struct{}), make(chan struct{})
++			var releaseOnce sync.Once
++			unblock := func() { releaseOnce.Do(func() { close(release) }) }
++			t.Cleanup(unblock)
++			var w *Watcher
++			var mu sync.Mutex
++			var applied []int
++			callback := func(c *config.Config) {
++				// A deterministic assertion of exclusion while this callback
++				// is suspended; no sleep-based negative observation needed.
++				if w.configApplyMu.TryLock() {
++					w.configApplyMu.Unlock()
++					t.Error("callback is outside config application transaction")
++				}
++				if c.Port == 2 {
++					close(entered)
++					<-release
++				}
++				mu.Lock()
++				applied = append(applied, c.Port)
++				mu.Unlock()
++			}
++			var path, authDir string
++			w, path, authDir = transactionWatcher(t, callback)
++			dual := transactionBody(authDir, 2, []string{"old", "new"})
++			single := transactionBody(authDir, 3, []string{"new"})
++			renameReplace(t, path, dual)
++			if startup {
++				cfg, err := config.LoadConfigBytes(dual)
++				if err != nil {
++					t.Fatal(err)
++				}
++				w.SetConfig(cfg)
++			}
++			first, second := make(chan struct{}), make(chan struct{})
++			go func() {
++				defer close(first)
++				if startup {
++					w.reloadClients(true, nil, false)
++				} else {
++					w.ReloadConfigIfChanged()
++				}
++			}()
++			waitTransaction(t, entered)
++			renameReplace(t, path, single)
++			go func() { defer close(second); w.ReloadConfigIfChanged() }()
++			unblock()
++			waitTransaction(t, first)
++			waitTransaction(t, second)
++			mu.Lock()
++			defer mu.Unlock()
++			if len(applied) != 2 || applied[0] != 2 || applied[1] != 3 {
++				t.Fatalf("callbacks applied out of order: %v", applied)
++			}
++			if !sameKeys(w.config.APIKeys, []string{"new"}) {
++				t.Fatal("retired key returned")
++			}
++			sum := sha256.Sum256(single)
++			if w.lastConfigHash != hex.EncodeToString(sum[:]) {
++				t.Fatal("final hash is not single-key snapshot")
++			}
++		})
++	}
++}
++
++func TestConfigTransactionAuthCallbackUsesCurrentConfig(t *testing.T) {
++	var applied []int
++	var w *Watcher
++	w, path, authDir := transactionWatcher(t, func(c *config.Config) {
++		if w.configApplyMu.TryLock() {
++			w.configApplyMu.Unlock()
++			t.Error("auth callback not serialized")
++		}
++		applied = append(applied, c.Port)
++	})
++	old := w.config
++	renameReplace(t, path, transactionBody(authDir, 3, []string{"new"}))
++	w.ReloadConfigIfChanged()
++	w.triggerServerUpdate(old)
++	if len(applied) != 2 || applied[0] != 3 || applied[1] != 3 {
++		t.Fatalf("delayed auth callback restored stale config: %v", applied)
++	}
++}
++
++func TestConfigDirWatchRejectsSymlinkConfig(t *testing.T) {
++	w, path, authDir := transactionWatcher(t, nil)
++	target := path + ".target"
++	renameReplace(t, target, transactionBody(authDir, 2, []string{"old"}))
++	if err := os.Symlink(target, path); err != nil {
++		t.Fatal(err)
++	}
++	// start rejects before any event processor or callback can run.
++	if err := w.start(nil); err == nil || !strings.Contains(err.Error(), "regular file") {
++		t.Fatalf("symlink config must be explicitly refused: %v", err)
++	}
++}
+diff --git a/internal/watcher/events.go b/internal/watcher/events.go
+--- a/internal/watcher/events.go
++++ b/internal/watcher/events.go
+@@ -6,6 +6,7 @@
+ 	"context"
+ 	"crypto/sha256"
+ 	"encoding/hex"
++	"fmt"
+ 	"os"
+ 	"path/filepath"
+ 	"runtime"
+@@ -27,11 +28,26 @@
+ }
+ 
+ func (w *Watcher) start(ctx context.Context) error {
+-	if errAddConfig := w.watcher.Add(w.configPath); errAddConfig != nil {
+-		log.Errorf("failed to watch config file %s: %v", w.configPath, errAddConfig)
++	// Watch the config file's directory, not the file itself. An atomic
++	// rename-replace (same-directory temp file + rename) leaves a file watch on
++	// the replaced inode, which reports only IN_ATTRIB/DELETE_SELF and is then
++	// dropped, so the new file would never reload. On the directory watch the
++	// replace arrives as Create (IN_MOVED_TO) on the config path. handleEvent
++	// keeps its exact-path filter, so temp files and sibling files are ignored.
++	info, errStatConfig := os.Lstat(w.configPath)
++	if errStatConfig != nil {
++		log.Errorf("failed to watch config file %s: %v", w.configPath, errStatConfig)
++		return errStatConfig
++	}
++	if !info.Mode().IsRegular() {
++		return fmt.Errorf("config path must be a regular file, not a symlink: %s", w.configPath)
++	}
++	configDir := filepath.Dir(w.configPath)
++	if errAddConfig := w.watcher.Add(configDir); errAddConfig != nil {
++		log.Errorf("failed to watch config directory %s: %v", configDir, errAddConfig)
+ 		return errAddConfig
+ 	}
+-	log.Debugf("watching config file: %s", w.configPath)
++	log.Debugf("watching config file: %s (via directory %s)", w.configPath, configDir)
+ 
+ 	if errAddAuthDir := w.watcher.Add(w.authDir); errAddAuthDir != nil {
+ 		log.Errorf("failed to watch auth directory %s: %v", w.authDir, errAddAuthDir)
+diff --git a/internal/watcher/watcher.go b/internal/watcher/watcher.go
+--- a/internal/watcher/watcher.go
++++ b/internal/watcher/watcher.go
+@@ -31,11 +31,13 @@
+ 
+ // Watcher manages file watching for configuration and authentication files
+ type Watcher struct {
+-	configPath        string
+-	authDir           string
+-	config            *config.Config
+-	clientsMutex      sync.RWMutex
+-	authRescanMu      sync.Mutex
++	configPath   string
++	authDir      string
++	config       *config.Config
++	clientsMutex sync.RWMutex
++	authRescanMu sync.Mutex
++	// Lock order: configApplyMu -> clientsMutex/serverUpdateMu. Hold through callbacks.
++	configApplyMu     sync.Mutex
+ 	configReloadMu    sync.Mutex
+ 	configReloadTimer *time.Timer
+ 	serverUpdateMu    sync.Mutex
+@@ -151,6 +153,8 @@
+ 
+ // SetConfig updates the current configuration
+ func (w *Watcher) SetConfig(cfg *config.Config) {
++	w.configApplyMu.Lock()
++	defer w.configApplyMu.Unlock()
+ 	w.clientsMutex.Lock()
+ 	defer w.clientsMutex.Unlock()
+ 	w.config = cfg

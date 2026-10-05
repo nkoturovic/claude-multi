@@ -1,0 +1,38 @@
+{
+  "lines": {
+    "custom-local-model": {
+      "capabilities": [
+        "lead"
+      ],
+      "context": {
+        "declared_tokens": 131072,
+        "source": "operator",
+        "source_ref": "replace with your server's context window minus its completion reserve"
+      },
+      "default_effort": "high",
+      "display": "Your local model",
+      "efforts": [
+        "high"
+      ],
+      "routing_note": "Keyless server on your network; admit it only after the server serves this model name.",
+      "wire_model": "your-model-id"
+    }
+  },
+  "notes": "Example: a keyless OpenAI-compatible server on your network. Nothing installs it. Declare it with claude-multi providers add --preset llm-local --base-url http://HOST:PORT/v1, set the model id your server serves, then admit the line.",
+  "provider": {
+    "auth": {
+      "kind": "none"
+    },
+    "base_url": "http://localhost:8000/v1",
+    "display": "Local LLM",
+    "independence_family": "local",
+    "kind": "openai-compatible-lan",
+    "listing": {
+      "auth": "none",
+      "shape": "openai",
+      "url": "http://localhost:8000/v1/models"
+    },
+    "notes": "Keyless LAN server (e.g. ik_llama.cpp or llama.cpp's OpenAI-compatible endpoint). The gateway sends no Authorization header; keep it on a trusted LAN."
+  },
+  "version": 1
+}

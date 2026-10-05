@@ -1,0 +1,23 @@
+{
+  "agents": {},
+  "description": "Opus lead only; no agents",
+  "lead": {
+    "effort": "ultracode",
+    "model": "opus"
+  },
+  "lead_providers": [
+    "anthropic"
+  ],
+  "name": "direct",
+  "native_agents": {
+    "explore": "native",
+    "general_purpose": "on",
+    "plan": "native"
+  },
+  "seed": {
+    "id": "direct",
+    "version": 1
+  },
+  "version": 2,
+  "workflows": "native"
+}

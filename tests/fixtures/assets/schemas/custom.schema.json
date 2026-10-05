@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": [
+    "version",
+    "providers",
+    "models"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "base_url",
+          "auth_kind",
+          "secret_env"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "pattern": "^https://[a-zA-Z0-9._:/-]+$"
+          },
+          "auth_kind": {
+            "enum": [
+              "bearer",
+              "header"
+            ]
+          },
+          "header": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9-]+$"
+          },
+          "secret_env": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_]+$"
+          },
+          "display": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "api": {
+            "enum": [
+              "anthropic"
+            ]
+          }
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "wire_model",
+          "provider",
+          "context_tokens",
+          "created_via"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "wire_model": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$"
+          },
+          "provider": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "context_tokens": {
+            "type": "integer",
+            "minimum": 8192,
+            "maximum": 2097152
+          },
+          "display": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "created_via": {
+            "enum": [
+              "discover",
+              "manual"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

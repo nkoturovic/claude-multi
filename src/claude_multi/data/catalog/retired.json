@@ -1,0 +1,314 @@
+{
+  "retired": {
+    "deepseek-pro": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "DeepSeek V4 Pro",
+      "last_wire": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "reason": "Removed: since 2026-09-14 the wire serves V4.1-Flash, which the deepseek-flash line already carries. No successor.",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-deepseek-pro-high[1m]": "output-config-high",
+        "claude-multi-deepseek-pro-max[1m]": "output-config-max"
+      },
+      "since_catalog": 33,
+      "successor": null
+    },
+    "fable51": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Fable 5.1 · 1M selector",
+      "last_wire": "claude-fable-5-1",
+      "provider": "anthropic",
+      "reason": "Renamed: the fable line carries Fable 5.1 (stable line keys).",
+      "roles": "all",
+      "selectors": {
+        "claude-fable-5-1[1m]": null
+      },
+      "since_catalog": 33,
+      "successor": "fable"
+    },
+    "fable@5": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Fable 5 · 1M selector",
+      "generation": "5",
+      "last_wire": "claude-fable-5",
+      "provider": "anthropic",
+      "reason": "Legacy Fable generation removed; the fable line moved to Fable 5.1. claude-fable-5 stays a passthrough route.",
+      "roles": "all",
+      "selectors": {
+        "claude-fable-5[1m]": null
+      },
+      "since_catalog": 33,
+      "successor": "fable"
+    },
+    "glm52": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "GLM-5.2",
+      "last_wire": "glm-5.2",
+      "provider": "qwen",
+      "reason": "Removed from the catalog on 2026-09-23; the qwen provider stays configured. No successor.",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-glm52-max[1m]": "reasoning-effort-max"
+      },
+      "since_catalog": 33,
+      "successor": null
+    },
+    "gpt55": {
+      "capabilities": [
+        "agents"
+      ],
+      "context_tokens": 258400,
+      "display": "GPT-5.5",
+      "last_wire": "gpt-5.5",
+      "provider": "openai",
+      "reason": "GPT-5.5 retires upstream at 2026-10-14T19:00:00Z; the listing recommends GPT-6.1 Sol. The stable successor stays sol; historical aliases keep their gpt-5.5 wire for continuity.",
+      "roles": [
+        "cm-reviewer"
+      ],
+      "selectors": {
+        "gpt-multi-gpt55-high": "reasoning-effort-high"
+      },
+      "since_catalog": 33,
+      "successor": "sol"
+    },
+    "grok46": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 500000,
+      "display": "Grok 4.6",
+      "family": "x-ai",
+      "last_wire": "x-ai/grok-4.6",
+      "provider": "openrouter",
+      "reason": "Removed from the catalog on 2026-09-23; the openrouter provider stays configured. No successor.",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-grok46-high": "output-config-high",
+        "claude-multi-grok46-xhigh": "output-config-xhigh"
+      },
+      "since_catalog": 33,
+      "successor": null
+    },
+    "kimi-k3": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Kimi K3 · 1M selector",
+      "last_wire": "k3",
+      "provider": "kimi",
+      "reason": "Removed from the catalog on 2026-09-23; the kimi provider stays configured. No successor.",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-kimi-k3[1m]": "output-config-max"
+      },
+      "since_catalog": 33,
+      "successor": null
+    },
+    "muse-spark": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Muse Spark 1.3",
+      "last_wire": "muse-spark-1.3",
+      "provider": "meta",
+      "reason": "Renamed to the muse line (stable line keys).",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-muse-spark-high[1m]": "output-config-high",
+        "claude-multi-muse-spark-xhigh[1m]": "output-config-xhigh"
+      },
+      "since_catalog": 33,
+      "successor": "muse"
+    },
+    "muse-spark-contributor": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Muse Spark 1.3 Contributor",
+      "last_wire": "muse-spark-1.3-contributor",
+      "provider": "meta",
+      "reason": "Renamed to the muse-contributor line (stable line keys).",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-muse-spark-contributor-high[1m]": "output-config-high",
+        "claude-multi-muse-spark-contributor-xhigh[1m]": "output-config-xhigh"
+      },
+      "since_catalog": 33,
+      "successor": "muse-contributor"
+    },
+    "opus5": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Opus 5 · 1M selector",
+      "last_wire": "claude-opus-5",
+      "provider": "anthropic",
+      "reason": "Opus 5 removed; the opus line carries Opus 5.5. claude-opus-5 stays a passthrough route (client refusal-fallback target).",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-opus-5[1m]": null
+      },
+      "since_catalog": 33,
+      "successor": "opus"
+    },
+    "opus55": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Opus 5.5 · 1M selector",
+      "last_wire": "claude-opus-5-5",
+      "provider": "anthropic",
+      "reason": "Renamed: the opus line carries Opus 5.5 (stable line keys).",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-opus-5-5[1m]": null
+      },
+      "since_catalog": 33,
+      "successor": "opus"
+    },
+    "opus@4.8": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Opus 4.8 · 1M selector",
+      "generation": "4.8",
+      "last_wire": "claude-opus-4-8",
+      "provider": "anthropic",
+      "reason": "Legacy Opus generation removed; the opus line moved to Opus 5.5. claude-opus-4-8 stays a passthrough route (client refusal-fallback target).",
+      "roles": [
+        "cm-reviewer"
+      ],
+      "selectors": {
+        "claude-multi-opus-4-8[1m]": null
+      },
+      "since_catalog": 33,
+      "successor": "opus"
+    },
+    "qwen-flash-next": {
+      "capabilities": [
+        "lead"
+      ],
+      "context_tokens": 320032,
+      "display": "Qwen3.8 Flash Next (local)",
+      "externalized": {
+        "sample": "llm-local.json"
+      },
+      "last_wire": "qwen3.8-flash-next",
+      "provider": "llm-local",
+      "reason": "Renamed to qwen-local; its provider llm-local left the catalog: choose a model or add the provider with claude-multi providers add --preset llm-local.",
+      "roles": [],
+      "selectors": {
+        "claude-multi-qwen-flash-next": null
+      },
+      "since_catalog": 33,
+      "successor": null
+    },
+    "qwen-local": {
+      "capabilities": [
+        "lead"
+      ],
+      "context_tokens": 320032,
+      "display": "Qwen3.8 Flash Next (local)",
+      "externalized": {
+        "sample": "llm-local.json"
+      },
+      "last_wire": "qwen3.8-flash-next",
+      "provider": "llm-local",
+      "reason": "The keyless LAN provider llm-local left the catalog; add it with claude-multi providers add --preset llm-local to keep using it, else choose a model.",
+      "roles": [],
+      "selectors": {
+        "claude-multi-qwen-local": null
+      },
+      "since_catalog": 36,
+      "successor": null
+    },
+    "qwen38": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 983616,
+      "display": "Qwen3.8 Max",
+      "last_wire": "qwen3.8-max",
+      "provider": "qwen",
+      "reason": "Removed from the catalog on 2026-09-23; the qwen provider stays configured. No successor.",
+      "roles": "all",
+      "selectors": {
+        "claude-multi-qwen38-max[1m]": "reasoning-effort-xhigh"
+      },
+      "since_catalog": 33,
+      "successor": null
+    },
+    "sol@6": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 872000,
+      "display": "GPT-6 Sol",
+      "generation": "6",
+      "last_wire": "gpt-6-sol",
+      "provider": "openai",
+      "reason": "Sol generation move: GPT-6 aliases stay on their recorded wire for running sessions; resume resolves sol to the current generation. Continuity is not a selectable rollback.",
+      "roles": "all",
+      "selectors": {
+        "gpt-multi-sol-high[1m]": "reasoning-effort-high",
+        "gpt-multi-sol-low[1m]": "reasoning-effort-low",
+        "gpt-multi-sol-max[1m]": "reasoning-effort-max",
+        "gpt-multi-sol-medium[1m]": "reasoning-effort-medium",
+        "gpt-multi-sol-xhigh[1m]": "reasoning-effort-xhigh"
+      },
+      "since_catalog": 36,
+      "successor": "sol"
+    },
+    "sonnet@5": {
+      "capabilities": [
+        "lead",
+        "agents"
+      ],
+      "context_tokens": 1000000,
+      "display": "Sonnet 5 · 1M selector",
+      "generation": "5",
+      "last_wire": "claude-sonnet-5",
+      "provider": "anthropic",
+      "reason": "Sonnet generation move: the sonnet line moved to Sonnet 5.5; claude-sonnet-5 stays a passthrough route for running sessions and as a client refusal-fallback target.",
+      "roles": "all",
+      "selectors": {
+        "claude-sonnet-5[1m]": null
+      },
+      "since_catalog": 36,
+      "successor": "sonnet"
+    }
+  },
+  "version": 1
+}

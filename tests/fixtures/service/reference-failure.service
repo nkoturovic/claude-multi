@@ -1,0 +1,8 @@
+# The reference supervised unit: the renderer must match every hardening and
+# lifecycle directive of it. Store paths are normalised.
+[Service]
+ExecStart=-/nix/store/00000000000000000000000000000000-libnotify/bin/notify-send --urgency=critical --app-name=claude-multi 'claude-multi gateway failed' 'The gateway service stopped after repeated failures. Why: systemctl --user show -p ActiveState,Result,ExecMainStatus cli-proxy-api · recover: systemctl --user reset-failed cli-proxy-api && systemctl --user start cli-proxy-api · status 226/NAMESPACE (a missing directory): systemd-tmpfiles --user --create ~/.config/user-tmpfiles.d/claude-multi.conf first'
+Type=oneshot
+
+[Unit]
+Description=claude-multi gateway failure notice

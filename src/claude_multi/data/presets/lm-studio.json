@@ -1,0 +1,25 @@
+{
+  "lines": {},
+  "notes": "LM Studio's OpenAI-compatible server on this computer (no key). Another computer: --base-url http://HOST:1234/v1. Declaration only: add models with claude-multi discover lm-studio --add WIRE (or claude-multi models add lm-studio WIRE …), then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://lmstudio.ai/docs/developer/openai-compat",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "none"
+    },
+    "base_url": "http://localhost:1234/v1",
+    "display": "LM Studio",
+    "independence_family": "local",
+    "kind": "openai-compatible-lan",
+    "listing": {
+      "auth": "none",
+      "shape": "openai",
+      "url": "http://localhost:1234/v1/models"
+    }
+  },
+  "version": 1
+}

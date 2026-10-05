@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-analyst-strong": {
+      "effort": "max",
+      "model": "astra"
+    },
+    "cm-explorer": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-implementer": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-implementer-light": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-implementer-strong": {
+      "effort": "xhigh",
+      "model": "sonnet"
+    },
+    "cm-reviewer": {
+      "effort": "max",
+      "model": "astra"
+    },
+    "cm-reviewer-strong": {
+      "effort": "xhigh",
+      "model": "opus"
+    }
+  },
+  "description": "Opus lead; Sol high explorer and xhigh writers, Sonnet xhigh strong writer; Astra max and Opus xhigh reviewers",
+  "lead": {
+    "effort": "ultracode",
+    "model": "opus"
+  },
+  "name": "quality",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "seed": {
+    "id": "quality",
+    "version": 2
+  },
+  "version": 2,
+  "workflows": "native"
+}

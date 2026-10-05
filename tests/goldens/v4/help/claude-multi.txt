@@ -1,0 +1,85 @@
+usage: claude-multi [--profile NAME | --profile-file PATH|-] [-c | -r [SESSION]] [options] [-- CLAUDE_ARGS ...]
+       claude-multi COMMAND [options]
+
+Launch Claude Code with a durable multi-model lineup: a saved profile, an unsaved profile file, or a direct lead.
+
+In a terminal, claude-multi with no command opens the launcher: the launch card (Enter launches the
+profile shown) and its screens W Get started, P Profiles, D Direct, S Sessions, G Providers, M
+Models, O Settings, H doctor. ? lists the keys; --line uses plain lines instead.
+
+Launch:
+  direct          launch one model as the lead, with no cm-* agents (recorded and resumable like
+                  every session)
+
+Inspect (read only):
+  doctor          check this installation and its sessions: Ready, Attention or BLOCKED, one fix for
+                  each finding (also --repair, --prune and token rotation)
+  quota           account quota and credential health from the local gateway (one local read; no
+                  provider call)
+  explain         explain a session's recorded bindings and observed routing
+  usage           observed client requests per model and session (not token usage)
+  plan            preview what the gateway would serve after pending changes; writes nothing
+
+Manage:
+  setup           set up step by step: this computer, Claude Code, the local gateway, providers and
+                  a profile (--status shows where you are)
+  profile         list, show, create, edit, copy, rename, remove and restore profiles; choose the
+                  default profile
+  sessions        list, show, stop, forget, link and repair managed sessions
+  providers       list, add, connect (API key or sign-in), test, turn on or off, apply and remove
+                  providers
+  models          list models; declare, admit, qualify, revoke and remove the models you add
+  discover        list the models a provider offers (a provider call, made only when you ask)
+  lineup          show or change a session's lineup from a terminal (what /cm runs in a session)
+  window-ceiling  show, set or reset the context window ceiling of the lead and every agent (200K to
+                  800K, default 800K; applies at the next launch or resume)
+  gateway         the local gateway: status, logs, start, stop, restart and the supervised service
+  update          update claude-multi itself, or roll back to the previously installed version
+  export          write your configuration as a portable file (no keys, sessions, logs or evidence)
+  import          preview an exported configuration on this computer; --apply writes the ready items
+
+Recovery and earlier formats:
+  migrate         convert legacy session records to the current format (backups are kept for
+                  restore-2x); --dry-run writes nothing
+  restore-2x      put back the legacy session records a migration backed up, before running an
+                  earlier launcher
+  custom          the earlier custom-model registry (move it to providers: claude-multi providers
+                  migrate-custom)
+  uninstall       remove claude-multi from this computer (shows the plan first; credentials only
+                  after a typed confirmation)
+
+options:
+  -h, --help            show this help message and exit
+  --profile NAME        launch a saved profile (the session follows it)
+  --profile-file PATH|-
+                        launch one unsaved profile JSON (pinned, nameless); '-' reads stdin and
+                        forces noninteractive; resume/continue refuse it; nothing is saved
+  -c, --continue        continue the last managed session in this directory
+  -r, --resume [SESSION]
+                        resume a managed session: its id, an id prefix of 8 or more characters, or
+                        its name; no value opens the sessions picker
+  --force               resume despite a background-liveness marker (only bypasses the heuristic ●
+                        check; identity/transcript guards still apply)
+  --line                force the line-based UI (no full-screen curses interface)
+  --no-color            disable all color output (the NO_COLOR environment variable is also
+                        honored)
+  --print-launch        print the exact Claude argv and env summary instead of launching (the
+                        gateway token is never shown); says whether the launch would succeed
+  --version             show the release identity (launcher, catalog, gateway, Claude Code) and
+                        exit
+
+Examples:
+  claude-multi                          open the launcher
+  claude-multi --profile NAME           launch a saved profile
+  claude-multi -c                       continue the last session in this directory
+  claude-multi -r SESSION               resume a session (its id, an 8+ character prefix, or its name)
+  claude-multi direct --model MODEL     launch one model as the lead
+  claude-multi doctor                   check health, with one fix for each finding
+  claude-multi --profile NAME -- ARGS   pass ARGS to Claude Code unchanged
+
+Arguments after -- go to Claude Code unchanged (launches and direct only).
+--line and --no-color also work after a command.
+Inside a session: /cm shows or changes the lineup (then /reload-plugins).
+The local gateway's own tool: claude-multi-proxy --help
+Symptom → command: CHEATSHEET.md in the claude-multi docs
+Documentation map: USAGE.md in the claude-multi docs

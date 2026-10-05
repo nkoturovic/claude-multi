@@ -1,0 +1,324 @@
+diff --git a/internal/runtime/executor/codex_executor_request.go b/internal/runtime/executor/codex_executor_request.go
+--- a/internal/runtime/executor/codex_executor_request.go
++++ b/internal/runtime/executor/codex_executor_request.go
+@@ -25,7 +25,7 @@
+ )
+ 
+ const (
+-	codexUserAgent             = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
++	codexUserAgent             = "codex-tui/0.159.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.159.1)"
+ 	codexOriginator            = "codex-tui"
+ 	codexDefaultImageToolModel = "gpt-image-2"
+ 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
+@@ -341,7 +341,7 @@
+ 	if ginHeaders != nil && ginHeaders.Get("X-Codex-Beta-Features") != "" {
+ 		r.Header.Set("X-Codex-Beta-Features", ginHeaders.Get("X-Codex-Beta-Features"))
+ 	}
+-	misc.EnsureHeader(r.Header, ginHeaders, "Version", "")
++	misc.EnsureHeader(r.Header, ginHeaders, "Version", "0.159.1")
+ 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
+ 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-State", "")
+ 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
+diff --git a/internal/runtime/executor/codex_websockets_request.go b/internal/runtime/executor/codex_websockets_request.go
+--- a/internal/runtime/executor/codex_websockets_request.go
++++ b/internal/runtime/executor/codex_websockets_request.go
+@@ -88,7 +88,7 @@
+ 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
+ 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
+ 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
+-	misc.EnsureHeader(headers, ginHeaders, "Version", "")
++	misc.EnsureHeader(headers, ginHeaders, "Version", "0.159.1")
+ 	if nativeRequest {
+ 		misc.EnsureHeader(headers, ginHeaders, codexResponsesLiteHeader, "")
+ 	}
+diff --git a/internal/runtime/executor/codex_client_identity_cm055_test.go b/internal/runtime/executor/codex_client_identity_cm055_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/runtime/executor/codex_client_identity_cm055_test.go
+@@ -0,0 +1,261 @@
++package executor
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gorilla/websocket"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++)
++
++// Assert the captured final request, after auth/config/cloaking AND the late
++// models.json overrides. Constants/helper assertions alone miss that boundary.
++const cm055UA = "codex-tui/0.159.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.159.1)"
++
++var cm055Modes = []string{"http", "stream", "compact", "websocket", "websocket-stream"}
++
++type cm055IdentityCase struct {
++	inbound                   http.Header
++	attrs                     map[string]string
++	configuredUA              string
++	uncloaked, apiKey, native bool
++}
++
++func cm055Capture(t *testing.T, mode, wire string, tc cm055IdentityCase) http.Header {
++	t.Helper()
++	captured := make(chan http.Header, 1)
++	completed := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_cm055","model":%q,"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`, wire)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		captured <- r.Header.Clone()
++		if strings.HasPrefix(mode, "websocket") {
++			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
++			conn, err := upgrader.Upgrade(w, r, nil)
++			if err != nil {
++				t.Errorf("upgrade: %v", err)
++				return
++			}
++			defer conn.Close()
++			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
++			if _, _, err = conn.ReadMessage(); err != nil {
++				t.Errorf("read: %v", err)
++				return
++			}
++			if err = conn.WriteMessage(websocket.TextMessage, []byte(completed)); err != nil {
++				t.Errorf("write: %v", err)
++			}
++			return
++		}
++		_, _ = io.Copy(io.Discard, r.Body)
++		if mode == "compact" {
++			if r.URL.Path != "/responses/compact" {
++				t.Errorf("compact path = %q", r.URL.Path)
++			}
++			w.Header().Set("Content-Type", "application/json")
++			_, _ = io.WriteString(w, `{"id":"resp_cm055","object":"response.compaction","output":[]}`)
++		} else {
++			if r.URL.Path != "/responses" {
++				t.Errorf("responses path = %q", r.URL.Path)
++			}
++			w.Header().Set("Content-Type", "text/event-stream")
++			_, _ = fmt.Fprintf(w, "data: %s\n\n", completed)
++		}
++	}))
++	defer server.Close()
++	cfg := &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}}
++	cfg.Codex.DisableCodexCloaking = tc.uncloaked
++	cfg.CodexHeaderDefaults.UserAgent = tc.configuredUA
++	auth := &cliproxyauth.Auth{ID: "cm055", Provider: "codex", Attributes: map[string]string{"base_url": server.URL}, Metadata: map[string]any{"access_token": "fixture-only"}}
++	if tc.apiKey {
++		auth.Attributes["api_key"] = "fixture-only"
++	}
++	for k, v := range tc.attrs {
++		auth.Attributes[k] = v
++	}
++	headers := tc.inbound.Clone()
++	if headers == nil {
++		headers = http.Header{}
++	}
++	payload := fmt.Sprintf(`{"model":%q,"input":[{"role":"user","content":"fixture"}]}`, wire)
++	if tc.native {
++		headers.Set("X-Openai-Internal-Codex-Responses-Lite", "true")
++	}
++	req := cliproxyexecutor.Request{Model: wire, Payload: []byte(payload)}
++	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Headers: headers}
++	if helps.IsNativeCodexRequest(req.Payload, opts) != tc.native {
++		t.Fatal("fixture native classification mismatch")
++	}
++	if mode == "compact" {
++		opts.Alt = "responses/compact"
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
++	defer cancel()
++	var err error
++	if strings.HasPrefix(mode, "websocket") {
++		e := NewCodexWebsocketsExecutor(cfg)
++		if mode == "websocket-stream" {
++			var res *cliproxyexecutor.StreamResult
++			res, err = e.ExecuteStream(ctx, auth, req, opts)
++			if err == nil {
++				for chunk := range res.Chunks {
++					if chunk.Err != nil {
++						t.Fatalf("stream: %v", chunk.Err)
++					}
++				}
++			}
++		} else {
++			_, err = e.Execute(ctx, auth, req, opts)
++		}
++	} else {
++		e := NewCodexExecutor(cfg)
++		if mode == "stream" {
++			var res *cliproxyexecutor.StreamResult
++			res, err = e.ExecuteStream(ctx, auth, req, opts)
++			if err == nil {
++				for chunk := range res.Chunks {
++					if chunk.Err != nil {
++						t.Fatalf("stream: %v", chunk.Err)
++					}
++				}
++			}
++		} else {
++			_, err = e.Execute(ctx, auth, req, opts)
++		}
++	}
++	if err != nil {
++		t.Fatalf("%s request: %v", mode, err)
++	}
++	select {
++	case h := <-captured:
++		return h
++	default:
++		t.Fatal("no upstream request")
++		return nil
++	}
++}
++
++func cm055Check(t *testing.T, h http.Header, ua, originator, version string) {
++	t.Helper()
++	for k, want := range map[string]string{"User-Agent": ua, "Originator": originator, "Version": version} {
++		if got := h.Get(k); got != want {
++			t.Errorf("final %s = %q, want %q", k, got, want)
++		}
++	}
++}
++
++func cm055Wires(t *testing.T) []string {
++	t.Helper()
++	overlay := "cm055-overlay"
++	r := registry.GetGlobalRegistry()
++	r.RegisterClient("cm055-overlay-client", "codex", []*registry.ModelInfo{{ID: overlay, Object: "model", Type: "codex"}})
++	t.Cleanup(func() { r.UnregisterClient("cm055-overlay-client") })
++	for _, m := range registry.GetCodexProModels() {
++		if len(registry.ModelOverrideHeaders(m.ID)) == 0 {
++			return []string{m.ID, overlay}
++		}
++	}
++	t.Fatal("no unoverridden static Codex model")
++	return nil
++}
++
++func cm055FinalHeaders(t *testing.T, modes []string) {
++	for _, wire := range cm055Wires(t) {
++		for _, mode := range modes {
++			for _, version := range []string{"", "  ", "0.154.0", "0.200.0"} {
++				for _, apiKey := range []bool{false, true} {
++					for _, native := range []bool{false, true} {
++						t.Run(fmt.Sprintf("%s/%s/version=%q/key=%t/native=%t", wire, mode, version, apiKey, native), func(t *testing.T) {
++							want := strings.TrimSpace(version)
++							if want == "" {
++								want = "0.159.1"
++							}
++							h := cm055Capture(t, mode, wire, cm055IdentityCase{inbound: http.Header{"Version": {version}}, apiKey: apiKey, native: native})
++							cm055Check(t, h, cm055UA, "codex-tui", want)
++						})
++					}
++				}
++			}
++		}
++	}
++}
++func TestCM055CodexIdentityHTTPFinalHeaders(t *testing.T)      { cm055FinalHeaders(t, cm055Modes[:3]) }
++func TestCM055CodexIdentityWebsocketFinalHeaders(t *testing.T) { cm055FinalHeaders(t, cm055Modes[3:]) }
++
++func TestCM055CodexIdentityVersionDefault(t *testing.T) {
++	for _, target := range []string{"", "  ", "0.150.0"} {
++		for _, source := range []string{"", "  ", "0.200.0"} {
++			for _, ws := range []bool{false, true} {
++				h := http.Header{"Version": {target}}
++				in := http.Header{"Version": {source}}
++				if ws {
++					h = applyCodexWebsocketHeaders(context.Background(), h, nil, "", &config.Config{}, false, in)
++				} else {
++					applyCodexHeadersFromSources(&http.Request{Header: h}, nil, "", false, &config.Config{}, in)
++				}
++				want := strings.TrimSpace(source)
++				if want == "" {
++					want = strings.TrimSpace(target)
++				}
++				if want == "" {
++					want = "0.159.1"
++				}
++				if got := h.Get("Version"); got != want {
++					t.Errorf("target=%q source=%q ws=%t: %q != %q", target, source, ws, got, want)
++				}
++			}
++		}
++	}
++}
++
++func TestCM055CodexIdentityCloakingPrecedence(t *testing.T) {
++	for _, mode := range cm055Modes {
++		for _, uncloaked := range []bool{false, true} {
++			for _, apiKey := range []bool{false, true} {
++				for _, custom := range []bool{false, true} {
++					t.Run(fmt.Sprintf("%s/uncloaked=%t/key=%t/custom=%t", mode, uncloaked, apiKey, custom), func(t *testing.T) {
++						tc := cm055IdentityCase{uncloaked: uncloaked, apiKey: apiKey, native: true, configuredUA: "configured/1", inbound: http.Header{"User-Agent": {"incoming/1"}, "Originator": {"incoming-client"}, "Version": {"0.200.0"}}}
++						ua, origin, version := cm055UA, "codex-tui", "0.200.0"
++						if uncloaked {
++							ua, origin = "configured/1", "incoming-client"
++							if apiKey {
++								ua = "incoming/1"
++							}
++						}
++						if custom {
++							tc.attrs = map[string]string{"header:User-Agent": "custom/1", "header:Originator": "custom-client", "header:Version": "0.180.0"}
++							version = "0.180.0"
++							if uncloaked {
++								ua, origin = "custom/1", "custom-client"
++							}
++						}
++						cm055Check(t, cm055Capture(t, mode, "cm055-custom-wire", tc), ua, origin, version)
++					})
++				}
++			}
++		}
++	}
++}
++
++func TestCM055CodexIdentityStaticOverrideException(t *testing.T) {
++	// The only admitted exception, never a static-registry rewrite.
++	const wire = "gpt-5.6-luna"
++	const oldUA = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
++	for _, mode := range cm055Modes {
++		for _, uncloaked := range []bool{false, true} {
++			t.Run(fmt.Sprintf("%s/uncloaked=%t", mode, uncloaked), func(t *testing.T) {
++				tc := cm055IdentityCase{uncloaked: uncloaked, attrs: map[string]string{"header:User-Agent": "custom/1", "header:Originator": "custom-client"}}
++				cm055Check(t, cm055Capture(t, mode, wire, tc), oldUA, "codex-tui", "0.159.1")
++			})
++		}
++	}
++}
+diff --git a/internal/runtime/executor/codex_websockets_executor_test.go b/internal/runtime/executor/codex_websockets_executor_test.go
+--- a/internal/runtime/executor/codex_websockets_executor_test.go
++++ b/internal/runtime/executor/codex_websockets_executor_test.go
+@@ -1104,8 +1104,8 @@
+ 	if got := headers.Get("Originator"); got != codexOriginator {
+ 		t.Fatalf("Originator = %s, want %s", got, codexOriginator)
+ 	}
+-	if got := headers.Get("Version"); got != "" {
+-		t.Fatalf("Version = %q, want empty", got)
++	if got := headers.Get("Version"); got != "0.159.1" {
++		t.Fatalf("Version = %q, want 0.159.1", got)
+ 	}
+ 	if got := headers.Get("x-codex-beta-features"); got != "" {
+ 		t.Fatalf("x-codex-beta-features = %q, want empty", got)
+@@ -2030,8 +2030,8 @@
+ 
+ 	applyCodexHeaders(req, nil, "oauth-token", true, nil)
+ 
+-	if got := req.Header.Get("Version"); got != "" {
+-		t.Fatalf("Version = %q, want empty", got)
++	if got := req.Header.Get("Version"); got != "0.159.1" {
++		t.Fatalf("Version = %q, want 0.159.1", got)
+ 	}
+ 	if got := req.Header.Get("X-Codex-Turn-Metadata"); got != "" {
+ 		t.Fatalf("X-Codex-Turn-Metadata = %q, want empty", got)

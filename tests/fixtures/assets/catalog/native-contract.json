@@ -1,0 +1,200 @@
+{
+  "acceptance": {
+    "U1": {
+      "note": "Supervisor-takeover respawn re-supplying --add-dir is binary-consistent and documented for backgrounding; takeover itself is unverified headlessly and moves to user acceptance.",
+      "status": "unverified"
+    },
+    "U10": {
+      "note": "SubagentStop hook contract at 2.1.220: fires on normal subagent completion and honors decision:block with stop_hook_active as the native loop guard; does NOT fire on API-error deaths (retry-exhaustion probe, twice incl. a 15s window) \u2014 no mechanical continue-hook at this pin (D43; recovery = watchdog pin + lead contract). Radar: RealPinnedBinaryTests.test_subagent_stop_* in tests/test_scope_probe.py.",
+      "status": "verified"
+    },
+    "U11": {
+      "note": "S1 (034, client 2.1.281): /reload-plugins re-reads an edited add-dir agent (model and body); agents are not hot-watched, so without it the next spawn keeps the old binding (EVIDENCE C41). Staged plugin update not stageable offline. Radar: tests/test_cm3_spike_agents.py test_s1_reload_plugins_rebinds_next_spawn.",
+      "status": "verified"
+    },
+    "U12": {
+      "note": "S2 (034, client 2.1.281): after a live change, /compact and a relaunch with the same --resume argv keep the new binding; relaunch waits for the compact boundary (EVIDENCE C43); supervisor takeover stays user acceptance (U1). Radar: tests/test_cm3_spike_agents.py test_s2_*.",
+      "status": "verified"
+    },
+    "U13": {
+      "note": "S3 (034, client 2.1.281) FAIL: a SendMessage-resumed agent is rebound to the current frontmatter model with its original prompt and transcript (EVIDENCE C33). Adopted fallback: lead-prompt wording and the lineup notice say spawn fresh after a lineup change, never SendMessage-continue (SPEC P31). Radar: tests/test_cm3_spike_agents.py test_s3_*.",
+      "status": "failed"
+    },
+    "U14": {
+      "note": "S4 (034, client 2.1.281): the /cm skill runs the launcher at expansion with no model turn; body '$ARGUMENTS' is single-quoted and the launcher refuses more than one argument after --session <id> (balanced apostrophes word-split; EVIDENCE C34, C27). Radar: tests/test_cm3_spike_skill_workflow.py test_s4_cm_scope_skill_invocation.",
+      "status": "verified"
+    },
+    "U15": {
+      "note": "S5 (034, client 2.1.281): hook additionalContext reaches the lead for SessionStart startup/resume/fork/compact/clear and UserPromptSubmit; notices replay until compaction; exit 2 blocks the prompt, so hooks never exit 2 (EVIDENCE C28, C11). Radar: tests/test_cm3_spike_hooks.py.",
+      "status": "verified"
+    },
+    "U16": {
+      "note": "S6 (034, client 2.1.281): PreModelSwitch/PostModelSwitch fire per surface (EVIDENCE C42); a relaunch argv --model wins without PostModelSwitch and resume SessionStart carries no model (C32), so takeover detection keeps the documented 2.x drift fallback; hint headers change headers only (C40). Radar: tests/test_cm3_spike_hooks.py.",
+      "status": "verified"
+    },
+    "U17": {
+      "note": "S7a/b (034, client 2.1.281): canonical Anthropic ids are recognised (prompt bundle, output cap, fallback chain) while claude-multi-* Anthropic ids are unknown (32000 cap, no refusal fallback; EVIDENCE C7); bare family aliases resolve to the current generation (C9). D76 final. Radar: tests/test_cm3_spike_models.py test_s7_selector_recognition.",
+      "status": "verified"
+    },
+    "U18": {
+      "note": "S8 (034, client 2.1.281): agent frontmatter low, medium and xhigh are sent verbatim; ultracode is dropped silently to the session effort, visible only in the debug log (EVIDENCE C37, C2). The catalog validator rejects agent ultracode. Radar: tests/test_cm3_spike_models.py test_s8_agent_effort_vocabulary.",
+      "status": "verified"
+    },
+    "U19": {
+      "note": "S9 (034, client 2.1.281): native Explore is capped under GPT and Fable leads unless CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP is set (EVIDENCE C38); statusline-setup and claude-code-guide wires recorded (C39). Radar: tests/test_cm3_spike_models.py test_s9_native_agent_wires.",
+      "status": "verified"
+    },
+    "U2": {
+      "note": "--append-system-prompt-file is stored in the binary session-config bag with agent/agents; takeover survival rests on the belt-and-braces prompt-file floor plus acceptance.",
+      "status": "unverified"
+    },
+    "U20": {
+      "note": "S10 (034, client 2.1.281): workflow agent() type, model and cwd behave as C22/C23; a workflow default binding must be inside availableModels (C36); Workflow is on by default and disableWorkflows:true is the off control (C35). Radar: tests/test_cm3_spike_skill_workflow.py test_s10_*.",
+      "status": "verified"
+    },
+    "U21": {
+      "note": "S11 (034, client 2.1.281): helper-only gateway auth rotates in-process with one 401 and a ~1 s retry using the new helper token; an env token outranks the helper and freezes it (EVIDENCE C18, C29), so durable launches unset ANTHROPIC_AUTH_TOKEN (D82). Radar: tests/test_cm3_spike_auth_gateway.py test_s11_*.",
+      "status": "verified"
+    },
+    "U22": {
+      "note": "S12 (034, client 2.1.281) PASS with caveat: the client strips [1m] from a codex selector, sends the 1M beta and books 1M; the gateway forwards the wire id with no window field and no 272K cap. Provider acceptance above 272K is not decidable offline (consent-gated live call). Radar: tests/test_cm3_spike_auth_gateway.py test_s12_gpt6_1m_selector_client_and_gateway.",
+      "status": "verified"
+    },
+    "U23": {
+      "note": "S7c (034, client 2.1.281): a categorized refusal switches only to a fenced hard-coded target (cyber -> claude-opus-4-8, bio -> claude-opus-5, and frontier_llm -> claude-opus-5 for Opus 5.5; EVIDENCE C31); switchModelsOnFlag:false disables the switch. Both targets stay passthrough routes and join Anthropic-led fences as a fallback-only set (SPEC 5.2, CP-12). Radar: tests/test_cm3_spike_models.py SelectorRecognitionProbe.",
+      "status": "verified"
+    },
+    "U5": {
+      "note": "availableModels compiles lead + every roster selector (D39) after the lead-only fence silently degraded all subagent dispatch to the lead; the offline delegation probe asserts the subagent's wire model through the production-shaped fence on the pinned binary every build (with the lead-only negative control preserved as the incident document).",
+      "status": "verified"
+    },
+    "U6": {
+      "note": "Nested spawning is documented on for 2.1.217 (depth 5 fixed) and prompts allow bounded delegation; spawn env keys stay unset pending acceptance.",
+      "status": "unverified"
+    }
+  },
+  "agent_efforts": {
+    "evidence": "Pinned client 2.1.281 accepts exactly low, medium, high, xhigh and max in agent frontmatter (044a static check; EVIDENCE C1/C2). Spike S8 (034) sent low, medium and xhigh verbatim on the subagent wire and silently dropped ultracode to the session effort (EVIDENCE C37), so the validator is the only guard. high and max rest on ordinary v1 operation.",
+    "status": "verified",
+    "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "capabilities": {
+    "background_supervisor_lifecycle": {
+      "status": "pending"
+    },
+    "onboarding_trust": {
+      "status": "pending"
+    },
+    "persistent_denies": {
+      "status": "pending"
+    },
+    "project_agent_collision": {
+      "status": "pending"
+    },
+    "root_agent_discovery": {
+      "status": "pending"
+    },
+    "root_memory_reinjection": {
+      "status": "pending"
+    },
+    "selectors_effort_tools_worktree": {
+      "status": "pending"
+    },
+    "transcript_location_exact_resume": {
+      "status": "pending"
+    }
+  },
+  "evidence_version": 3,
+  "generic_agent_aliases": {
+    "evidence": "Static strings in the inspected 2.1.217 binary name the generic native agent alias 'claude'; recorded per inspected version for policy compilation (Agent(claude) deny). Static presence is not functional verification; deny acceptance remains Phase-1 G1/P2 probe scope.",
+    "status": "provisionally-trusted",
+    "values": [
+      "claude"
+    ]
+  },
+  "lead_efforts": {
+    "evidence": "Lead efforts are the agent efforts plus ultracode; an ultracode lead sends xhigh on the wire (EVIDENCE C37). low and medium were not exercised as lead efforts on 2.1.281.",
+    "status": "provisionally-trusted",
+    "values": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultracode"
+    ]
+  },
+  "lifecycle_evidence": {
+    "evidence_id": "deepwork-claude-multi-durable-session-config-phase0-2.1.281",
+    "inspected_version": "2.1.281"
+  },
+  "nested_subagents": {
+    "concurrency_key": {
+      "name": "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
+      "status": "unverified"
+    },
+    "decision": "pending",
+    "depth_key": {
+      "name": "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH",
+      "status": "unverified"
+    },
+    "evidence": "Static strings in the inspected 2.1.217 binary name both keys; static presence is not functional verification. 2.1.217 disables nested spawning by default. Decision chain: G1 positive/negative controls, then Phase 2C compiles verified keys or amends canonical prompts.",
+    "probe": "g1-p-bg"
+  },
+  "recorded_at": "2026-09-25",
+  "verified": [
+    {
+      "evidence": {
+        "linux-x64": "battery",
+        "others": "identity+smoke",
+        "receipt_sha256": "181bff5b089a96a465e0e5f3f8a3d555272d8014449046076d63aef9e6ea4673"
+      },
+      "key_fingerprint": "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE",
+      "manifest_sha256": "9964a1a24a9f7dcf51a088b2343a7d97355bc753e670428972b0c724cdb8371f",
+      "platforms": {
+        "darwin-arm64": {
+          "sha256": "a922981f6f3b55a251ef9f9dbaa0621a5f99cbcb5ca67f8a797476ccfc83f626",
+          "size": 220931760
+        },
+        "darwin-x64": {
+          "sha256": "a9355cbb0d291ce948efcf61a6ef397401672f64fa5e5e67bca092fed6cd9088",
+          "size": 229263712
+        },
+        "linux-arm64": {
+          "sha256": "dd27b36438a4fed1670cd29bad2fda6a73b628b6da55443e5c2f647fe6ed328f",
+          "size": 236773368
+        },
+        "linux-arm64-musl": {
+          "sha256": "4f72ebbb08706651e7a2204303793700698f4046bc31f3e7e65b381063b7c210",
+          "size": 229128008
+        },
+        "linux-x64": {
+          "sha256": "56fe3da88458465fb27d7e9299dddb3fead55750fb9c2de795f233b5eea6dce1",
+          "size": 237375560
+        },
+        "linux-x64-musl": {
+          "sha256": "30220a5cf0628634599e0ede13a5cc814d21880116abf762f0598a33636f7bca",
+          "size": 231137376
+        },
+        "win32-arm64": {
+          "sha256": "103730182fe4dd36b8ff7791a408ac6144b2c40e35ab7b56b3561ce1d385ecbb",
+          "size": 228774560
+        },
+        "win32-x64": {
+          "sha256": "39be063c2512b43347fe7b0ab18c46f1596141701c9c5fc895ddfca9a051067c",
+          "size": 240767648
+        }
+      },
+      "signature_sha256": "2d7a492caf3b6c0f33fc70f43c5105fc627efaeef62cc8cde9e7ec4ee747b01d",
+      "verified_at": "2026-09-24",
+      "version": "2.1.281"
+    }
+  ],
+  "version": 2
+}

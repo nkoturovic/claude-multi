@@ -1,0 +1,24 @@
+
+  Confirm explicit action
+  ─────────────────────────────────────────────────────────────────────────────
+  Served change preview — no changes written
+  Served selectors: unchanged.
+  Offered/admitted changes
+    route acme: unapproved → approved
+  Plan digest: eeeeeeeeeeeeeeee
+
+  approve the credential route of provider acme:
+    origin: https://api.acme.example
+    auth: bearer from ACME_API_KEY (value not shown; not set yet)
+    listing: none
+  The key is sent only to this origin. Approve this route? [y/N]
+
+
+
+
+
+
+
+
+
+  y proceed · N cancel · Esc cancel

@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-analyst-strong": {
+      "effort": "xhigh",
+      "model": "fable"
+    },
+    "cm-explorer": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-implementer": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-implementer-light": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-implementer-strong": {
+      "effort": "max",
+      "model": "astra"
+    },
+    "cm-reviewer": {
+      "effort": "max",
+      "model": "astra"
+    },
+    "cm-reviewer-strong": {
+      "effort": "xhigh",
+      "model": "opus"
+    }
+  },
+  "description": "Fable lead and strong analyst; Sol high explorer and xhigh writers; Astra max strong writer/reviewer; Opus xhigh strong review",
+  "lead": {
+    "effort": "ultracode",
+    "model": "fable"
+  },
+  "name": "max",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "seed": {
+    "id": "max",
+    "version": 2
+  },
+  "version": 2,
+  "workflows": "native"
+}

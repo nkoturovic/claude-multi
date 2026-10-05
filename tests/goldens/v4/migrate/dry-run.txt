@@ -1,0 +1,47 @@
+claude-multi migrate --dry-run: state /state
+marker: absent (state 3) → 4 (would write)
+records: 8 (6 v3, 2 v1/v2, 0 already v4, 0 unreadable, 0 failed, 0 blocked)
+
+outcome        managed  ordinary  total
+needs-choice         1         0      1
+successor            0         0      0
+renamed              0         0      0
+unchanged            5         2      7
+total                6         2      8
+
+leads:
+  needs-choice: muse-spark 1
+  successor: (none)
+  renamed: (none)
+  unchanged: opus55 5, qwen38 0+1, sol 0+1
+
+profiles:
+  astra-muse: 1 (convert 1)
+  balanced: 1 (seed 1)
+  max: 1 (seed 1)
+  null: 5 (default 1, dropped 1, missing 1, ordinary 2)
+
+records:
+  a1111111  M  unchanged     lead opus55 → opus55  profile balanced (seed: opus-sol)  agents 5
+  a2222222  O  unchanged     lead qwen38 → qwen38  profile null (ordinary)  agents 0
+  a3333333  L2  unchanged     lead opus55 → opus55  profile max (seed: fable)  agents 5
+  a4444444  L1  unchanged     lead opus55 → opus55  profile null (default: default)  agents 5
+  a5555555  M  needs-choice  lead muse-spark → muse-spark  profile null (dropped: kimi-sol)  agents 5  notes: lead_providers: added meta (the lead's provider, E18)
+  a6666666  M  unchanged     lead opus55 → opus55  profile astra-muse (convert: astra-muse)  agents 5  notes: analyst: preferred muse-spark removed → kimi-k3·max; cm-reviewer: lane 'weird' → effort high
+  a7777777  M  unchanged     lead opus55 → opus55  profile null (missing: sol-qwen-glm-deepseek-flash)  agents 2  notes: analyst: 'muse-spark' was removed — unbound; Explore: replace → native (no analyst left to back cm-explorer); lead_providers: added anthropic (the lead's provider, E18)
+  a8888888  O  unchanged     lead sol → sol  profile null (ordinary)  agents 0
+
+live during migration: 3
+  a1111111  last event resume at 2026-09-25T00:00:00Z: verify with claude-multi sessions show a1111111-1111-4111-8111-111111111111; if it was /clear-ed or resumed while this ran, claude-multi sessions relink-runtime a1111111-1111-4111-8111-111111111111 <runtime-id>
+  a3333333  last event none at 2026-09-01T00:00:00Z: verify with claude-multi sessions show a3333333-3333-4333-8333-333333333333; if it was /clear-ed or resumed while this ran, claude-multi sessions relink-runtime a3333333-3333-4333-8333-333333333333 <runtime-id>
+  a4444444  last event none at 2026-09-01T00:00:00Z: verify with claude-multi sessions show a4444444-4444-4444-8444-444444444444; if it was /clear-ed or resumed while this ran, claude-multi sessions relink-runtime a4444444-4444-4444-8444-444444444444 <runtime-id>
+
+transcripts: 2 record(s) whose transcript is missing or older than cleanupPeriodDays (30)
+  a5555555  transcript missing: claude-multi sessions forget a5555555-5555-4555-8555-555555555555
+  a6666666  transcript older than 30 days (45 days; Claude deletes it at its next cleanup): claude-multi sessions forget a6666666-6666-4666-8666-666666666666
+
+pointers: 4 files, 3 cwds
+  618562fb  rename-ordinary: a2222222
+  f595f49e  merge: kept a1111111 (newer last_seen_at), dropped a8888888
+
+backups: would write 8 record backups (sessions/<id>.v3.json), 4 pointer backups

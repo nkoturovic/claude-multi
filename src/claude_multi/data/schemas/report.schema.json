@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "claude-multi report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report",
+    "generated_at",
+    "status",
+    "coverage",
+    "facts",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "report": {
+      "enum": [
+        "doctor",
+        "explain",
+        "usage",
+        "quota"
+      ]
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "attention",
+        "blocked"
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "records": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "lineup_log": {
+          "type": "string"
+        },
+        "journal": {
+          "type": "string"
+        },
+        "management": {
+          "type": "string"
+        }
+      }
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "subject_kind",
+          "subject_id",
+          "status",
+          "value",
+          "observed_at",
+          "source",
+          "freshness",
+          "coverage",
+          "reason",
+          "classification"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "subject_kind": {
+            "type": "string"
+          },
+          "subject_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "known",
+              "unknown",
+              "unavailable",
+              "invalid"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "current",
+              "stale",
+              "unknown"
+            ]
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "unavailable",
+              "absent"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "classification": {
+            "enum": [
+              "block",
+              "attention",
+              "info"
+            ]
+          }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "severity",
+          "code",
+          "text"
+        ],
+        "properties": {
+          "severity": {
+            "enum": [
+              "block",
+              "attention",
+              "info"
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

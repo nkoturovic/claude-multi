@@ -1,0 +1,21 @@
+{
+  "lines": {},
+  "notes": "Vercel AI Gateway's Anthropic Messages API (model ids like vendor/model). It serves several model families. Declaration only: add models with claude-multi models add vercel WIRE …, then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://vercel.com/docs/ai-gateway/sdks-and-apis/anthropic-messages-api",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:AI_GATEWAY_API_KEY"
+    },
+    "base_url": "https://ai-gateway.vercel.sh",
+    "display": "Vercel AI Gateway",
+    "independence_family": "unknown",
+    "kind": "anthropic-compatible"
+  },
+  "version": 1
+}

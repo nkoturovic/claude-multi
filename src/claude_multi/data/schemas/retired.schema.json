@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": ["version", "retired"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "retired": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["successor", "reason", "since_catalog", "provider", "last_wire", "display", "context_tokens", "capabilities", "roles", "selectors"],
+        "additionalProperties": false,
+        "properties": {
+          "successor": { "oneOf": [ { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" }, { "type": "null" } ] },
+          "generation": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z.-]{0,15}$" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "since_catalog": { "type": "integer", "minimum": 1 },
+          "provider": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "family": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "last_wire": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$" },
+          "display": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "context_tokens": { "type": "integer", "minimum": 1 },
+          "capabilities": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["lead", "agents"] } },
+          "roles": { "oneOf": [ { "const": "all" }, { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^cm-[a-z][a-z0-9-]*$" } } ] },
+          "output": {
+            "type": "object",
+            "required": ["declared_tokens", "source"],
+            "additionalProperties": false,
+            "properties": {
+              "declared_tokens": { "type": "integer", "minimum": 1, "maximum": 2097152 },
+              "source": { "enum": ["listing", "docs", "operator", "registry"] },
+              "source_ref": { "type": "string", "minLength": 1, "maxLength": 256 }
+            }
+          },
+          "registry_overlay": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "required": ["channel"],
+                "additionalProperties": false,
+                "properties": { "channel": { "enum": ["claude", "codex"] } }
+              }
+            ]
+          },
+          "externalized": {
+            "type": "object",
+            "required": ["sample"],
+            "additionalProperties": false,
+            "properties": { "sample": { "type": "string", "pattern": "^[a-z][a-z0-9-]*\\.json$" } }
+          },
+          "selectors": {
+            "type": "object",
+            "additionalProperties": { "oneOf": [ { "type": "string", "pattern": "^[a-z0-9-]+$" }, { "type": "null" } ] }
+          }
+        }
+      }
+    }
+  }
+}

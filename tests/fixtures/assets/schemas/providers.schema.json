@@ -1,0 +1,232 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": [
+    "version",
+    "providers"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "display",
+          "independence_family",
+          "support",
+          "support_note",
+          "adapter",
+          "transport",
+          "passthrough_routes",
+          "payload_contracts"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "display": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "independence_family": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "support": {
+            "enum": [
+              "anthropic-supported",
+              "locally-validated-experimental"
+            ]
+          },
+          "support_note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "adapter": {
+            "type": "string",
+            "pattern": "^cliproxy-[a-z0-9-]+-v[0-9]+$"
+          },
+          "transport": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "pool"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "oauth-pool"
+                  },
+                  "pool": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "base_url",
+                  "auth"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "direct"
+                  },
+                  "base_url": {
+                    "type": "string",
+                    "pattern": "^https://[a-z0-9.-]+(/[a-z0-9._/-]*)?$"
+                  },
+                  "auth": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "header",
+                          "secret_ref"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "header"
+                          },
+                          "header": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9-]*$"
+                          },
+                          "secret_ref": {
+                            "type": "string",
+                            "pattern": "^env:[A-Z0-9_]+$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "secret_ref"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "bearer"
+                          },
+                          "secret_ref": {
+                            "type": "string",
+                            "pattern": "^env:[A-Z0-9_]+$"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "base_url",
+                  "auth"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "direct-openai"
+                  },
+                  "base_url": {
+                    "type": "string",
+                    "pattern": "^http://[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._/-]*)?$"
+                  },
+                  "auth": {
+                    "type": "object",
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "none"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "base_url",
+                  "auth"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "direct-openai"
+                  },
+                  "base_url": {
+                    "type": "string",
+                    "pattern": "^https://[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._/-]*)?$"
+                  },
+                  "auth": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "secret_ref"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "bearer"
+                      },
+                      "secret_ref": {
+                        "type": "string",
+                        "pattern": "^env:[A-Z0-9_]+$"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "passthrough_routes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "fork"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^claude-[a-z]+-[0-9]+(-[0-9]+)*$"
+                },
+                "fork": {
+                  "const": true
+                }
+              }
+            }
+          },
+          "payload_contracts": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

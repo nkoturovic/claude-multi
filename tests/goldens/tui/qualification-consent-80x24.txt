@@ -1,0 +1,24 @@
+
+  Confirm explicit action
+  ─────────────────────────────────────────────────────────────────────────────
+  Qualification plan for custom-x:
+    definition:
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    route: https://api.example.test; auth bearer from EXAMPLE_API_KEY (value
+  not shown)
+    1. smoke — alias custom-x-high, approximately 40 input tokens
+    2. effort high — alias custom-x-high, approximately 40 input tokens
+    3. effort max — alias custom-x-max, approximately 40 input tokens
+    4. tools (forced) step 1 — alias custom-x-high, approximately 150 input
+  tokens
+    5. tools (forced) step 2 — alias custom-x-high, approximately 250 input
+  tokens
+    6. stream — alias custom-x-high, approximately 40 input tokens
+    tools variant: forced named tool (tool_choice {type: tool}, strict object
+  schema); no other variant is tried.
+    tools step 2 runs only if step 1 returns the expected tool call.
+  Caps: 120 s and 256 KiB per request; context 300 s and 256 KiB.
+  No retries. max_tokens is sent but is not a reliable cost bound.
+  Qualification records evidence only; it does not admit or enable agents.
+  More below — arrows/PgDn scroll; Home/End
+  y proceed · N cancel · Esc cancel

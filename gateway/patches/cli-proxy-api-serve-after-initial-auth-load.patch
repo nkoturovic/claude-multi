@@ -1,0 +1,1366 @@
+diff --git a/internal/watcher/dispatcher.go b/internal/watcher/dispatcher.go
+index 89b4aae..320c460 100644
+--- a/internal/watcher/dispatcher.go
++++ b/internal/watcher/dispatcher.go
+@@ -270,6 +270,45 @@ func (w *Watcher) dispatchAuthUpdates(updates []AuthUpdate) {
+ 	w.dispatchMu.Unlock()
+ }
+ 
++// authBarrier is closed once the consumer has applied every update queued before it.
++type authBarrier struct {
++	once sync.Once
++	done chan struct{}
++}
++
++func (b *authBarrier) release() {
++	b.once.Do(func() { close(b.done) })
++}
++
++// dispatchAuthBarrier appends a marker to the pending FIFO. dispatchLoop delivers
++// pending updates in order on one goroutine, so the marker reaches the queue only
++// after every update pending before it. Later updates for an auth already pending
++// replace it in place, ahead of the marker, so the marker never overtakes one.
++func (w *Watcher) dispatchAuthBarrier() <-chan struct{} {
++	if w == nil {
++		return nil
++	}
++	barrier := &authBarrier{done: make(chan struct{})}
++	w.clientsMutex.RLock()
++	defer w.clientsMutex.RUnlock()
++	if w.authQueue == nil {
++		return nil
++	}
++	w.dispatchMu.Lock()
++	if w.pendingUpdates == nil {
++		w.pendingUpdates = make(map[string]AuthUpdate)
++	}
++	// Auth IDs never contain NUL, so the key cannot collide with a real update.
++	key := fmt.Sprintf("\x00barrier:%p", barrier)
++	w.pendingOrder = append(w.pendingOrder, key)
++	w.pendingUpdates[key] = AuthUpdate{Action: authUpdateActionBarrier, barrier: barrier}
++	if w.dispatchCond != nil {
++		w.dispatchCond.Signal()
++	}
++	w.dispatchMu.Unlock()
++	return barrier.done
++}
++
+ func (w *Watcher) authUpdateKey(update AuthUpdate, ts int64) string {
+ 	if update.ID != "" {
+ 		return update.ID
+diff --git a/internal/watcher/dispatcher_barrier_test.go b/internal/watcher/dispatcher_barrier_test.go
+new file mode 100644
+index 0000000..dcbc703
+--- /dev/null
++++ b/internal/watcher/dispatcher_barrier_test.go
+@@ -0,0 +1,66 @@
++package watcher
++
++import (
++	"testing"
++	"time"
++)
++
++func TestDispatchAuthBarrierFollowsPendingUpdates(t *testing.T) {
++	queue := make(chan AuthUpdate, 8)
++	w := &Watcher{}
++	w.SetAuthUpdateQueue(queue)
++	defer w.stopDispatch()
++
++	w.dispatchAuthUpdates([]AuthUpdate{
++		{Action: AuthUpdateActionAdd, ID: "a"},
++		{Action: AuthUpdateActionAdd, ID: "b"},
++	})
++	done := w.DispatchAuthBarrier()
++	if done == nil {
++		t.Fatal("DispatchAuthBarrier() = nil with a queue configured")
++	}
++	// A later update for an auth still pending replaces it in place, ahead of the
++	// marker; either way the marker follows every update dispatched before it.
++	w.dispatchAuthUpdates([]AuthUpdate{{Action: AuthUpdateActionModify, ID: "a"}})
++
++	got := make([]AuthUpdate, 0, 3)
++	for len(got) < 3 {
++		select {
++		case update := <-queue:
++			got = append(got, update)
++		case <-time.After(2 * time.Second):
++			t.Fatalf("timed out after %d updates", len(got))
++		}
++	}
++	if got[0].IsBarrier() || got[1].IsBarrier() || !got[2].IsBarrier() {
++		t.Fatalf("barrier must follow every earlier update: %+v", got)
++	}
++	if got[2].Auth != nil || got[2].ID != "" {
++		t.Fatalf("barrier must carry no auth: %+v", got[2])
++	}
++
++	select {
++	case <-done:
++		t.Fatal("barrier released before the consumer released it")
++	default:
++	}
++	got[2].ReleaseBarrier()
++	got[2].ReleaseBarrier() // idempotent
++	select {
++	case <-done:
++	case <-time.After(2 * time.Second):
++		t.Fatal("barrier not released")
++	}
++	got[0].ReleaseBarrier() // no-op on ordinary updates
++}
++
++func TestDispatchAuthBarrierWithoutQueue(t *testing.T) {
++	w := &Watcher{}
++	if done := w.DispatchAuthBarrier(); done != nil {
++		t.Fatal("DispatchAuthBarrier() without a queue must return nil")
++	}
++	var nilWatcher *Watcher
++	if done := nilWatcher.DispatchAuthBarrier(); done != nil {
++		t.Fatal("DispatchAuthBarrier() on a nil watcher must return nil")
++	}
++}
+diff --git a/internal/watcher/watcher.go b/internal/watcher/watcher.go
+index a3dfccb..b91115e 100644
+--- a/internal/watcher/watcher.go
++++ b/internal/watcher/watcher.go
+@@ -76,6 +76,9 @@ const (
+ 	AuthUpdateActionAdd    AuthUpdateAction = "add"
+ 	AuthUpdateActionModify AuthUpdateAction = "modify"
+ 	AuthUpdateActionDelete AuthUpdateAction = "delete"
++
++	// authUpdateActionBarrier marks a DispatchAuthBarrier completion marker.
++	authUpdateActionBarrier AuthUpdateAction = "barrier"
+ )
+ 
+ // AuthUpdate describes an incremental change to auth configuration.
+@@ -84,6 +87,23 @@ type AuthUpdate struct {
+ 	ID       string
+ 	Auth     *coreauth.Auth
+ 	revision uint64 // Watcher-local ordering, independent of runtime auth generations.
++	// barrier is set only on DispatchAuthBarrier markers, which carry no auth.
++	barrier *authBarrier
++}
++
++// IsBarrier reports whether u is a completion marker queued by DispatchAuthBarrier.
++// A marker carries no auth and must never be applied as an auth change.
++func (u AuthUpdate) IsBarrier() bool {
++	return u.barrier != nil
++}
++
++// ReleaseBarrier signals a DispatchAuthBarrier marker. The consumer calls it once every
++// update it received before the marker has been applied. It is a no-op for ordinary
++// updates and safe to call more than once.
++func (u AuthUpdate) ReleaseBarrier() {
++	if u.barrier != nil {
++		u.barrier.release()
++	}
+ }
+ 
+ // Revision returns the monotonic watcher revision assigned to this update.
+@@ -192,6 +212,14 @@ func (w *Watcher) DispatchPersistedAuthUpdateWithRevision(update *AuthUpdate) (b
+ 	return w.dispatchPersistedAuthUpdateWithRevision(update)
+ }
+ 
++// DispatchAuthBarrier queues a completion marker behind every auth update the watcher
++// has queued so far. The returned channel is closed when the consumer releases the
++// marker, i.e. after it applied every earlier update. Returns nil when no auth update
++// queue is configured.
++func (w *Watcher) DispatchAuthBarrier() <-chan struct{} {
++	return w.dispatchAuthBarrier()
++}
++
+ // SnapshotCoreAuths converts current clients snapshot into core auth entries.
+ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
+ 	w.clientsMutex.RLock()
+diff --git a/sdk/cliproxy/service.go b/sdk/cliproxy/service.go
+index 840c7a3..ab1b322 100644
+--- a/sdk/cliproxy/service.go
++++ b/sdk/cliproxy/service.go
+@@ -6,6 +6,7 @@ package cliproxy
+ import (
+ 	"context"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api"
+@@ -87,6 +88,14 @@ type Service struct {
+ 	// authQueueStop cancels the auth update queue processing.
+ 	authQueueStop context.CancelFunc
+ 
++	// authQueueDone is closed once the auth update consumer has returned; Shutdown
++	// waits on it so no registration worker outlives the service.
++	authQueueDone chan struct{}
++
++	// startupGate holds model-serving requests until the initial auth load is
++	// registered (see startup_gate.go).
++	startupGate atomic.Pointer[startupGate]
++
+ 	// authManager handles legacy authentication operations.
+ 	authManager *sdkAuth.Manager
+ 
+diff --git a/sdk/cliproxy/service_auth.go b/sdk/cliproxy/service_auth.go
+index 8553299..59200e9 100644
+--- a/sdk/cliproxy/service_auth.go
++++ b/sdk/cliproxy/service_auth.go
+@@ -43,7 +43,12 @@ func (s *Service) ensureAuthUpdateQueue(ctx context.Context) {
+ 	}
+ 	queueCtx, cancel := context.WithCancel(ctx)
+ 	s.authQueueStop = cancel
+-	go s.consumeAuthUpdates(queueCtx)
++	done := make(chan struct{})
++	s.authQueueDone = done
++	go func() {
++		defer close(done)
++		s.consumeAuthUpdates(queueCtx)
++	}()
+ }
+ 
+ func (s *Service) consumeAuthUpdates(ctx context.Context) {
+@@ -66,9 +71,31 @@ func (s *Service) consumeAuthUpdates(ctx context.Context) {
+ 					break labelDrain
+ 				}
+ 			}
+-			s.handleAuthUpdates(ctx, updates)
++			updates, barriers := splitAuthBarriers(updates)
++			if len(updates) > 0 {
++				s.handleAuthUpdates(ctx, updates)
++			}
++			// handleAuthUpdates returns only after its model registrations finished,
++			// so every update queued before a barrier is registered by now.
++			for _, barrier := range barriers {
++				barrier.ReleaseBarrier()
++			}
++		}
++	}
++}
++
++// splitAuthBarriers separates DispatchAuthBarrier markers from real auth updates.
++func splitAuthBarriers(updates []watcher.AuthUpdate) ([]watcher.AuthUpdate, []watcher.AuthUpdate) {
++	var barriers []watcher.AuthUpdate
++	filtered := updates[:0]
++	for _, update := range updates {
++		if update.IsBarrier() {
++			barriers = append(barriers, update)
++			continue
+ 		}
++		filtered = append(filtered, update)
+ 	}
++	return filtered, barriers
+ }
+ 
+ func (s *Service) emitAuthUpdate(ctx context.Context, update watcher.AuthUpdate) {
+diff --git a/sdk/cliproxy/service_lifecycle.go b/sdk/cliproxy/service_lifecycle.go
+index 9195a30..096cb7e 100644
+--- a/sdk/cliproxy/service_lifecycle.go
++++ b/sdk/cliproxy/service_lifecycle.go
+@@ -51,7 +51,9 @@ func (s *Service) Run(ctx context.Context) error {
+ 
+ 	usage.StartDefault(ctx)
+ 	homeEnabled := s.cfg != nil && s.cfg.Home.Enabled
++	gate := s.armStartupGate(ctx)
+ 	if homeEnabled {
++		gate.open(startupGateNotApplicable) // no file watcher, nothing to wait for
+ 		forceHomeRuntimeConfig(s.cfg)
+ 		redisqueue.SetUsageStatisticsEnabled(true)
+ 	}
+@@ -78,6 +80,7 @@ func (s *Service) Run(ctx context.Context) error {
+ 		if errLoad := s.coreManager.Load(ctx); errLoad != nil {
+ 			log.Warnf("failed to load auth store: %v", errLoad)
+ 		}
++		gate.storedAuths.Store(int64(len(s.coreManager.List())))
+ 		s.registerConfigAPIKeyAuths(coreauth.WithSkipPersist(ctx), s.cfg)
+ 		if s.cfg.SaveCooldownStatus {
+ 			if errRestoreCooldown := s.coreManager.RestoreCooldownStates(ctx); errRestoreCooldown != nil {
+@@ -123,7 +126,8 @@ func (s *Service) Run(ctx context.Context) error {
+ 	}
+ 
+ 	// handlers no longer depend on legacy clients; pass nil slice initially
+-	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, s.serverOptions...)
++	serverOptions := append(append([]api.ServerOption(nil), s.serverOptions...), api.WithMiddleware(gate.middleware(s.websocketGatewayPath())))
++	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, serverOptions...)
+ 	s.syncPluginRuntimeConfig(ctx)
+ 	if homeEnabled {
+ 		s.syncPluginModelRuntime(ctx)
+@@ -202,6 +206,7 @@ func (s *Service) Run(ctx context.Context) error {
+ 			return fmt.Errorf("cliproxy: failed to start watcher: %w", errStart)
+ 		}
+ 		log.Info("file watcher started for config and auth directory changes")
++		gate.awaitBarrier(watcherWrapper.DispatchAuthBarrier())
+ 		s.syncPluginModelRuntime(ctx)
+ 	}
+ 
+@@ -234,6 +239,10 @@ func (s *Service) Shutdown(ctx context.Context) error {
+ 		if ctx == nil {
+ 			ctx = context.Background()
+ 		}
++		// Release requests held at the start-up gate so the server can drain.
++		if gate := s.startupGate.Load(); gate != nil {
++			gate.open(startupGateCancelled)
++		}
+ 
+ 		s.homeLifecycleMu.Lock()
+ 		if supervisor := s.homeSupervisor; supervisor != nil {
+@@ -335,6 +344,16 @@ func (s *Service) Shutdown(ctx context.Context) error {
+ 			}
+ 		}
+ 
++		// Join the auth update consumer (and its registration workers) after the
++		// server drained, bounded by ctx.
++		if s.authQueueDone != nil {
++			select {
++			case <-s.authQueueDone:
++			case <-ctx.Done():
++				log.Warn("auth update consumer still running at shutdown deadline")
++			}
++		}
++
+ 		if s.pluginHost != nil {
+ 			sdktranslator.SetPluginHooks(nil)
+ 			sdkAuth.RegisterPluginAuthParser(nil)
+diff --git a/sdk/cliproxy/startup_gate.go b/sdk/cliproxy/startup_gate.go
+new file mode 100644
+index 0000000..7898832
+--- /dev/null
++++ b/sdk/cliproxy/startup_gate.go
+@@ -0,0 +1,165 @@
++package cliproxy
++
++import (
++	"context"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	log "github.com/sirupsen/logrus"
++)
++
++// The start-up gate holds model-serving requests that arrive after the HTTP listener
++// started but before the watcher's initial auth load is registered, so a request that
++// races a restart never gets model_not_found for a file-auth model that is merely not
++// registered yet. Run's start-up order is unchanged; only requests wait.
++
++// initialAuthReadyTimeout bounds the gate: it opens at the latest this long after Run
++// began, so a broken or slow auth can never keep the gateway from serving.
++const initialAuthReadyTimeout = 30 * time.Second
++
++// initialAuthReadyWait is the bound Run applies; tests shorten it.
++var initialAuthReadyWait = initialAuthReadyTimeout
++
++// Test seams.
++var (
++	startupGateWaitHook    func(event string) // "wait", then "opened" or "cancelled"
++	startupGateBarrierHook func()             // the initial auth barrier was queued
++	startupGateOpenHook    func(reason string)
++)
++
++// Reasons the gate opened.
++const (
++	startupGateBarrier       = "barrier"
++	startupGateDeadline      = "deadline"
++	startupGateCancelled     = "cancelled"
++	startupGateNotApplicable = "not-applicable"
++)
++
++// startupGatedPrefixes are the model-serving route groups (internal/api/server_routes.go).
++var startupGatedPrefixes = []string{"/v1", "/v1beta", "/openai/v1", "/backend-api/codex"}
++
++type startupGate struct {
++	opened        chan struct{}
++	once          sync.Once
++	barrierQueued atomic.Bool
++	storedAuths   atomic.Int64 // recorded by Run after the auth store loaded
++
++	mu       sync.Mutex
++	deadline *time.Timer
++	stopCtx  func() bool
++}
++
++// armStartupGate creates the gate for this Run. It opens on the first of: the initial
++// auth barrier released, the deadline, ctx cancelled, or open(notApplicable).
++func (s *Service) armStartupGate(ctx context.Context) *startupGate {
++	gate := &startupGate{opened: make(chan struct{})}
++	s.startupGate.Store(gate)
++	gate.mu.Lock()
++	gate.deadline = time.AfterFunc(initialAuthReadyWait, func() { gate.open(startupGateDeadline) })
++	gate.stopCtx = context.AfterFunc(ctx, func() { gate.open(startupGateCancelled) })
++	gate.mu.Unlock()
++	return gate
++}
++
++// open closes the gate once; later calls return at once. The close-once step only
++// closes the channel (and runs the test seam, nil in production); the first opener
++// then stops the other triggers and, on the deadline, logs the warning from values
++// recorded earlier. Nothing here takes a lock another component can hold.
++func (g *startupGate) open(reason string) {
++	first := false
++	g.once.Do(func() {
++		close(g.opened)
++		first = true
++		if startupGateOpenHook != nil {
++			startupGateOpenHook(reason)
++		}
++	})
++	if !first {
++		return
++	}
++	g.mu.Lock() // held only while armStartupGate installs the triggers
++	if g.deadline != nil {
++		g.deadline.Stop()
++	}
++	if g.stopCtx != nil {
++		g.stopCtx()
++	}
++	g.mu.Unlock()
++	if reason == startupGateDeadline {
++		log.Warnf("initial auth registration not confirmed within %s of start (initial auth barrier queued: %t, %d stored auths loaded at start); serving model requests anyway", initialAuthReadyWait, g.barrierQueued.Load(), g.storedAuths.Load())
++	}
++}
++
++// awaitBarrier opens the gate when done closes. A nil done (no barrier support or no
++// queue) opens it at once. The waiter also exits when the gate opens otherwise, and
++// the deadline and Run's ctx always open it, so it never outlives the start-up bound.
++func (g *startupGate) awaitBarrier(done <-chan struct{}) {
++	if done == nil {
++		g.open(startupGateNotApplicable)
++		return
++	}
++	g.barrierQueued.Store(true)
++	if startupGateBarrierHook != nil {
++		startupGateBarrierHook()
++	}
++	go func() {
++		select {
++		case <-done:
++			g.open(startupGateBarrier)
++		case <-g.opened:
++		}
++	}()
++}
++
++// startupGated reports whether a request waits for the gate: model-serving routes
++// only, never health, management, static assets, preflight or the provider websocket.
++func startupGated(method, path, skipPath string) bool {
++	if method == "OPTIONS" || (skipPath != "" && path == skipPath) {
++		return false
++	}
++	for _, prefix := range startupGatedPrefixes {
++		if path == prefix || strings.HasPrefix(path, prefix+"/") {
++			return true
++		}
++	}
++	return false
++}
++
++// middleware holds gated requests until the gate opens or the request is cancelled.
++// It never answers a request itself; once open it costs one channel receive.
++func (g *startupGate) middleware(skipPath string) gin.HandlerFunc {
++	return func(c *gin.Context) {
++		select {
++		case <-g.opened:
++			return
++		default:
++		}
++		if !startupGated(c.Request.Method, c.Request.URL.Path, skipPath) {
++			return
++		}
++		if startupGateWaitHook != nil {
++			startupGateWaitHook("wait")
++		}
++		select {
++		case <-g.opened:
++			if startupGateWaitHook != nil {
++				startupGateWaitHook("opened")
++			}
++		case <-c.Request.Context().Done():
++			if startupGateWaitHook != nil {
++				startupGateWaitHook("cancelled")
++			}
++			c.Abort()
++		}
++	}
++}
++
++func (s *Service) websocketGatewayPath() string {
++	if s == nil || s.wsGateway == nil {
++		return ""
++	}
++	return s.wsGateway.Path()
++}
+diff --git a/sdk/cliproxy/startup_gate_test.go b/sdk/cliproxy/startup_gate_test.go
+new file mode 100644
+index 0000000..93ec8b3
+--- /dev/null
++++ b/sdk/cliproxy/startup_gate_test.go
+@@ -0,0 +1,827 @@
++package cliproxy
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	internalregistry "github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
++	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
++	log "github.com/sirupsen/logrus"
++)
++
++// These tests run Service.Run end to end (upstream start-up order: listener, then
++// watcher) with the real file watcher on a loopback listener whose port the kernel
++// picked. Upstream traffic never leaves the process: the core manager's
++// RoundTripperProvider answers every executor request. Run's Shutdown opens the gate,
++// drains the server and joins the auth update consumer, so once Run returned no
++// request or registration goroutine reads the test hooks any more.
++//
++// The harness sidesteps two data races that unpatched 7.3.15 has at every start, so
++// that -race reports only what this patch could add:
++//   - api.Server.Start and every request read api.Server.cfg, which the watcher's
++//     initial reload rewrites without synchronization (UpdateClientsContext):
++//     OnAfterStart waits until the listener answers, and tests whose gate opens at
++//     the deadline send requests only after Run passed watcher.Start (barrier seam).
++//   - Run's post-start plugin model sync registers concurrently with the consumer's
++//     initial batch (auth.Manager.ReconcileRegistryModelStates vs updateInternal's
++//     Clone): unless a test needs it, the plugin host is removed, which makes both
++//     plugin model syncs no-ops; file auths then register through the consumer only.
++
++const (
++	gateTestAPIKey    = "l8b-startup-key"
++	gateTestAlias     = "l8b-startup-probe"
++	gateTestAuthFile  = "claude-l8b-startup.json"
++	gateTestWarnToken = "initial auth registration not confirmed"
++	// gateTestHoldGuard only turns a would-be hang into a failure.
++	gateTestHoldGuard = 5 * time.Second
++)
++
++// gateTestRoundTripper answers every upstream request with a canned Anthropic message.
++type gateTestRoundTripper struct{ calls atomic.Int64 }
++
++func (rt *gateTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
++	rt.calls.Add(1)
++	if req.Body != nil {
++		_, _ = io.Copy(io.Discard, req.Body)
++		_ = req.Body.Close()
++	}
++	body := `{"id":"msg_l8b","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}`
++	return &http.Response{
++		StatusCode:    http.StatusOK,
++		Status:        "200 OK",
++		Header:        http.Header{"Content-Type": []string{"application/json"}},
++		Body:          io.NopCloser(strings.NewReader(body)),
++		ContentLength: int64(len(body)),
++		Request:       req,
++	}, nil
++}
++
++type gateTestRTProvider struct{ rt *gateTestRoundTripper }
++
++func (p gateTestRTProvider) RoundTripperFor(*coreauth.Auth) http.RoundTripper { return p.rt }
++
++// gateTestWarnHook collects the gate deadline warning.
++type gateTestWarnHook struct {
++	mu       sync.Mutex
++	messages []string
++}
++
++func (h *gateTestWarnHook) Levels() []log.Level { return []log.Level{log.WarnLevel} }
++
++func (h *gateTestWarnHook) Fire(entry *log.Entry) error {
++	if strings.Contains(entry.Message, gateTestWarnToken) {
++		h.mu.Lock()
++		h.messages = append(h.messages, entry.Message)
++		h.mu.Unlock()
++	}
++	return nil
++}
++
++func (h *gateTestWarnHook) snapshot() []string {
++	h.mu.Lock()
++	defer h.mu.Unlock()
++	return append([]string(nil), h.messages...)
++}
++
++func installGateTestWarnHook(t *testing.T) *gateTestWarnHook {
++	t.Helper()
++	logger := log.StandardLogger()
++	previous := make(log.LevelHooks)
++	for level, hooks := range logger.Hooks {
++		previous[level] = append([]log.Hook(nil), hooks...)
++	}
++	hook := &gateTestWarnHook{}
++	logger.AddHook(hook)
++	t.Cleanup(func() { logger.ReplaceHooks(previous) })
++	return hook
++}
++
++// setGateTestVar installs a package-level test variable and restores it at cleanup.
++// Call it before h.run: cleanups run LIFO, so the restore happens after Run returned.
++func setGateTestVar[T any](t *testing.T, target *T, value T) {
++	t.Helper()
++	previous := *target
++	*target = value
++	t.Cleanup(func() { *target = previous })
++}
++
++func freeLoopbackPort(t *testing.T) int {
++	t.Helper()
++	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
++	if errListen != nil {
++		t.Fatalf("reserve loopback port: %v", errListen)
++	}
++	port := listener.Addr().(*net.TCPAddr).Port
++	if errClose := listener.Close(); errClose != nil {
++		t.Fatalf("release loopback port: %v", errClose)
++	}
++	return port
++}
++
++func writeGateTestAuthFile(t *testing.T, authDir string) {
++	t.Helper()
++	// Synthetic Claude OAuth file: no refresh token and a far-future expiry, so the
++	// auto-refresh loop has nothing to refresh.
++	content := `{"type":"claude","email":"l8b-startup@example.invalid","access_token":"l8b-synthetic-access","expired":"2099-01-01T00:00:00Z"}`
++	if errWrite := os.WriteFile(filepath.Join(authDir, gateTestAuthFile), []byte(content), 0o600); errWrite != nil {
++		t.Fatalf("write auth file: %v", errWrite)
++	}
++}
++
++type gateTestService struct {
++	service *Service
++	port    int
++	rt      *gateTestRoundTripper
++	watcher chan *WatcherWrapper
++	started time.Time
++	cancel  context.CancelFunc
++	done    chan error
++}
++
++type gateTestOptions struct {
++	hooks          Hooks
++	watcherFactory WatcherFactory
++	withPluginHost bool
++}
++
++// newGateTestService builds a service over authDir. The config file on disk matches
++// the in-memory config (API key, OAuth alias for the Claude channel), so a reload from
++// disk keeps the alias; the alias is served only once the file auth is registered.
++func newGateTestService(t *testing.T, authDir string, opts gateTestOptions) *gateTestService {
++	t.Helper()
++	// Never write logs, discovery or panel assets outside the test's temp dirs.
++	t.Setenv("WRITABLE_PATH", t.TempDir())
++	t.Setenv("writable_path", "")
++	claudeModels := internalregistry.GetClaudeModels()
++	if len(claudeModels) == 0 || claudeModels[0] == nil {
++		t.Fatal("embedded registry has no Claude models")
++	}
++	port := freeLoopbackPort(t)
++	configPath := filepath.Join(t.TempDir(), "config.yaml")
++	configYAML := fmt.Sprintf("host: 127.0.0.1\nport: %d\nauth-dir: %q\napi-keys:\n  - %s\noauth-model-alias:\n  claude:\n    - name: %q\n      alias: %s\n      fork: true\n",
++		port, authDir, gateTestAPIKey, claudeModels[0].ID, gateTestAlias)
++	if errWrite := os.WriteFile(configPath, []byte(configYAML), 0o600); errWrite != nil {
++		t.Fatalf("write config: %v", errWrite)
++	}
++	cfg, errLoad := config.LoadConfig(configPath)
++	if errLoad != nil {
++		t.Fatalf("load config: %v", errLoad)
++	}
++
++	h := &gateTestService{port: port, watcher: make(chan *WatcherWrapper, 1)}
++	hooks := opts.hooks
++	userAfterStart := hooks.OnAfterStart
++	hooks.OnAfterStart = func(s *Service) {
++		// Order api.Server.Start's config read before the watcher's initial reload.
++		if got := firstResponse(gateTestHTTPClient(), func() *http.Request {
++			req, _ := http.NewRequest(http.MethodGet, h.url("/healthz"), nil)
++			return req
++		}, 10*time.Second, nil); got.err != nil {
++			t.Errorf("listener not answering after start: %v", got.err)
++		}
++		if userAfterStart != nil {
++			userAfterStart(s)
++		}
++	}
++	factory := opts.watcherFactory
++	if factory == nil {
++		factory = func(configPath, authDir string, reload func(*config.Config)) (*WatcherWrapper, error) {
++			w, errCreate := defaultWatcherFactory(configPath, authDir, reload)
++			if errCreate == nil {
++				h.watcher <- w
++			}
++			return w, errCreate
++		}
++	}
++	service, errBuild := NewBuilder().WithConfig(cfg).WithConfigPath(configPath).WithHooks(hooks).WithWatcherFactory(factory).Build()
++	if errBuild != nil {
++		t.Fatalf("Build() failed: %v", errBuild)
++	}
++	if !opts.withPluginHost {
++		service.pluginHost = nil
++	}
++	h.rt = &gateTestRoundTripper{}
++	service.coreManager.SetRoundTripperProvider(gateTestRTProvider{rt: h.rt})
++	h.service = service
++	return h
++}
++
++func (h *gateTestService) run(t *testing.T) {
++	t.Helper()
++	ctx, cancel := context.WithCancel(context.Background())
++	h.cancel = cancel
++	done := make(chan error, 1)
++	h.done = done
++	h.started = time.Now()
++	go func() { done <- h.service.Run(ctx) }()
++	t.Cleanup(func() { h.stop(t) })
++}
++
++func (h *gateTestService) stop(t *testing.T) {
++	t.Helper()
++	if h.done == nil {
++		return
++	}
++	h.cancel()
++	done := h.done
++	h.done = nil
++	select {
++	case errRun := <-done:
++		if errRun != nil && !errors.Is(errRun, context.Canceled) {
++			t.Errorf("Run() returned %v", errRun)
++		}
++	case <-time.After(30 * time.Second):
++		t.Fatal("Run() did not return after cancel")
++	}
++	reg := internalregistry.GetGlobalRegistry()
++	for _, auth := range h.service.coreManager.List() {
++		if auth != nil {
++			reg.UnregisterClient(auth.ID)
++		}
++	}
++}
++
++func (h *gateTestService) url(path string) string {
++	return fmt.Sprintf("http://127.0.0.1:%d%s", h.port, path)
++}
++
++func (h *gateTestService) request(ctx context.Context, method, path string, body []byte) *http.Request {
++	req, _ := http.NewRequestWithContext(ctx, method, h.url(path), bytes.NewReader(body))
++	req.Header.Set("Authorization", "Bearer "+gateTestAPIKey)
++	if body != nil {
++		req.Header.Set("Content-Type", "application/json")
++	}
++	return req
++}
++
++func (h *gateTestService) messagesRequest() *http.Request {
++	payload := []byte(`{"model":"` + gateTestAlias + `","max_tokens":8,"messages":[{"role":"user","content":"ping"}]}`)
++	return h.request(context.Background(), http.MethodPost, "/v1/messages", payload)
++}
++
++func gateTestHTTPClient() *http.Client {
++	// Proxy nil: loopback only, whatever the environment says.
++	return &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
++}
++
++type gateTestResponse struct {
++	status int
++	body   string
++	at     time.Time
++	err    error
++}
++
++// firstResponse retries until the listener accepts a connection and returns the first
++// HTTP response; onAttempt (optional) runs after every attempt. Safe from any goroutine.
++func firstResponse(client *http.Client, build func() *http.Request, deadline time.Duration, onAttempt func()) gateTestResponse {
++	limit := time.Now().Add(deadline)
++	for time.Now().Before(limit) {
++		resp, errDo := client.Do(build())
++		if onAttempt != nil {
++			onAttempt()
++		}
++		if errDo != nil {
++			time.Sleep(2 * time.Millisecond)
++			continue
++		}
++		at := time.Now()
++		body, _ := io.ReadAll(resp.Body)
++		_ = resp.Body.Close()
++		return gateTestResponse{status: resp.StatusCode, body: string(body), at: at}
++	}
++	return gateTestResponse{err: fmt.Errorf("listener did not answer within %s", deadline)}
++}
++
++func mustFirstResponse(t *testing.T, build func() *http.Request) gateTestResponse {
++	t.Helper()
++	got := firstResponse(gateTestHTTPClient(), build, 20*time.Second, nil)
++	if got.err != nil {
++		t.Fatal(got.err)
++	}
++	return got
++}
++
++func closeOnce(once *sync.Once, ch chan struct{}) { once.Do(func() { close(ch) }) }
++
++// gateTestEvents records the gate seams.
++type gateTestEvents struct {
++	waitOnce, barrierOnce, openOnce sync.Once
++	waiting, barrierQueued, opened  chan struct{}
++	openReason                      atomic.Value
++	routableAtOpen                  atomic.Bool
++	cancelled                       atomic.Int64
++}
++
++func installGateTestEvents(t *testing.T) *gateTestEvents {
++	t.Helper()
++	ev := &gateTestEvents{waiting: make(chan struct{}), barrierQueued: make(chan struct{}), opened: make(chan struct{})}
++	setGateTestVar(t, &startupGateWaitHook, func(event string) {
++		switch event {
++		case "wait":
++			closeOnce(&ev.waitOnce, ev.waiting)
++		case "cancelled":
++			ev.cancelled.Add(1)
++		}
++	})
++	setGateTestVar(t, &startupGateBarrierHook, func() { closeOnce(&ev.barrierOnce, ev.barrierQueued) })
++	setGateTestVar(t, &startupGateOpenHook, func(reason string) {
++		ev.openReason.Store(reason)
++		ev.routableAtOpen.Store(len(util.GetProviderName(gateTestAlias)) > 0)
++		closeOnce(&ev.openOnce, ev.opened)
++	})
++	return ev
++}
++
++func (ev *gateTestEvents) reason() string {
++	reason, _ := ev.openReason.Load().(string)
++	return reason
++}
++
++func waitClosed(t *testing.T, ch <-chan struct{}, what string) {
++	t.Helper()
++	select {
++	case <-ch:
++	case <-time.After(10 * time.Second):
++		t.Fatalf("timed out waiting for %s", what)
++	}
++}
++
++// TestRunFirstModelRequestDuringStartupIsServed races the first /v1/messages for a
++// file-auth alias against start-up, with channel-controlled registration: the file
++// auth's registration is held until the request is waiting at the gate and the
++// initial barrier is queued (or the gate opened, or the request was already
++// answered). When the gate opens, the alias must already be routable, and the first
++// response must be 200, never 400 model_not_found.
++//
++//   - present-at-start: the file exists before Run and the auth store loads it.
++//   - written-during-start: the file appears after the auth store loaded.
++func TestRunFirstModelRequestDuringStartupIsServed(t *testing.T) {
++	cases := []struct {
++		name           string
++		writeBeforeRun bool
++	}{
++		{name: "present-at-start", writeBeforeRun: true},
++		{name: "written-during-start", writeBeforeRun: false},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			authDir := t.TempDir()
++			opts := gateTestOptions{}
++			if tc.writeBeforeRun {
++				writeGateTestAuthFile(t, authDir)
++			} else {
++				opts.hooks.OnBeforeStart = func(*config.Config) { writeGateTestAuthFile(t, authDir) }
++			}
++			setGateTestVar(t, &initialAuthReadyWait, initialAuthReadyTimeout)
++			warnings := installGateTestWarnHook(t)
++			ev := installGateTestEvents(t)
++
++			var answeredOnce sync.Once
++			answered := make(chan struct{})
++			var holdGuardExpired atomic.Bool
++			setGateTestVar(t, &modelRegistrationTaskHook, func() {
++				guard := time.NewTimer(gateTestHoldGuard)
++				defer guard.Stop()
++				select {
++				case <-ev.waiting:
++				case <-answered:
++					return
++				case <-guard.C:
++					holdGuardExpired.Store(true)
++					return
++				}
++				select {
++				case <-ev.barrierQueued:
++				case <-ev.opened:
++				case <-answered:
++				case <-guard.C:
++					holdGuardExpired.Store(true)
++				}
++			})
++
++			h := newGateTestService(t, authDir, opts)
++			results := make(chan gateTestResponse, 1)
++			go func() {
++				got := firstResponse(gateTestHTTPClient(), h.messagesRequest, 20*time.Second, nil)
++				closeOnce(&answeredOnce, answered)
++				results <- got
++			}()
++			h.run(t)
++
++			got := <-results
++			if got.err != nil {
++				t.Fatal(got.err)
++			}
++			if holdGuardExpired.Load() {
++				t.Fatal("registration was held but the request never waited at the gate")
++			}
++			if strings.Contains(got.body, "model_not_found") || strings.Contains(got.body, "unknown provider") || got.status == http.StatusBadRequest {
++				t.Fatalf("first response during start-up = %d %s; want the file-auth alias served", got.status, got.body)
++			}
++			if got.status != http.StatusOK {
++				t.Fatalf("first response during start-up = %d %s; want 200 from the fake upstream", got.status, got.body)
++			}
++			waitClosed(t, ev.opened, "gate open")
++			if reason := ev.reason(); reason != startupGateBarrier {
++				t.Fatalf("gate opened by %q; want %q", reason, startupGateBarrier)
++			}
++			if !ev.routableAtOpen.Load() {
++				t.Fatal("gate opened before the file-auth alias was registered")
++			}
++			if h.rt.calls.Load() == 0 {
++				t.Fatal("request did not reach the in-process upstream round tripper")
++			}
++			if msgs := warnings.snapshot(); len(msgs) != 0 {
++				t.Fatalf("gate deadline warning unexpectedly: %v", msgs)
++			}
++		})
++	}
++}
++
++func waitForGateWarning(warnings *gateTestWarnHook) {
++	deadline := time.Now().Add(2 * time.Second)
++	for len(warnings.snapshot()) == 0 && time.Now().Before(deadline) {
++		time.Sleep(time.Millisecond)
++	}
++}
++
++func assertOneGateWarning(t *testing.T, warnings *gateTestWarnHook, authDir string) {
++	t.Helper()
++	msgs := warnings.snapshot()
++	if len(msgs) != 1 {
++		t.Fatalf("gate deadline warnings = %d (%v); want exactly 1", len(msgs), msgs)
++	}
++	for _, leak := range []string{gateTestAuthFile, "l8b-synthetic-access", "l8b-startup@example.invalid", authDir} {
++		if strings.Contains(msgs[0], leak) {
++			t.Fatalf("gate warning leaks %q: %s", leak, msgs[0])
++		}
++	}
++}
++
++// TestRunGateOpensAtDeadlineWhenConsumerStalls keeps the auth update consumer stuck
++// (as a broken or hanging auth would): the barrier is never released, the gate opens
++// at the deadline, model requests are served, and the warning appears exactly once.
++func TestRunGateOpensAtDeadlineWhenConsumerStalls(t *testing.T) {
++	authDir := t.TempDir()
++	writeGateTestAuthFile(t, authDir)
++	const bound = 400 * time.Millisecond
++	setGateTestVar(t, &initialAuthReadyWait, bound)
++	warnings := installGateTestWarnHook(t)
++	ev := installGateTestEvents(t)
++
++	h := newGateTestService(t, authDir, gateTestOptions{})
++	// handleAuthUpdates takes authUpdateMu first; only the queued-update consumer uses
++	// it, so holding it stalls exactly the initial batch.
++	h.service.authUpdateMu.Lock()
++	var releaseOnce sync.Once
++	unblock := func() { releaseOnce.Do(h.service.authUpdateMu.Unlock) }
++	h.run(t)
++	t.Cleanup(unblock) // LIFO: before h.run's stop
++	waitClosed(t, ev.barrierQueued, "the initial barrier")
++
++	got := mustFirstResponse(t, func() *http.Request {
++		return h.request(context.Background(), http.MethodGet, "/v1/models", nil)
++	})
++	if got.status != http.StatusOK {
++		t.Fatalf("GET /v1/models after gate deadline = %d %s", got.status, got.body)
++	}
++	if elapsed := got.at.Sub(h.started); elapsed < bound {
++		t.Fatalf("model request answered after %s, before the %s deadline", elapsed, bound)
++	}
++	waitClosed(t, ev.opened, "gate open")
++	if reason := ev.reason(); reason != startupGateDeadline {
++		t.Fatalf("gate opened by %q; want %q", reason, startupGateDeadline)
++	}
++	waitForGateWarning(warnings)
++	assertOneGateWarning(t, warnings, authDir)
++
++	unblock()
++	time.Sleep(200 * time.Millisecond)
++	if again := warnings.snapshot(); len(again) != 1 {
++		t.Fatalf("gate deadline warnings after release = %d; want exactly 1", len(again))
++	}
++}
++
++// TestRunGateOpensAtDeadlineWhenStartStalls adapts the round-2 review scenarios. With
++// the plugin host present, the watcher's initial reload registers the file auth inside
++// watcher.Start; that registration is blocked, and a config reload is requested while
++// Start is stalled (it waits on the watcher's config lock, as upstream). The gate must
++// still open at the deadline with one warning, and while the initial reload's
++// registration is stalled no other registration may start: the consumer gets the
++// initial batch only after Start dispatched it, exactly as upstream (no new
++// registration/consumer overlap). Teardown then releases one registration path at a
++// time, so the upstream races described at the top cannot fire.
++func TestRunGateOpensAtDeadlineWhenStartStalls(t *testing.T) {
++	authDir := t.TempDir()
++	writeGateTestAuthFile(t, authDir)
++	const bound = 400 * time.Millisecond
++	setGateTestVar(t, &initialAuthReadyWait, bound)
++	warnings := installGateTestWarnHook(t)
++	ev := installGateTestEvents(t)
++	release := make(chan struct{})
++	var releaseOnce, firstOnce sync.Once
++	firstCall := make(chan struct{})
++	var registrations atomic.Int64
++	unblock := func() { closeOnce(&releaseOnce, release) }
++	setGateTestVar(t, &modelRegistrationTaskHook, func() {
++		registrations.Add(1)
++		closeOnce(&firstOnce, firstCall)
++		<-release
++	})
++
++	h := newGateTestService(t, authDir, gateTestOptions{withPluginHost: true})
++	h.run(t)
++	reloadDone := make(chan struct{})
++	t.Cleanup(func() { unblock(); <-reloadDone }) // before h.run's stop (LIFO)
++
++	waitClosed(t, firstCall, "the initial reload's registration")
++	watcherWrapper := <-h.watcher
++	go func() {
++		defer close(reloadDone)
++		watcherWrapper.ReloadConfigIfChanged() // blocks until watcher.Start finished
++	}()
++
++	got := mustFirstResponse(t, func() *http.Request {
++		return h.request(context.Background(), http.MethodGet, "/v1/models", nil)
++	})
++	if got.status != http.StatusOK {
++		t.Fatalf("GET /v1/models after gate deadline = %d %s", got.status, got.body)
++	}
++	if elapsed := got.at.Sub(h.started); elapsed < bound {
++		t.Fatalf("model request answered after %s, before the %s deadline", elapsed, bound)
++	}
++	waitClosed(t, ev.opened, "gate open")
++	if reason := ev.reason(); reason != startupGateDeadline {
++		t.Fatalf("gate opened by %q; want %q", reason, startupGateDeadline)
++	}
++	waitForGateWarning(warnings)
++	assertOneGateWarning(t, warnings, authDir)
++	select {
++	case <-reloadDone:
++		t.Fatal("config reload finished while watcher.Start was stalled")
++	default:
++	}
++	if n := registrations.Load(); n != 1 {
++		t.Fatalf("%d registrations started while the initial reload's was stalled; want 1 (no consumer overlap)", n)
++	}
++
++	// Teardown, one registration path at a time: park the consumer, cancel Run (its
++	// post-start plugin sync then registers nothing), release the stalled
++	// registration, let the reload finish, and only then let the consumer go.
++	h.service.authUpdateMu.Lock()
++	h.cancel()
++	unblock()
++	waitClosed(t, reloadDone, "the config reload")
++	h.service.authUpdateMu.Unlock()
++	h.stop(t)
++	if again := warnings.snapshot(); len(again) != 1 {
++		t.Fatalf("gate deadline warnings after release = %d; want exactly 1", len(again))
++	}
++}
++
++// TestRunWithoutAuthFilesDoesNotWait: with an empty auth dir the barrier is released at
++// once, far inside a long bound, and nothing is logged.
++func TestRunWithoutAuthFilesDoesNotWait(t *testing.T) {
++	authDir := t.TempDir()
++	setGateTestVar(t, &initialAuthReadyWait, time.Minute)
++	warnings := installGateTestWarnHook(t)
++	ev := installGateTestEvents(t)
++
++	h := newGateTestService(t, authDir, gateTestOptions{})
++	h.run(t)
++	got := mustFirstResponse(t, func() *http.Request {
++		return h.request(context.Background(), http.MethodGet, "/v1/models", nil)
++	})
++	if got.status != http.StatusOK {
++		t.Fatalf("GET /v1/models = %d %s", got.status, got.body)
++	}
++	if elapsed := got.at.Sub(h.started); elapsed > 5*time.Second {
++		t.Fatalf("start-up without auth files held model requests for %s", elapsed)
++	}
++	waitClosed(t, ev.opened, "gate open")
++	if reason := ev.reason(); reason != startupGateBarrier {
++		t.Fatalf("gate opened by %q; want %q", reason, startupGateBarrier)
++	}
++	if msgs := warnings.snapshot(); len(msgs) != 0 {
++		t.Fatalf("unexpected gate warning: %v", msgs)
++	}
++}
++
++// TestRunWithoutBarrierCapableWatcherDoesNotWait: a watcher that cannot queue a barrier
++// (custom factory) opens the gate as soon as it started.
++func TestRunWithoutBarrierCapableWatcherDoesNotWait(t *testing.T) {
++	authDir := t.TempDir()
++	writeGateTestAuthFile(t, authDir)
++	setGateTestVar(t, &initialAuthReadyWait, time.Minute)
++	warnings := installGateTestWarnHook(t)
++	ev := installGateTestEvents(t)
++
++	h := newGateTestService(t, authDir, gateTestOptions{
++		watcherFactory: func(string, string, func(*config.Config)) (*WatcherWrapper, error) {
++			return &WatcherWrapper{}, nil
++		},
++	})
++	h.run(t)
++	waitClosed(t, ev.opened, "gate open")
++	if reason := ev.reason(); reason != startupGateNotApplicable {
++		t.Fatalf("gate opened by %q; want %q", reason, startupGateNotApplicable)
++	}
++	if elapsed := time.Since(h.started); elapsed > 5*time.Second {
++		t.Fatalf("gate took %s to open without a barrier-capable watcher", elapsed)
++	}
++	if msgs := warnings.snapshot(); len(msgs) != 0 {
++		t.Fatalf("unexpected gate warning: %v", msgs)
++	}
++}
++
++// TestRunGateHoldsOnlyModelRoutes: while the gate is closed, /healthz and management
++// routes answer at once, a model request waits, and a model request cancelled while
++// waiting returns without reaching its handler.
++func TestRunGateHoldsOnlyModelRoutes(t *testing.T) {
++	authDir := t.TempDir()
++	writeGateTestAuthFile(t, authDir)
++	setGateTestVar(t, &initialAuthReadyWait, time.Minute)
++	ev := installGateTestEvents(t)
++
++	h := newGateTestService(t, authDir, gateTestOptions{})
++	h.service.authUpdateMu.Lock() // keep the barrier (and so the gate) closed
++	var releaseOnce sync.Once
++	unblock := func() { releaseOnce.Do(h.service.authUpdateMu.Unlock) }
++	h.run(t)
++	t.Cleanup(unblock)
++	waitClosed(t, ev.barrierQueued, "the initial barrier")
++
++	health := mustFirstResponse(t, func() *http.Request {
++		req, _ := http.NewRequest(http.MethodGet, h.url("/healthz"), nil)
++		return req
++	})
++	if health.status != http.StatusOK {
++		t.Fatalf("GET /healthz with the gate closed = %d %s", health.status, health.body)
++	}
++	client := gateTestHTTPClient()
++	mgmtReq, _ := http.NewRequest(http.MethodGet, h.url("/v0/management/config"), nil)
++	mgmtStart := time.Now()
++	mgmtResp, errMgmt := client.Do(mgmtReq)
++	if errMgmt != nil {
++		t.Fatalf("management request with the gate closed: %v", errMgmt)
++	}
++	_ = mgmtResp.Body.Close()
++	if elapsed := time.Since(mgmtStart); elapsed > 5*time.Second {
++		t.Fatalf("management request waited %s at the gate", elapsed)
++	}
++	select {
++	case <-ev.opened:
++		t.Fatal("gate opened while the initial batch was stalled")
++	default:
++	}
++
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	requestDone := make(chan error, 1)
++	go func() {
++		resp, errDo := client.Do(h.request(ctx, http.MethodGet, "/v1/models", nil))
++		if resp != nil {
++			_ = resp.Body.Close()
++		}
++		requestDone <- errDo
++	}()
++	waitClosed(t, ev.waiting, "the model request to wait at the gate")
++	cancel()
++	if errDo := <-requestDone; errDo == nil {
++		t.Fatal("cancelled model request returned a response while the gate was closed")
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	for ev.cancelled.Load() == 0 && time.Now().Before(deadline) {
++		time.Sleep(5 * time.Millisecond)
++	}
++	if ev.cancelled.Load() != 1 {
++		t.Fatalf("gate saw %d cancelled waits; want 1", ev.cancelled.Load())
++	}
++	select {
++	case <-ev.opened:
++		t.Fatal("gate opened by the cancelled request")
++	default:
++	}
++}
++
++func TestStartupGatedRoutes(t *testing.T) {
++	for path, want := range map[string]bool{
++		"/v1/messages":               true,
++		"/v1/chat/completions":       true,
++		"/v1/models":                 true,
++		"/v1":                        true,
++		"/v1beta/models":             true,
++		"/openai/v1/responses":       true,
++		"/backend-api/codex/resp":    true,
++		"/v1/ws":                     false,
++		"/healthz":                   false,
++		"/v0/management/config":      false,
++		"/management.html":           false,
++		"/":                          false,
++		"/v1x/other":                 false,
++		"/anthropic/callback":        false,
++		"/keep-alive":                false,
++		"/backend-api/codexless/foo": false,
++	} {
++		if got := startupGated(http.MethodPost, path, "/v1/ws"); got != want {
++			t.Errorf("startupGated(%q) = %t; want %t", path, got, want)
++		}
++	}
++	if startupGated(http.MethodOptions, "/v1/messages", "/v1/ws") {
++		t.Error("preflight requests must not wait at the gate")
++	}
++}
++
++// blockingGateTestStore blocks List (which auth.Manager.Load calls with the manager
++// lock held) until released.
++type blockingGateTestStore struct {
++	entered chan struct{}
++	release chan struct{}
++	once    sync.Once
++}
++
++func (s *blockingGateTestStore) List(context.Context) ([]*coreauth.Auth, error) {
++	s.once.Do(func() { close(s.entered) })
++	<-s.release
++	return nil, nil
++}
++
++func (s *blockingGateTestStore) Save(context.Context, *coreauth.Auth) (string, error) {
++	return "", nil
++}
++
++func (s *blockingGateTestStore) Delete(context.Context, string) error { return nil }
++
++// TestStartupGateDeadlineIgnoresManagerLock: while a store operation holds the auth
++// manager's lock, the deadline still opens the gate, the warning is logged, and a
++// second open returns at once. The gate never takes the manager lock.
++func TestStartupGateDeadlineIgnoresManagerLock(t *testing.T) {
++	store := &blockingGateTestStore{entered: make(chan struct{}), release: make(chan struct{})}
++	manager := coreauth.NewManager(store, nil, nil)
++	loadDone := make(chan struct{})
++	listDone := make(chan struct{})
++	var releaseOnce sync.Once
++	t.Cleanup(func() {
++		closeOnce(&releaseOnce, store.release)
++		<-loadDone
++		<-listDone
++	})
++	go func() {
++		defer close(loadDone)
++		_ = manager.Load(context.Background())
++	}()
++	waitClosed(t, store.entered, "the store to block inside Manager.Load")
++	go func() {
++		defer close(listDone)
++		_ = manager.List()
++	}()
++	select {
++	case <-listDone:
++		t.Fatal("Manager.List returned while Load held the manager lock; the probe is not holding it")
++	case <-time.After(100 * time.Millisecond):
++	}
++
++	const bound = 50 * time.Millisecond
++	setGateTestVar(t, &initialAuthReadyWait, bound)
++	warnings := installGateTestWarnHook(t)
++	s := &Service{coreManager: manager}
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	armed := time.Now()
++	gate := s.armStartupGate(ctx)
++	waitClosed(t, gate.opened, "the gate to open at the deadline")
++	deadline := time.Now().Add(2 * time.Second)
++	for len(warnings.snapshot()) == 0 && time.Now().Before(deadline) {
++		time.Sleep(time.Millisecond)
++	}
++	if msgs := warnings.snapshot(); len(msgs) != 1 {
++		t.Fatalf("deadline warnings = %d (%v) within %s of arming; want exactly 1", len(msgs), msgs, time.Since(armed))
++	}
++	secondOpen := make(chan struct{})
++	go func() {
++		defer close(secondOpen)
++		gate.open(startupGateCancelled)
++	}()
++	select {
++	case <-secondOpen:
++	case <-time.After(2 * time.Second):
++		t.Fatal("a second open blocked while the manager lock was held")
++	}
++	if msgs := warnings.snapshot(); len(msgs) != 1 {
++		t.Fatalf("deadline warnings after a second open = %d; want exactly 1", len(msgs))
++	}
++}
+diff --git a/sdk/cliproxy/types.go b/sdk/cliproxy/types.go
+index 917b7f8..5c24927 100644
+--- a/sdk/cliproxy/types.go
++++ b/sdk/cliproxy/types.go
+@@ -112,6 +112,7 @@ type WatcherWrapper struct {
+ 	dispatchPersistedAuthWithRev func(update *watcher.AuthUpdate) (bool, uint64)
+ 	setPluginAuthParser          func(parser PluginAuthParser)
+ 	reloadConfigIfChanged        func()
++	dispatchAuthBarrier          func() <-chan struct{}
+ }
+ 
+ // Start proxies to the underlying watcher Start implementation.
+@@ -196,6 +197,15 @@ func (w *WatcherWrapper) DispatchPersistedAuthUpdateWithRevision(update *watcher
+ 	return false, 0
+ }
+ 
++// DispatchAuthBarrier queues a completion marker behind the auth updates queued so far
++// and returns a channel closed once they were applied. Returns nil when unsupported.
++func (w *WatcherWrapper) DispatchAuthBarrier() <-chan struct{} {
++	if w == nil || w.dispatchAuthBarrier == nil {
++		return nil
++	}
++	return w.dispatchAuthBarrier()
++}
++
+ // SetClients updates the watcher file-backed clients registry.
+ // SetClients and SetAPIKeyClients removed; watcher manages its own caches
+ 
+diff --git a/sdk/cliproxy/watcher.go b/sdk/cliproxy/watcher.go
+index b75d116..b505ae7 100644
+--- a/sdk/cliproxy/watcher.go
++++ b/sdk/cliproxy/watcher.go
+@@ -43,5 +43,8 @@ func defaultWatcherFactory(configPath, authDir string, reload func(*config.Confi
+ 		reloadConfigIfChanged: func() {
+ 			w.ReloadConfigIfChanged()
+ 		},
++		dispatchAuthBarrier: func() <-chan struct{} {
++			return w.DispatchAuthBarrier()
++		},
+ 	}, nil
+ }

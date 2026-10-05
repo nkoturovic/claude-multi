@@ -1,0 +1,24 @@
+
+  change lineup — "api design" (unknown)
+  ─────────────────────────────────────────────────────────────────────────────
+  from  balanced (gen 1)
+  to    [balanced ▾]   per-agent edit ▸   direct (no agents)   keep current
+  plan  Preview: Keep the current lineup — discard the pending change
+        follow: on (profile balanced) → off
+        pending change (native agents: explore replace → native): dropped
+        Effect: the record only — the applied lineup, the scope and the genera…
+        Preview only; nothing changed.
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Enter apply · Tab target · ← → choose · Space pick · ? help · Esc cancel

@@ -1,0 +1,24 @@
+
+  Confirm explicit action
+  ─────────────────────────────────────────────────────────────────────────────
+  admit custom-fixture-reviewer:
+    ✓ declaration valid (providers.d/openrouter.json)
+    ✓ provider openrouter enabled; route catalog
+    ✓ credential OPENROUTER_CLAUDE_API_KEY present (value not read)
+    ✓ served: every alias of custom-fixture-reviewer; render current (sentinel
+  claude-multi-render-05100000)
+
+  claude-multi will make ONE request to a provider:
+    gateway alias: custom-fixture-reviewer-high
+    upstream origin: https://openrouter.ai
+    auth: header from OPENROUTER_CLAUDE_API_KEY (value not shown)
+    why: admission smoke for custom-fixture-reviewer
+    approximately 40 input tokens; 120 s wall-clock cap; 256 KiB response cap
+  Proceed? [y/N]
+
+
+
+
+
+
+  y proceed · N cancel · Esc cancel

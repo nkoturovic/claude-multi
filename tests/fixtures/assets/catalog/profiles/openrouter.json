@@ -1,0 +1,54 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "high",
+      "model": "or-gpt"
+    },
+    "cm-analyst-strong": {
+      "effort": "xhigh",
+      "model": "or-gpt"
+    },
+    "cm-explorer": {
+      "effort": "high",
+      "model": "or-deepseek"
+    },
+    "cm-implementer": {
+      "effort": "high",
+      "model": "or-gpt"
+    },
+    "cm-implementer-light": {
+      "effort": "high",
+      "model": "or-deepseek"
+    },
+    "cm-implementer-strong": {
+      "effort": "xhigh",
+      "model": "or-opus"
+    },
+    "cm-reviewer": {
+      "effort": "high",
+      "model": "or-gemini"
+    },
+    "cm-reviewer-strong": {
+      "effort": "xhigh",
+      "model": "or-grok"
+    }
+  },
+  "description": "Fixture seed openrouter: frozen test data mirroring the shipped seed's slot families.",
+  "lead": {
+    "effort": "ultracode",
+    "model": "or-opus"
+  },
+  "name": "openrouter",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "primary_provider": "openrouter",
+  "seed": {
+    "id": "openrouter",
+    "version": 1
+  },
+  "version": 2,
+  "workflows": "native"
+}

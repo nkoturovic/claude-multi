@@ -1,0 +1,67 @@
+{
+  "pools": {
+    "claude": {
+      "acknowledgement": {
+        "id": "claude-account-personal-use/1",
+        "text": "Sign in with your Claude account (Pro or Max) for your own, personal use.\n\nclaude-multi is an independent tool, not affiliated with Anthropic. Anthropic's terms say third\nparties may not \"offer Claude.ai login into their own applications\", \"route requests through\nFree, Pro, or Max plan credentials on behalf of their users\", or \"collect, store, or\nintermediate Claude.ai credentials or session tokens\". Signing in here stores your own\naccount's tokens on this computer for your own sessions only. An Anthropic API key is the\nsupported alternative.\n\nThis sign-in is separate from your Claude Code login, which stays untouched.\nType personal to confirm this is your own account, for your own use."
+      },
+      "client_account": true,
+      "display": "Claude account",
+      "provider": "anthropic",
+      "record_prefix": "claude",
+      "registry": {
+        "section": "claude",
+        "sections": [
+          "claude"
+        ]
+      },
+      "sign_in": {
+        "command": "claude-login",
+        "flow": "browser",
+        "host": "claude.ai",
+        "policies": [
+          "public"
+        ]
+      }
+    },
+    "codex": {
+      "acknowledgement": {
+        "id": "chatgpt-account-personal-use/1",
+        "text": "Sign in with your ChatGPT account for your own, personal use.\n\nclaude-multi is an independent tool, not affiliated with OpenAI. This sign-in stores your own\naccount's tokens on this computer for your own sessions only; your plan's limits apply. OpenAI\nhas not published terms for this use.\n\nThis sign-in is separate from any other ChatGPT or Codex login on this computer, which stays\nuntouched.\nType personal to confirm this is your own account, for your own use."
+      },
+      "display": "ChatGPT account",
+      "provider": "openai",
+      "record_prefix": "codex",
+      "registry": {
+        "section": "codex-pro",
+        "sections": [
+          "codex-free",
+          "codex-team",
+          "codex-plus",
+          "codex-pro"
+        ]
+      },
+      "sign_in": {
+        "command": "codex-device-login",
+        "flow": "device",
+        "host": "auth.openai.com",
+        "policies": [
+          "public",
+          "public-strict"
+        ]
+      }
+    }
+  },
+  "record_prefixes": [
+    "antigravity",
+    "claude",
+    "codex",
+    "devin",
+    "kimi",
+    "kimi-ai",
+    "meta",
+    "vertex",
+    "xai"
+  ],
+  "version": 1
+}

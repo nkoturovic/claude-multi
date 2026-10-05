@@ -1,0 +1,710 @@
+{
+  "format": 1,
+  "upstream": {
+    "name": "CLIProxyAPI",
+    "repository": "https://github.com/router-for-me/CLIProxyAPI",
+    "tag": "v7.3.15",
+    "version": "7.3.15",
+    "commit": "673131f57484517c3a1eae7e36c4cfa7b9bb4efc",
+    "license": "MIT",
+    "module": "github.com/router-for-me/CLIProxyAPI/v7",
+    "main_package": "./cmd/server",
+    "binary": "cli-proxy-api"
+  },
+  "source": {
+    "archive_url": "https://github.com/router-for-me/CLIProxyAPI/archive/673131f57484517c3a1eae7e36c4cfa7b9bb4efc.tar.gz",
+    "archive_file": "CLIProxyAPI-673131f57484517c3a1eae7e36c4cfa7b9bb4efc.tar.gz",
+    "archive_sha256": "66c1727f5447d5dd7eeec5a7b25e6e81c40a6516ff4778d423e2688e1161e71b",
+    "tree_sha256": "8e16856693412a7d1ebc0e7fec2c659f13bc90f740f9e1f641804aa597120b3c",
+    "nix_hash": "sha256-s6Vdpcl7Hr85azsZ2DpkEQyod9eE9UQizKiYAJtguwY="
+  },
+  "vendor": {
+    "tree_sha256": "1b8ef48ef1676d97d6f5db5debabc04663b1beafb01dc2c687eb05163987f096",
+    "nix_hash": "sha256-r3yWkdMcM40G9jV7MxW/qNv3E9WrHavFilW24quEf+8="
+  },
+  "toolchain": {
+    "version": "1.26.8",
+    "source": "https://go.dev/dl/?mode=json&include=all",
+    "url_prefix": "https://go.dev/dl/",
+    "archives": {
+      "linux-amd64": {
+        "file": "go1.26.8.linux-amd64.tar.gz",
+        "sha256": "d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b"
+      },
+      "linux-arm64": {
+        "file": "go1.26.8.linux-arm64.tar.gz",
+        "sha256": "211ffced9dcb9633a55eac6364816ec0ddd951389a740e88fa8b3337971bdda0"
+      },
+      "darwin-arm64": {
+        "file": "go1.26.8.darwin-arm64.tar.gz",
+        "sha256": "a012b25b571bd0138a03dcd25375ceba866fe5ca822f426d2c66a4de56fd3f4b"
+      },
+      "darwin-amd64": {
+        "file": "go1.26.8.darwin-amd64.tar.gz",
+        "sha256": "186be014105aa6542b767d2c6ed5cca10a0214bdff809ef1724022a8c7894150"
+      }
+    }
+  },
+  "series": [
+    {
+      "basename": "cli-proxy-api-loopback-oauth.patch",
+      "sha256": "2eb510b85f5204820d7a3d70c9b9a7bce283b1a7f23ead305ddfe28d500163a5",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-kimi-claude-compat.patch",
+      "sha256": "d8b4be92c5fd496980c4ad02e3e973cabb5570dc19f416b6336a608a044d2d44",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-non-claude-cache-retention.patch",
+      "sha256": "6e022c54355322e5a307156ec1301710d50faff3f75dfc058506b17c6145128b",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-management-readonly-allowlist.patch",
+      "sha256": "c51d077d12280eee9419e7f928293c43a82b6839e279539ff9195a5fd885b59c",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-watcher-parentdir.patch",
+      "sha256": "a31e05f009b66c6b74a4d6767073553f05edad8de362542899773955672c7b5c",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-serve-after-initial-auth-load.patch",
+      "sha256": "600f4c5bc0cf90dbd11ad5a48b84c007050a948efcc754b30648856f4e8bba70",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-management-env-only.patch",
+      "sha256": "09e56ff25352761b2f7c3b208876e09c108daf259def78e47a260d9e9cf564cd",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-credential-save-report.patch",
+      "sha256": "c04cc0fc0af41dca57a801e87ee8cf4e4aba8377c716a8ca2ff1621d0f8d5107",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-credentialed-redirects.patch",
+      "sha256": "211c8157076a8a5e640796aae913853ba7719a5d9222349e58b98fe8102a40b1",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-openai-compat-keyed-safety.patch",
+      "sha256": "70878f4df3027f322aa2be2298b6f9472d9815ab3d3411578e9bcdf1cabf9f20",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-auth-snapshot-locking.patch",
+      "sha256": "a6ecd426d45d91d74ef4c830982c1b0ad3b6f7dfcad3c0f1ff6123fbfe29dbfd",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-server-config-snapshot.patch",
+      "sha256": "aa5106979d08018c80e0c3fabd7784f7b44c49bac5350ff5a760bac2e7279c0d",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-plugin-host-locking.patch",
+      "sha256": "d7ec5447735613fa64ce21269ebbd578ea70561d091120de8fc26379de756567",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-claude-metadata-locking.patch",
+      "sha256": "35b69fdcfac2223f76a71956c82f772e3608af20dea68dd1ff393443d707e4e0",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-oauth-model-overlay.patch",
+      "sha256": "ee11e0e82bbe81b4953b02d0c7e881e84a5d0d78425420e5cca1d76cb4228a2f",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-no-antigravity-egress.patch",
+      "sha256": "233443d22a411ee935b4c0776c26992543a5b97d1241784db5bf726ca80464c6",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-codex-client-identity.patch",
+      "sha256": "b4ffbda891ee82dbd0441dfa6a6b1d154fd82be33dc4c5e2edb2526eeb041c65",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-antigravity-loopback-callback.patch",
+      "sha256": "f728ba3eb999266d30137cd7d4501d54cdb9613c2cc33579194a6d7b9a23a523",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-codex-api-key-safety.patch",
+      "sha256": "b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628",
+      "admitted": true
+    }
+  ],
+  "candidates": [
+    {
+      "basename": "cli-proxy-api-retry-after.patch",
+      "sha256": "2b6902d26e2ac18e472a705747ef1cdabd5b8367f433b42989a58699dd402dea",
+      "admitted": false
+    }
+  ],
+  "build": {
+    "env": {
+      "CGO_ENABLED": "0"
+    },
+    "flags": [
+      "-trimpath",
+      "-buildvcs=false",
+      "-mod=vendor"
+    ],
+    "ldflags": [
+      "-s",
+      "-w",
+      "-buildid=",
+      "-X",
+      "main.Version=7.3.15",
+      "-X",
+      "main.Commit=673131f57484517c3a1eae7e36c4cfa7b9bb4efc",
+      "-X",
+      "main.BuildDate=1970-01-01T00:00:00Z"
+    ]
+  },
+  "targets": [
+    {
+      "name": "linux-amd64",
+      "goos": "linux",
+      "goarch": "amd64",
+      "shipped": true
+    },
+    {
+      "name": "linux-arm64",
+      "goos": "linux",
+      "goarch": "arm64",
+      "shipped": true
+    },
+    {
+      "name": "darwin-arm64",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "shipped": true
+    },
+    {
+      "name": "darwin-amd64",
+      "goos": "darwin",
+      "goarch": "amd64",
+      "shipped": true
+    },
+    {
+      "name": "windows-amd64",
+      "goos": "windows",
+      "goarch": "amd64",
+      "shipped": false
+    }
+  ],
+  "gates": [
+    {
+      "name": "executor",
+      "packages": [
+        "./internal/runtime/executor"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": []
+    },
+    {
+      "name": "kimi-compat-config",
+      "packages": [
+        "./internal/config",
+        "./internal/watcher/synthesizer"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": []
+    },
+    {
+      "name": "kimi-compat-sdk",
+      "packages": [
+        "./sdk/cliproxy"
+      ],
+      "run": "TestApplyOAuthModelAlias|TestBuildClaudeConfigModels|TestBuildConfigModels",
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestApplyOAuthModelAlias_CodexSolPreservesTokenLimits",
+        "TestApplyOAuthModelAlias_ForkAddsAlias",
+        "TestApplyOAuthModelAlias_ForkAddsMultipleAliases",
+        "TestApplyOAuthModelAlias_Meta",
+        "TestApplyOAuthModelAlias_PerAuthAlias",
+        "TestApplyOAuthModelAlias_PluginProvider",
+        "TestApplyOAuthModelAlias_PluginProviderSkipsAPIKey",
+        "TestApplyOAuthModelAlias_PreservesMetadataModelID",
+        "TestApplyOAuthModelAlias_PreservesUpstreamDisplayNameByDefault",
+        "TestApplyOAuthModelAlias_Rename",
+        "TestBuildClaudeConfigModelsAdvertisesCompatOwnerAndLimits",
+        "TestBuildConfigModelsDisplayName",
+        "TestBuildConfigModelsDisplayNameFallback",
+        "TestBuildConfigModelsPropagatesMaxContextLength"
+      ]
+    },
+    {
+      "name": "management-allowlist",
+      "packages": [
+        "./internal/api/..."
+      ],
+      "skip": "^(TestRedisProtocol_SUBSCRIBE_UsageSendsSupportRefresh|TestRedisProtocol_SUBSCRIBE_ErrorsReceivesErrorEvents|TestRedisProtocol_AUTH_And_PopContracts|TestOAuthCallbackRouteSkipsManagementKeyMiddleware|TestManagementUsageRequiresManagementAuthAndPopsArray|TestManagementPluginsRouteRegistered|TestManagementResponseExposesPluginSupportHeaderForCORS)$",
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestManagementAllowlist_EveryRegisteredRouteRefusedUnlessAllowlisted",
+        "TestManagementAllowlist_KeyMiddlewareRunsOnlyOnAllowlistedRoutes",
+        "TestManagementAllowlist_UnregisteredManagementPathsNeverReachKeyMiddleware",
+        "TestManagementAllowlist_ManagementKeyConsumersAudited",
+        "TestManagementAllowlist_AllowlistedRouteWithoutKeyIs401",
+        "TestManagementAllowlist_FiveBadKeysOnAllowlistedRouteBan",
+        "TestManagementAllowlist_BypassVariantsRefused",
+        "TestManagementAllowlist_BadKeysOnRefusedRoutesNeverCount",
+        "TestManagementAllowlist_BrowserOriginatedRequestsRefusedAndNeverCount",
+        "TestManagementAllowlist_NonLoopbackHostRefusedAndNeverCounts",
+        "TestManagementAllowlist_RemoteOverrideForcedOff",
+        "TestManagementAllowlist_OAuthCallbackWithPendingSessionWritesNothing",
+        "TestManagementAllowlist_RESPSurfaceClosedWithoutKeyCheck"
+      ]
+    },
+    {
+      "name": "config-watcher",
+      "packages": [
+        "./internal/watcher/..."
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": []
+    },
+    {
+      "name": "startup-gate",
+      "packages": [
+        "./sdk/cliproxy"
+      ],
+      "run": "TestRunFirstModelRequestDuringStartupIsServed|TestRunGateOpensAtDeadline|TestRunWithoutAuthFilesDoesNotWait|TestRunWithoutBarrierCapableWatcherDoesNotWait|TestRunGateHoldsOnlyModelRoutes|TestStartupGatedRoutes|TestStartupGateDeadlineIgnoresManagerLock",
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestRunFirstModelRequestDuringStartupIsServed",
+        "TestRunGateHoldsOnlyModelRoutes",
+        "TestRunGateOpensAtDeadlineWhenConsumerStalls",
+        "TestRunGateOpensAtDeadlineWhenStartStalls",
+        "TestRunWithoutAuthFilesDoesNotWait",
+        "TestRunWithoutBarrierCapableWatcherDoesNotWait",
+        "TestStartupGateDeadlineIgnoresManagerLock",
+        "TestStartupGatedRoutes"
+      ]
+    },
+    {
+      "name": "management-env-only",
+      "packages": [
+        "./internal/config",
+        "./internal/api"
+      ],
+      "run": "^(TestManagementEnvOnly_LoadConfigDropsSecretKeyWithoutWriteBack|TestManagementEnvOnly_ReloadAndPayloadLoadsDropSecretKey|TestManagementEnvOnly_InitialConfigSecretDoesNotEnableManagement|TestManagementEnvOnly_ServerIgnoresConfigSecretAtStart|TestManagementEnvOnly_HotReloadedConfigSecretDoesNotEnableManagement|TestManagementEnvOnly_ReloadIgnoresConfigSecret|TestManagementEnvOnly_EnvSecretIsTheOnlyKey|TestManagementEnvOnly_AuthenticateManagementKeyIgnoresConfigSecret|TestManagementEnvOnly_EnvOnlyManagementUnchanged|TestManagementEnvOnly_LocalPasswordNeverAuthenticates|TestManagementEnvOnly_AuthenticateManagementKeyIgnoresLocalPassword|TestManagementEnvOnly_LocalPasswordStillGuardsKeepAlive)$",
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestManagementEnvOnly_LoadConfigDropsSecretKeyWithoutWriteBack",
+        "TestManagementEnvOnly_ReloadAndPayloadLoadsDropSecretKey",
+        "TestManagementEnvOnly_InitialConfigSecretDoesNotEnableManagement",
+        "TestManagementEnvOnly_ServerIgnoresConfigSecretAtStart",
+        "TestManagementEnvOnly_HotReloadedConfigSecretDoesNotEnableManagement",
+        "TestManagementEnvOnly_ReloadIgnoresConfigSecret",
+        "TestManagementEnvOnly_EnvSecretIsTheOnlyKey",
+        "TestManagementEnvOnly_AuthenticateManagementKeyIgnoresConfigSecret",
+        "TestManagementEnvOnly_EnvOnlyManagementUnchanged",
+        "TestManagementEnvOnly_LocalPasswordNeverAuthenticates",
+        "TestManagementEnvOnly_AuthenticateManagementKeyIgnoresLocalPassword",
+        "TestManagementEnvOnly_LocalPasswordStillGuardsKeepAlive"
+      ]
+    },
+    {
+      "name": "credential-store",
+      "packages": [
+        "./sdk/auth",
+        "./sdk/cliproxy/auth"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": []
+    },
+    {
+      "name": "redirect-metadata",
+      "packages": [
+        "./internal/auth/claude",
+        "./internal/auth/codex",
+        "./internal/runtime/executor/helps"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": []
+    },
+    {
+      "name": "race-sdk-cliproxy-auth",
+      "packages": [
+        "./sdk/cliproxy/auth"
+      ],
+      "run": "^(TestCM053CredentialSaveGenerationOrdering|TestCM053CredentialSaveFailedOncePerTransition|TestCM053CredentialSaveSupersededCompletionIsNoReceipt|TestCM053KeyedCompatConductorClassificationPreserved|TestCM053KeyedCompatAuthIdentityRedacted|TestCM053UpdateSchedulerSnapshotConcurrentReconcile|TestCM053RegisterSchedulerSnapshotConcurrentReconcile|TestCM053AuthSchedulerSnapshotOwnership)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053CredentialSaveGenerationOrdering",
+        "TestCM053CredentialSaveFailedOncePerTransition",
+        "TestCM053CredentialSaveSupersededCompletionIsNoReceipt",
+        "TestCM053KeyedCompatConductorClassificationPreserved",
+        "TestCM053KeyedCompatAuthIdentityRedacted",
+        "TestCM053UpdateSchedulerSnapshotConcurrentReconcile",
+        "TestCM053RegisterSchedulerSnapshotConcurrentReconcile",
+        "TestCM053AuthSchedulerSnapshotOwnership"
+      ]
+    },
+    {
+      "name": "race-sdk-auth",
+      "packages": [
+        "./sdk/auth"
+      ],
+      "run": "^(TestCM053CredentialSaveCommitCallback|TestCM053CredentialSaveWatcherSeesOnlyDestination|TestCM053CredentialSaveSupersededDuringDirSync|TestCM053CredentialSaveSupersededReceiptWithFileStore)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053CredentialSaveCommitCallback",
+        "TestCM053CredentialSaveWatcherSeesOnlyDestination",
+        "TestCM053CredentialSaveSupersededDuringDirSync",
+        "TestCM053CredentialSaveSupersededReceiptWithFileStore"
+      ]
+    },
+    {
+      "name": "race-upstreamredirect",
+      "packages": [
+        "./internal/upstreamredirect"
+      ],
+      "run": "^(TestCM053CredentialedRedirectOriginMatrix|TestCM053MultiHopEscapeRefused|TestCM053SameOriginKeepsHopLimit|TestCM053KeyedCompatModeRefusesEveryRedirect|TestCM053UnrestrictedModeKeepsGoDefault|TestCM053FinalRedirectWithoutFollowIsRefused|TestCM053LocationParseErrorShape|TestCM053StripLocationForGenericAPI|TestCM053RedirectNegativeControl|TestCM053GuardCopiesClient)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053CredentialedRedirectOriginMatrix",
+        "TestCM053MultiHopEscapeRefused",
+        "TestCM053SameOriginKeepsHopLimit",
+        "TestCM053KeyedCompatModeRefusesEveryRedirect",
+        "TestCM053UnrestrictedModeKeepsGoDefault",
+        "TestCM053FinalRedirectWithoutFollowIsRefused",
+        "TestCM053LocationParseErrorShape",
+        "TestCM053StripLocationForGenericAPI",
+        "TestCM053RedirectNegativeControl",
+        "TestCM053GuardCopiesClient"
+      ]
+    },
+    {
+      "name": "race-executor",
+      "packages": [
+        "./internal/runtime/executor"
+      ],
+      "run": "^(TestCM053ClaudeRedirectEntryPoints|TestCM053CodexRedirectEntryPoints|TestCM053GeminiVertexRedirectEntryPoints|TestCM053OtherExecutorRedirectEntryPoints|TestCM053KeyedCompatRefusesEveryRedirect|TestCM053KeylessCompatRedirectBehaviorPreserved|TestCM053CompatPreparedRequestCredentialsRefuseRedirects|TestCM053CompatURLCredentialsRefuseRedirects|TestCM053GenericHttpRequestStripsLocation|TestCM053ExecutorClientFactoryCoverage|TestCM053CompatChatRetentionFinalBoundary|TestCM053CompatChatRetentionLateOverride|TestCM053CompatChatRetentionDuplicateKeys|TestCM053CompatChatRetentionFailureSendsNothing|TestCM053CompatStreamAltStillSanitized|TestCM053KeyedCompatHTTPErrorSafe|TestCM053KeyedCompatHTTP200ErrorEnvelopeSafe|TestCM053KeyedCompatSSEClassifiedBeforeCapture|TestCM053KeyedCompatStreamFrameBounds|TestCM053KeyedCompatHeadersSafe|TestCM053KeyedCompatIOErrorsSafe|TestCM053KeyedCompatRetryClassificationPreserved|TestCM053KeyedCompatLoggingMatrix|TestCM053KeylessCompatErrorBehaviorPreserved|TestCM053KeyedCompatAuditScope|TestCM053KeyedCompatAmbiguousPayloadSafe|TestOpenAICompatExecutorStreamRejectsPlainJSONAfterBlankLines|TestOpenAICompatExecutorResponsesStreamPreservesUpstreamDataError|TestOpenAICompatExecutorResponsesStreamPreservesNamedErrorEvent|TestOpenAICompatExecutorResponsesStreamHandlesAdditionalErrorShapes|TestCM053SetupTokenMetadataConcurrentPreparation|TestClaudeExecutorPrepareRequestAuthIsRaceFreeOnSharedCredential|TestClaudeExecutorSharedCredentialMetadataReadersUseOneLock|TestClaudeExecutorSharedCredentialMetadataMixedAccess|TestCM053SetupTokenMetadataFlagSemantics|TestCM053SetupTokenMetadataLockNotHeldAcrossProfileFetch|TestCM053ManagerPrepareConcurrentReaders)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053ClaudeRedirectEntryPoints",
+        "TestCM053CodexRedirectEntryPoints",
+        "TestCM053GeminiVertexRedirectEntryPoints",
+        "TestCM053OtherExecutorRedirectEntryPoints",
+        "TestCM053KeyedCompatRefusesEveryRedirect",
+        "TestCM053KeylessCompatRedirectBehaviorPreserved",
+        "TestCM053CompatPreparedRequestCredentialsRefuseRedirects",
+        "TestCM053CompatURLCredentialsRefuseRedirects",
+        "TestCM053GenericHttpRequestStripsLocation",
+        "TestCM053ExecutorClientFactoryCoverage",
+        "TestCM053CompatChatRetentionFinalBoundary",
+        "TestCM053CompatChatRetentionLateOverride",
+        "TestCM053CompatChatRetentionDuplicateKeys",
+        "TestCM053CompatChatRetentionFailureSendsNothing",
+        "TestCM053CompatStreamAltStillSanitized",
+        "TestCM053KeyedCompatHTTPErrorSafe",
+        "TestCM053KeyedCompatHTTP200ErrorEnvelopeSafe",
+        "TestCM053KeyedCompatSSEClassifiedBeforeCapture",
+        "TestCM053KeyedCompatStreamFrameBounds",
+        "TestCM053KeyedCompatHeadersSafe",
+        "TestCM053KeyedCompatIOErrorsSafe",
+        "TestCM053KeyedCompatRetryClassificationPreserved",
+        "TestCM053KeyedCompatLoggingMatrix",
+        "TestCM053KeylessCompatErrorBehaviorPreserved",
+        "TestCM053KeyedCompatAuditScope",
+        "TestCM053KeyedCompatAmbiguousPayloadSafe",
+        "TestOpenAICompatExecutorStreamRejectsPlainJSONAfterBlankLines",
+        "TestOpenAICompatExecutorResponsesStreamPreservesUpstreamDataError",
+        "TestOpenAICompatExecutorResponsesStreamPreservesNamedErrorEvent",
+        "TestOpenAICompatExecutorResponsesStreamHandlesAdditionalErrorShapes",
+        "TestCM053SetupTokenMetadataConcurrentPreparation",
+        "TestClaudeExecutorPrepareRequestAuthIsRaceFreeOnSharedCredential",
+        "TestClaudeExecutorSharedCredentialMetadataReadersUseOneLock",
+        "TestClaudeExecutorSharedCredentialMetadataMixedAccess",
+        "TestCM053SetupTokenMetadataFlagSemantics",
+        "TestCM053SetupTokenMetadataLockNotHeldAcrossProfileFetch",
+        "TestCM053ManagerPrepareConcurrentReaders"
+      ]
+    },
+    {
+      "name": "race-executor-helps",
+      "packages": [
+        "./internal/runtime/executor/helps"
+      ],
+      "run": "^(TestCM053HelpsClientFactoriesCarrySameOriginPolicy|TestCM053UsageWrapperPreservesRedirectPolicy)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053HelpsClientFactoriesCarrySameOriginPolicy",
+        "TestCM053UsageWrapperPreservesRedirectPolicy"
+      ]
+    },
+    {
+      "name": "race-auth-claude",
+      "packages": [
+        "./internal/auth/claude"
+      ],
+      "run": "^(TestCM053OAuthRefreshRefusesCrossOriginRedirect)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053OAuthRefreshRefusesCrossOriginRedirect"
+      ]
+    },
+    {
+      "name": "race-auth-codex",
+      "packages": [
+        "./internal/auth/codex"
+      ],
+      "run": "^(TestCM053OAuthRefreshRefusesCrossOriginRedirect)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053OAuthRefreshRefusesCrossOriginRedirect"
+      ]
+    },
+    {
+      "name": "race-compatsafe",
+      "packages": [
+        "./internal/compatsafe"
+      ],
+      "run": "^(TestCM053CompatSafeKindsFixed|TestCM053CompatSafeReadErrorBodyBound|TestCM053CompatSafeResponseHeaders|TestCM053CompatSafeTransport|TestCM053CompatSafeRequestRedaction|TestCM053CompatSafeClassify)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053CompatSafeKindsFixed",
+        "TestCM053CompatSafeReadErrorBodyBound",
+        "TestCM053CompatSafeResponseHeaders",
+        "TestCM053CompatSafeTransport",
+        "TestCM053CompatSafeRequestRedaction",
+        "TestCM053CompatSafeClassify"
+      ]
+    },
+    {
+      "name": "race-api",
+      "packages": [
+        "./internal/api"
+      ],
+      "run": "^(TestCM053ReloadConcurrentHomeHeartbeat|TestCM053ReloadConcurrentUnifiedModels|TestCM053ServerConfigSnapshotOwnership)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053ReloadConcurrentHomeHeartbeat",
+        "TestCM053ReloadConcurrentUnifiedModels",
+        "TestCM053ServerConfigSnapshotOwnership"
+      ]
+    },
+    {
+      "name": "race-handlers",
+      "packages": [
+        "./sdk/api/handlers"
+      ],
+      "run": "^(TestCM053ReloadConcurrentSDKHandlerConfig|TestCM053PluginHostConcurrentModelInterception|TestCM053PluginHostConcurrentExecutorLookup|TestCM053PluginHostTypedNilAndReentrantCallback)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053ReloadConcurrentSDKHandlerConfig",
+        "TestCM053PluginHostConcurrentModelInterception",
+        "TestCM053PluginHostConcurrentExecutorLookup",
+        "TestCM053PluginHostTypedNilAndReentrantCallback"
+      ]
+    },
+    {
+      "name": "race-handlers-openai",
+      "packages": [
+        "./sdk/api/handlers/openai"
+      ],
+      "run": "^(TestCM053ImagesKeepAliveUsesRequestSnapshot|TestCM053VideoBindingTTLUsesRequestSnapshot)$",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053ImagesKeepAliveUsesRequestSnapshot",
+        "TestCM053VideoBindingTTLUsesRequestSnapshot"
+      ]
+    },
+    {
+      "name": "race-oauth-overlay",
+      "packages": [
+        "./internal/config",
+        "./internal/watcher",
+        "./sdk/cliproxy"
+      ],
+      "run": "^TestCM053Overlay",
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestCM053OverlayInvalidRefusedAtLoad",
+        "TestCM053OverlayShapeRefused",
+        "TestCM053OverlayReloadRefresh",
+        "TestCM053OverlayRegistersClaudeModel",
+        "TestCM053OverlayRegistersCodexModel",
+        "TestCM053OverlayAliasVisibleInModels",
+        "TestCM053OverlayAbsentNoEffect",
+        "TestCM053OverlayStaticWins",
+        "TestCM053OverlayExclusionsApply",
+        "TestCM053OverlayCapabilityThroughAlias",
+        "TestCM053OverlayPassThroughClaude",
+        "TestCM053OverlayPassThroughCodex",
+        "TestCM053OverlayReloadRefreshRegistry"
+      ]
+    },
+    {
+      "name": "no-antigravity-egress",
+      "packages": [
+        "./cmd/server"
+      ],
+      "run": "^(TestCM053NoAntigravityEgressLocalModel|TestCM053NoAntigravityEgressRemoteModel)$",
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestCM053NoAntigravityEgressLocalModel",
+        "TestCM053NoAntigravityEgressRemoteModel"
+      ]
+    },
+    {
+      "name": "codex-identity",
+      "packages": [
+        "./internal/runtime/executor"
+      ],
+      "run": "^(TestCM055CodexIdentityHTTPFinalHeaders|TestCM055CodexIdentityWebsocketFinalHeaders|TestCM055CodexIdentityVersionDefault|TestCM055CodexIdentityCloakingPrecedence|TestCM055CodexIdentityStaticOverrideException)$",
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestCM055CodexIdentityHTTPFinalHeaders",
+        "TestCM055CodexIdentityWebsocketFinalHeaders",
+        "TestCM055CodexIdentityVersionDefault",
+        "TestCM055CodexIdentityCloakingPrecedence",
+        "TestCM055CodexIdentityStaticOverrideException"
+      ]
+    },
+    {
+      "name": "antigravity-loopback-callback",
+      "packages": [
+        "./sdk/auth"
+      ],
+      "run": "^(TestAntigravityCallbackListenerBindsLoopback|TestAntigravityCallbackUnreachableOutsideIPv4Loopback)$",
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestAntigravityCallbackListenerBindsLoopback",
+        "TestAntigravityCallbackUnreachableOutsideIPv4Loopback"
+      ]
+    },
+    {
+      "name": "codex-api-key-safety",
+      "packages": [
+        "./internal/runtime/executor"
+      ],
+      "run": "^(TestCodexKeyStatusFailureIsLocal|TestCodexKeyTerminalFailureIsLocal|TestCodexKeyTransportErrorIsLocal|TestCodexKeyErrorBodyReadIsBounded|TestCodexPlainKeyIdentity)$",
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestCodexKeyStatusFailureIsLocal",
+        "TestCodexKeyTerminalFailureIsLocal",
+        "TestCodexKeyTransportErrorIsLocal",
+        "TestCodexKeyErrorBodyReadIsBounded",
+        "TestCodexPlainKeyIdentity"
+      ]
+    }
+  ],
+  "source_pins": [
+    {
+      "name": "substitution-log-format",
+      "path": "internal/runtime/executor/helps/usage_helpers.go",
+      "text": "upstream served model %q for requested model %q"
+    },
+    {
+      "name": "credential-save-format",
+      "path": "sdk/cliproxy/auth/credential_save.go",
+      "text": "credential_save_v1 operation=%s result=%s provider=%s auth_index=%s credentials_changed=%t stage=%s errno=%d category=%s bytes=%d size=%d generation=%d epoch=%d"
+    }
+  ],
+  "markers": [
+    {
+      "patch": "cli-proxy-api-non-claude-cache-retention.patch",
+      "text": "strip prompt_cache_retention: postcondition failed: field still present in sanitized body"
+    },
+    {
+      "patch": "cli-proxy-api-management-readonly-allowlist.patch",
+      "text": "/v0/management/model-definitions/"
+    },
+    {
+      "patch": "cli-proxy-api-watcher-parentdir.patch",
+      "text": "ignoring empty config file %s; keeping the running config"
+    },
+    {
+      "patch": "cli-proxy-api-serve-after-initial-auth-load.patch",
+      "text": "initial auth registration not confirmed within %s of start (initial auth barrier queued: %t, %d stored auths loaded at start); serving model requests anyway"
+    },
+    {
+      "patch": "cli-proxy-api-management-env-only.patch",
+      "text": "remote-management.secret-key is ignored: management authenticates only with MANAGEMENT_PASSWORD"
+    },
+    {
+      "patch": "cli-proxy-api-credential-save-report.patch",
+      "text": "credential_save_v1 operation=%s result=%s provider=%s auth_index=%s credentials_changed=%t stage=%s errno=%d category=%s bytes=%d size=%d generation=%d epoch=%d"
+    },
+    {
+      "patch": "cli-proxy-api-credentialed-redirects.patch",
+      "text": "upstream redirect refused"
+    },
+    {
+      "patch": "cli-proxy-api-openai-compat-keyed-safety.patch",
+      "text": "upstream returned a cloudflare challenge"
+    },
+    {
+      "patch": "cli-proxy-api-oauth-model-overlay.patch",
+      "text": "invalid %s: channel %q is not allowed (allowed: claude, codex)"
+    },
+    {
+      "patch": "cli-proxy-api-codex-client-identity.patch",
+      "text": "codex-tui/0.159.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.159.1)"
+    }
+  ]
+}

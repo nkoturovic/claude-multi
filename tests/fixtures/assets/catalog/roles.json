@@ -1,0 +1,121 @@
+{
+  "roles": {
+    "cm-analyst": {
+      "description": "Evidence-backed analysis: options, root cause, comparisons, plans. Use for a judgment question with a clear scope. Default analyst grade. Final text is the report deliverable; no file edits.",
+      "disallowed_tools": [],
+      "function": "analyst",
+      "grade": "plain",
+      "isolation": null,
+      "prompt_file": "prompts/cm-analyst.md",
+      "requires": []
+    },
+    "cm-analyst-strong": {
+      "description": "Evidence-backed analysis for ambiguous, cross-cutting or high-stakes questions. Only when you cannot write an exact spec or an error is costly; several times the cost. Final text is the report deliverable; no file edits.",
+      "disallowed_tools": [],
+      "function": "analyst",
+      "grade": "strong",
+      "isolation": null,
+      "prompt_file": "prompts/cm-analyst.md",
+      "requires": [
+        "cm-analyst"
+      ]
+    },
+    "cm-designer": {
+      "description": "UI/UX, TUI layout and docs structure checked against the project's UX guidelines. Use for interface work. Report in final text only; no file edits.",
+      "disallowed_tools": [],
+      "function": "designer",
+      "grade": "plain",
+      "isolation": null,
+      "prompt_file": "prompts/cm-designer.md",
+      "requires": []
+    },
+    "cm-explorer": {
+      "description": "Reconnaissance: find, read and summarize; answer factual questions with cited paths. Use when the answer is facts, not judgment. Read-only; fan-out friendly; cheap.",
+      "disallowed_tools": [
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "Agent",
+        "Skill"
+      ],
+      "function": "explorer",
+      "grade": "plain",
+      "isolation": null,
+      "prompt_file": "prompts/cm-explorer.md",
+      "requires": []
+    },
+    "cm-implementer": {
+      "description": "Normal bounded implementation. Default implementer grade. Worktree-isolated; reports changed files, validation and the worktree state.",
+      "disallowed_tools": [],
+      "function": "implementer",
+      "grade": "plain",
+      "isolation": "worktree",
+      "prompt_file": "prompts/cm-implementer.md",
+      "requires": []
+    },
+    "cm-implementer-light": {
+      "description": "Fully specified edits: exact files, exact change, a check that gates it. Mechanical, repetitive, well-scoped work: exact spec and a gating check; cheapest. Worktree-isolated.",
+      "disallowed_tools": [],
+      "function": "implementer",
+      "grade": "light",
+      "isolation": "worktree",
+      "prompt_file": "prompts/cm-implementer.md",
+      "requires": [
+        "cm-implementer"
+      ]
+    },
+    "cm-implementer-strong": {
+      "description": "Implementation needing design judgment. Only when you cannot write an exact spec or an error is costly; several times the cost. Worktree-isolated.",
+      "disallowed_tools": [],
+      "function": "implementer",
+      "grade": "strong",
+      "isolation": "worktree",
+      "prompt_file": "prompts/cm-implementer.md",
+      "requires": [
+        "cm-implementer"
+      ]
+    },
+    "cm-lead": {
+      "description": "Lead: owns integration and final synthesis; routes work by function, then grade; delegates bounded work and does small work itself.",
+      "disallowed_tools": [],
+      "function": "lead",
+      "grade": "plain",
+      "isolation": null,
+      "prompt_file": "prompts/cm-lead.md",
+      "requires": []
+    },
+    "cm-reviewer": {
+      "description": "Independent report-only review: verified BLOCKER/MAJOR/MINOR/NIT findings and an APPROVE or REVISE verdict. Default reviewer; choose per the review routing table. Read-only.",
+      "disallowed_tools": [
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "Agent",
+        "Skill"
+      ],
+      "function": "reviewer",
+      "grade": "plain",
+      "isolation": null,
+      "prompt_file": "prompts/cm-reviewer.md",
+      "requires": []
+    },
+    "cm-reviewer-strong": {
+      "description": "Independent report-only review, same contract, for high-stakes changes and strong or lead authors (see the review routing table); several times the cost of cm-reviewer. Read-only.",
+      "disallowed_tools": [
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "Agent",
+        "Skill"
+      ],
+      "function": "reviewer",
+      "grade": "strong",
+      "isolation": null,
+      "prompt_file": "prompts/cm-reviewer.md",
+      "requires": [
+        "cm-reviewer"
+      ]
+    }
+  },
+  "version": 2
+}

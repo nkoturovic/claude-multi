@@ -1,0 +1,24 @@
+
+  providers — local status
+  ─────────────────────────────────────────────────────────────────────────────
+  credential: API key or sign-in · served: models the local gateway serves now
+  (not a test of the provider)
+    provider   on credential    quota models served src route
+  › acme       on key set             1      1/1    op  approved
+    anthropic  on not signed in —     4      9/9    cat n/a
+   +-----------------------------------------------------------------------+
+   | acme cannot be removed yet                                            |
+   | Clear these first:                                                    |
+   | · model custom-acme-small is admitted — M, select it, Enter revokes   |
+   |                                                                       |
+   |                                                                       |
+   | [ Close ]                                                             |
+  t+-----------------------------------------------------------------------+
+  API key ACME_API_KEY is set — K replaces it, X removes it
+
+
+
+
+
+  Enter details · E edit · K replace key · X remove · A add models · T test
+  Space on/off · N new · ? help · Esc back

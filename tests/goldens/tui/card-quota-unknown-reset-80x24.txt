@@ -1,0 +1,24 @@
+
+  claude-multi — profile: balanced · follows profile · Fresh
+  ─────────────────────────────────────────────────────────────────────────────
+  lead      Opus 5.5 · effort ultracode · 1M class   workflows: native
+  context   window 800K (lead and agents) · compacts at ~702K (90 %)
+  lineup    8 agents · durable scope · Explore→cm-explorer · GP off
+  agent                model         effort   provider
+  explorer             GPT-5.6 Sol   high     openai      read-only
+  analyst              GPT-5.6 Sol   high     openai
+  analyst-strong       Opus 5.5      xhigh    anthropic
+  implementer-light    GPT-5.6 Sol   high     openai      (worktree)
+  implementer          GPT-5.6 Sol   high     openai      (worktree)
+  implementer-strong   GPT-5.6 Sol   xhigh    openai      (worktree)
+  … 2 more agents (E shows all)
+  review    writers(openai)→reviewer-strong · lead→reviewer   all cross-family…
+  health    gateway ok · Claude 2.1.281 · catalog 31
+  quota     claude#1 7d 93%! · 3d old · reset unknown — P provider fallback
+  ! explorer and every implementer are on openai (codex quota shared)
+  implementers unavailable: not a Git repository here (git init enables them)
+
+  Status  Attention
+
+  Enter launch · E edit · Tab next · P profiles · D direct · V details
+  S sessions · G providers · M models · O settings · H doctor · ? help · Esc

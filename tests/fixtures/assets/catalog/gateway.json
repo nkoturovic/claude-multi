@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "audits": {
+    "openai_compat_keyed": true
+  },
+  "gateway": {
+    "base_url": "http://127.0.0.1:8317",
+    "health_path": "/healthz",
+    "token_file": ".config/claude-multi/api-key",
+    "auth_dir": ".local/share/claude-multi/auth",
+    "service": "cli-proxy-api",
+    "cliproxyapi_baseline": "7.2.80",
+    "patches": [],
+    "model_discovery": "disabled",
+    "renderer": "restricted-yaml-v1",
+    "cliproxy_static": {
+      "tls": {
+        "enable": false,
+        "cert": "",
+        "key": ""
+      },
+      "remote-management": {
+        "allow-remote": false,
+        "secret-key": "",
+        "disable-control-panel": true,
+        "disable-auto-update-panel": true
+      },
+      "debug": false,
+      "pprof": {
+        "enable": false,
+        "addr": "127.0.0.1:8316"
+      },
+      "plugins": {
+        "enabled": false,
+        "dir": "",
+        "configs": {}
+      },
+      "discovery": {
+        "enabled": false
+      },
+      "commercial-mode": true,
+      "logging-to-file": false,
+      "usage-statistics-enabled": false,
+      "proxy-url": "",
+      "passthrough-headers": false,
+      "request-retry": 0,
+      "max-retry-credentials": 1,
+      "max-retry-interval": 0,
+      "disable-cooling": true,
+      "save-cooldown-status": false,
+      "quota-exceeded": {
+        "switch-project": false,
+        "switch-preview-model": false,
+        "antigravity-credits": false
+      },
+      "routing": {
+        "strategy": "fill-first",
+        "session-affinity": true,
+        "session-affinity-ttl": "24h"
+      },
+      "ws-auth": true
+    }
+  }
+}

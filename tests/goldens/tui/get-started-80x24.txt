@@ -1,0 +1,24 @@
+
+  claude-multi — Get started
+  ─────────────────────────────────────────────────────────────────────────────
+  Connect a provider and claude-multi picks a profile that uses it. Nothing is
+  saved until you confirm. claude-multi is an independent tool, not affiliated
+  with Anthropic or OpenAI.
+
+    1 Check this computer     ✓ ready
+    2 Claude Code 2.1.0       ✓ verified copy
+    3 Local gateway           ✓ running
+    4 Connect providers       ✓ Kimi (API key) · Local LLM
+    5 Test a connection       — optional; one request per provider
+  › 6 Choose your profile     · no profile fits yet — Enter builds one
+    7 Review                  · 1 item(s) need a fix — Enter shows them
+
+  Connected: Kimi (API key) · Local LLM
+
+  A profile says which model leads and which models the helper agents use.
+
+
+
+
+
+  Enter open · A add a provider · P profiles · ? help · Esc launch card

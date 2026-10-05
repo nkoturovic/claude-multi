@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "backend": "systemd",
+  "unit": "claude-multi-gateway",
+  "exec_links": {
+    "bundle": ".local/share/claude-multi/install/current",
+    "nix": ".local/share/claude-multi/nix/current"
+  },
+  "state_root": ".local/state/claude-multi",
+  "working_directory": ".local/state/claude-multi/gateway",
+  "private_dirs": [
+    ".config/claude-multi",
+    ".local/share/claude-multi",
+    ".local/share/claude-multi/auth",
+    ".local/share/claude-multi/traces",
+    ".local/state/claude-multi",
+    ".local/state/claude-multi/gateway",
+    ".local/state/claude-multi/gateway/logs"
+  ],
+  "bind_rw": [
+    ".local/share/claude-multi/auth",
+    ".local/share/claude-multi/traces",
+    ".local/state/claude-multi/gateway"
+  ],
+  "bind_ro": [
+    ".config/claude-multi",
+    ".local/share/claude-multi",
+    ".local/state/claude-multi"
+  ],
+  "hardening": {
+    "home": "tmpfs",
+    "tier_b": [
+      "ProtectSystem",
+      "PrivateTmp",
+      "PrivateDevices",
+      "NoNewPrivileges",
+      "RestrictSUIDSGID",
+      "LockPersonality",
+      "RestrictRealtime",
+      "RestrictNamespaces",
+      "SystemCallArchitectures",
+      "SystemCallFilter",
+      "SystemCallErrorNumber",
+      "RestrictAddressFamilies",
+      "ProtectKernelTunables",
+      "ProtectKernelModules",
+      "ProtectKernelLogs",
+      "ProtectControlGroups",
+      "ProtectHostname"
+    ]
+  }
+}

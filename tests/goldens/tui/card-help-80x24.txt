@@ -1,0 +1,24 @@
+ +----------------------------------------------------------------------------+
+ | launch card — help                                                         |
+ | New here? W — Get started: connect a provider (API key or account          |
+ |   sign-in) and pick a profile.                                             |
+ | Enter — launch this profile (a fresh durable session).                     |
+ | E — edit this profile (^S saves; sessions that follow it are offered the   |
+ |   change).                                                                 |
+ | Tab / Shift-Tab — next / previous profile (connected first, then most      |
+ |   recently used).                                                          |
+ | P — profiles: use, create, copy, rename, delete, restore shipped           |
+ |   versions, make one the default;                                          |
+ |     B there edits named bindings; F lists fallback profiles (one           |
+ |       provider each) for an outage.                                        |
+ | D — direct session: one model as the lead, no agents (custom models        |
+ |   too).                                                                    |
+ | S — sessions: resume, details (V), change a lineup (T), follow/pin (F),    |
+ |   rename (R), forget (X).                                                  |
+ | G — providers: Enter connects, K API key, L sign in or out, T test, X      |
+ |   remove, P apply.                                                         |
+ | M — models: Enter inspects a line (or admits a new one); candidates can    |
+ |   be declared.                                                             |
+ |                                                                            |
+ | [ Close ]                                                          ↑↓ more |
+ +----------------------------------------------------------------------------+

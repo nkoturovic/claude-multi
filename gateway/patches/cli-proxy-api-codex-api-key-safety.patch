@@ -1,0 +1,797 @@
+diff --git a/internal/runtime/executor/codex_executor_execute.go b/internal/runtime/executor/codex_executor_execute.go
+--- a/internal/runtime/executor/codex_executor_execute.go
++++ b/internal/runtime/executor/codex_executor_execute.go
+@@ -86,6 +86,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
+ 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
+ 	applyModelHeaderOverrides(httpReq.Header, baseModel)
+ 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
++	dropCodexPlainKeySession(httpReq.Header, e.cfg, auth)
+ 	var authID, authLabel, authType, authValue string
+ 	if auth != nil {
+ 		authID = auth.ID
+@@ -107,6 +108,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := upstreamredirect.Result(httpClient.Do(httpReq))
+ 	if err != nil {
++		if codexKeySafe(auth) {
++			err = codexKeyTransportError(err)
++		}
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, err
+ 	}
+@@ -117,6 +121,14 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
+ 	}()
+ 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+ 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
++		if codexKeySafe(auth) {
++			failure, examined := codexKeyHTTPFailure(ctx, e.cfg, httpResp, e.modelLevelCooling())
++			if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, httpResp.StatusCode, examined); errClearReplay != nil {
++				return resp, errClearReplay
++			}
++			err = failure
++			return resp, err
++		}
+ 		b, _ := io.ReadAll(httpResp.Body)
+ 		b = applyCodexIdentityConfuseResponsePayload(b, identityState)
+ 		if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, httpResp.StatusCode, b); errClearReplay != nil {
+@@ -153,6 +165,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
+ 			if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, streamErr.StatusCode(), terminalBody); errClearReplay != nil {
+ 				return resp, errClearReplay
+ 			}
++			if codexKeySafe(auth) {
++				streamErr = codexKeyTerminalFailure(streamErr, terminalBody)
++			}
+ 			err = streamErr
+ 			return resp, err
+ 		}
+@@ -205,6 +220,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
+ 			err = errCtx
+ 			return resp, err
+ 		}
++		if codexKeySafe(auth) {
++			errRead = codexKeyTransportError(errRead)
++		}
+ 		helps.RecordAPIResponseError(ctx, e.cfg, errRead)
+ 	}
+ 	err = newCodexIncompleteStreamError()
+@@ -259,6 +277,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
+ 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg, opts.Headers)
+ 	applyModelHeaderOverrides(httpReq.Header, baseModel)
+ 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
++	dropCodexPlainKeySession(httpReq.Header, e.cfg, auth)
+ 	var authID, authLabel, authType, authValue string
+ 	if auth != nil {
+ 		authID = auth.ID
+@@ -280,6 +299,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := upstreamredirect.Result(httpClient.Do(httpReq))
+ 	if err != nil {
++		if codexKeySafe(auth) {
++			err = codexKeyTransportError(err)
++		}
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, err
+ 	}
+@@ -290,6 +312,10 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
+ 	}()
+ 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+ 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
++		if codexKeySafe(auth) {
++			err, _ = codexKeyHTTPFailure(ctx, e.cfg, httpResp, e.modelLevelCooling())
++			return resp, err
++		}
+ 		b, _ := io.ReadAll(httpResp.Body)
+ 		b = applyCodexIdentityConfuseResponsePayload(b, identityState)
+ 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
+@@ -299,6 +325,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
+ 	}
+ 	data, err := io.ReadAll(httpResp.Body)
+ 	if err != nil {
++		if codexKeySafe(auth) {
++			err = codexKeyTransportError(err)
++		}
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, err
+ 	}
+diff --git a/internal/runtime/executor/codex_executor_request.go b/internal/runtime/executor/codex_executor_request.go
+--- a/internal/runtime/executor/codex_executor_request.go
++++ b/internal/runtime/executor/codex_executor_request.go
+@@ -341,7 +341,7 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
+ 	if ginHeaders != nil && ginHeaders.Get("X-Codex-Beta-Features") != "" {
+ 		r.Header.Set("X-Codex-Beta-Features", ginHeaders.Get("X-Codex-Beta-Features"))
+ 	}
+-	misc.EnsureHeader(r.Header, ginHeaders, "Version", "0.159.1")
++	misc.EnsureHeader(r.Header, ginHeaders, "Version", codexVersionDefault(cfg, auth))
+ 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
+ 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-State", "")
+ 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
+diff --git a/internal/runtime/executor/codex_executor_stream.go b/internal/runtime/executor/codex_executor_stream.go
+--- a/internal/runtime/executor/codex_executor_stream.go
++++ b/internal/runtime/executor/codex_executor_stream.go
+@@ -94,6 +94,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
+ 	applyModelHeaderOverrides(httpReq.Header, baseModel)
+ 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
++	dropCodexPlainKeySession(httpReq.Header, e.cfg, auth)
+ 	var authID, authLabel, authType, authValue string
+ 	if auth != nil {
+ 		authID = auth.ID
+@@ -116,11 +117,25 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 	httpClient = reporter.TrackHTTPClientRoundTripOnly(httpClient)
+ 	httpResp, err := upstreamredirect.Result(httpClient.Do(httpReq))
+ 	if err != nil {
++		if codexKeySafe(auth) {
++			err = codexKeyTransportError(err)
++		}
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return nil, err
+ 	}
+ 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+ 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
++		if codexKeySafe(auth) {
++			failure, examined := codexKeyHTTPFailure(ctx, e.cfg, httpResp, e.modelLevelCooling())
++			if errClose := httpResp.Body.Close(); errClose != nil {
++				log.Errorf("codex executor: close response body error: %v", codexKeyTransportError(errClose))
++			}
++			if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, httpResp.StatusCode, examined); errClearReplay != nil {
++				return nil, errClearReplay
++			}
++			err = failure
++			return nil, err
++		}
+ 		data, readErr := io.ReadAll(httpResp.Body)
+ 		if errClose := httpResp.Body.Close(); errClose != nil {
+ 			log.Errorf("codex executor: close response body error: %v", errClose)
+@@ -207,6 +222,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 						reporter.PublishFailure(ctx, errClearReplay)
+ 						return nil, errClearReplay
+ 					}
++					if codexKeySafe(auth) {
++						streamErr = codexKeyTerminalFailure(streamErr, terminalBody)
++					}
+ 					helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
+ 					reporter.PublishFailure(ctx, streamErr)
+ 					if isCodexOverloadBootstrapFailure(terminalBody) {
+@@ -218,7 +236,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 							// transparently retry on another credential, and report the status the
+ 							// upstream refused to put on the wire.
+ 							helps.LogWithRequestID(ctx).Debugf("codex executor: bootstrap overload rejection after %d buffered lines, failing over", bufferedFrames)
+-							return nil, newCodexBootstrapOverloadErr(terminalBody)
++							return nil, codexBootstrapOverloadFailure(auth, terminalBody)
+ 						}
+ 						helps.LogWithRequestID(ctx).Debugf("codex executor: bootstrap overload rejection after %d lines / %v, time budget exhausted; delivering in-stream", bufferedFrames, timeSinceStart)
+ 					}
+@@ -313,6 +331,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 				if ctx.Err() != nil {
+ 					return nil, ctx.Err()
+ 				}
++				if codexKeySafe(auth) {
++					errScan = codexKeyTransportError(errScan)
++				}
+ 				helps.RecordAPIResponseError(ctx, e.cfg, errScan)
+ 				reporter.PublishFailure(ctx, errScan)
+ 				return nil, errScan
+@@ -382,6 +403,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 						}
+ 						return
+ 					}
++					if codexKeySafe(auth) {
++						streamErr = codexKeyTerminalFailure(streamErr, terminalBody)
++					}
+ 					helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
+ 					reporter.PublishFailure(ctx, streamErr)
+ 					select {
+@@ -444,6 +468,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
+ 			if ctx.Err() != nil {
+ 				return
+ 			}
++			if codexKeySafe(auth) {
++				errScan = codexKeyTransportError(errScan)
++			}
+ 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
+ 		}
+ 		streamErr := newCodexIncompleteStreamError()
+diff --git a/internal/runtime/executor/codex_executor_stream_output_test.go b/internal/runtime/executor/codex_executor_stream_output_test.go
+--- a/internal/runtime/executor/codex_executor_stream_output_test.go
++++ b/internal/runtime/executor/codex_executor_stream_output_test.go
+@@ -99,10 +99,11 @@ func TestCodexExecutorExecuteSurfacesTerminalStreamError(t *testing.T) {
+ 	defer server.Close()
+ 
+ 	executor := NewCodexExecutor(&config.Config{})
++	// A ChatGPT account keeps the provider's error text; an API key gets
++	// fixed local text instead (codex_key_safety_test.go).
+ 	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+ 		"base_url": server.URL,
+-		"api_key":  "test",
+-	}}
++	}, Metadata: map[string]any{"access_token": "test"}}
+ 
+ 	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
+ 		Model:   "gpt-5.5",
+@@ -474,10 +475,11 @@ func TestCodexExecutorExecuteStreamSurfacesTerminalStreamError(t *testing.T) {
+ 	defer server.Close()
+ 
+ 	executor := NewCodexExecutor(&config.Config{})
++	// A ChatGPT account keeps the provider's error text; an API key gets
++	// fixed local text instead (codex_key_safety_test.go).
+ 	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+ 		"base_url": server.URL,
+-		"api_key":  "test",
+-	}}
++	}, Metadata: map[string]any{"access_token": "test"}}
+ 
+ 	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+ 		Model:   "gpt-5.5",
+diff --git a/internal/runtime/executor/codex_key_safety.go b/internal/runtime/executor/codex_key_safety.go
+new file mode 100644
+--- /dev/null
++++ b/internal/runtime/executor/codex_key_safety.go
+@@ -0,0 +1,151 @@
++package executor
++
++import (
++	"context"
++	"net/http"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/upstreamredirect"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++)
++
++// Codex API-key failure safety and the plain API-key client identity.
++//
++// A codex API key travels to the configured base URL as a bearer token, and
++// a provider may quote the credential it received in a failure: in a non-2xx
++// body, in the error of a terminal stream event (error, response.failed) or
++// in a transport error. For an API-key auth such a failure is rebuilt from
++// local data before it is captured, logged, published or returned by the
++// HTTP Execute, ExecuteStream and compact paths:
++//
++//   - a non-2xx body is read through the keyed chat route's bound
++//     (compatsafe.MaxErrorBody bytes plus one to detect overflow);
++//   - the codex classification still runs on the bounded body or on the
++//     terminal event (the status, 429 for usage limits and model capacity,
++//     the credential scope, the retry-after delay, the invalid-signature
++//     replay reset), and only its typed results are kept;
++//   - the text is the fixed error envelope of one compatsafe.Kind, chosen by
++//     the codex classification first and by the keyed chat classification
++//     otherwise; provider message, code and type strings are never kept;
++//   - transport, read and scanner errors keep only their trusted identity
++//     (compatsafe.Transport, which keeps the redirect refusal as it is).
++//
++// An API-key auth with codex cloaking disabled is a plain API client: its
++// requests carry no default codex client Version and no session header (the
++// prompt cache key still travels in the body). ChatGPT-account auths, and
++// API-key auths that keep cloaking on, keep the codex client identity and the
++// upstream failure text. Image requests, websockets and the SDK HttpRequest
++// are outside these promises.
++
++// codexClientVersion is the Version header a codex client request carries
++// when its client sends none.
++const codexClientVersion = "0.159.1"
++
++// codexKeySafe reports whether the failures of auth are rebuilt locally.
++func codexKeySafe(auth *cliproxyauth.Auth) bool {
++	return codexAuthUsesAPIKey(auth)
++}
++
++// codexPlainKey reports whether auth is an API key presented as a plain API
++// client: codex cloaking is disabled for it.
++func codexPlainKey(cfg *config.Config, auth *cliproxyauth.Auth) bool {
++	return codexAuthUsesAPIKey(auth) && isCodexCloakingDisabled(cfg, auth)
++}
++
++// codexVersionDefault is the Version header sent when the client sends none:
++// none for a plain API key, the codex client's version otherwise.
++func codexVersionDefault(cfg *config.Config, auth *cliproxyauth.Auth) string {
++	if codexPlainKey(cfg, auth) {
++		return ""
++	}
++	return codexClientVersion
++}
++
++// dropCodexPlainKeySession removes every session header from the final
++// request headers of a plain API key, whatever set it (the prompt cache, the
++// client, a model override or identity rewriting).
++func dropCodexPlainKeySession(headers http.Header, cfg *config.Config, auth *cliproxyauth.Auth) {
++	if headers == nil || !codexPlainKey(cfg, auth) {
++		return
++	}
++	deleteHeaderCaseInsensitive(headers, "Session-Id")
++	deleteHeaderCaseInsensitive(headers, "Session_id")
++}
++
++// codexKeyFailure keeps the typed results of a classified codex failure and
++// replaces its text with the fixed envelope of kind.
++func codexKeyFailure(classified statusErr, kind compatsafe.Kind) statusErr {
++	return statusErr{code: classified.code, msg: kind.Body(), retryAfter: classified.retryAfter,
++		credentialScoped: classified.credentialScoped}
++}
++
++// codexKeyKind selects the fixed kind of a codex failure from its status and
++// its body. The authoritative 402 and 429 statuses come first; then the
++// categories the codex classification names (context length, an invalid
++// thinking signature or a missing previous response, which are request
++// faults, and an authentication failure); everything else is classified like
++// a keyed chat failure (compatsafe.Classify, which examines at most
++// compatsafe.MaxErrorBody bytes).
++func codexKeyKind(status int, body []byte) compatsafe.Kind {
++	if status != http.StatusTooManyRequests && status != http.StatusPaymentRequired {
++		if code, _, ok := codexStatusErrorClassification(status, body); ok {
++			switch code {
++			case "context_too_large":
++				return compatsafe.KindContextLength
++			case "auth_unavailable":
++				return compatsafe.KindAuthentication
++			default:
++				return compatsafe.KindInvalidRequest
++			}
++		}
++	}
++	return compatsafe.Classify(status, body)
++}
++
++// codexKeyTerminalFailure is the safe form of a classified terminal stream
++// failure (or of the bootstrap overload rejection built from it).
++func codexKeyTerminalFailure(classified statusErr, body []byte) statusErr {
++	return codexKeyFailure(classified, codexKeyKind(classified.code, body))
++}
++
++// codexKeyHTTPFailure reads and classifies a non-2xx response of an API-key
++// auth. It returns the safe failure and the body the caller may still
++// examine locally (nil when the body overflowed the bound or could not be
++// read). Only the safe failure's text is captured, and only its status and
++// kind are logged.
++func codexKeyHTTPFailure(ctx context.Context, cfg *config.Config, resp *http.Response, modelLevelCooling bool) (statusErr, []byte) {
++	body, overflow, readable := compatsafe.ReadErrorBody(resp.Body)
++	examinable := readable && !overflow
++	if !examinable {
++		body = nil
++	}
++	classified := newCodexStatusErrWithCooling(resp.StatusCode, body, modelLevelCooling)
++	var kind compatsafe.Kind
++	if examinable {
++		kind = codexKeyKind(classified.code, body)
++	} else {
++		kind = compatsafe.HTTPFailure(classified.code, nil, overflow, readable, nil).Kind
++	}
++	failure := codexKeyFailure(classified, kind)
++	helps.AppendAPIResponseChunk(ctx, cfg, []byte(failure.msg))
++	helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, failure kind: %s", failure.code, kind)
++	return failure, body
++}
++
++// codexBootstrapOverloadFailure is the overload rejection of a buffered
++// stream bootstrap, in its safe form for an API-key auth.
++func codexBootstrapOverloadFailure(auth *cliproxyauth.Auth, body []byte) statusErr {
++	failure := newCodexBootstrapOverloadErr(body)
++	if codexKeySafe(auth) {
++		failure = codexKeyTerminalFailure(failure, body)
++	}
++	return failure
++}
++
++// codexKeyTransportError keeps only the trusted identity of a transport,
++// read or scanner error of an API-key auth.
++func codexKeyTransportError(err error) error {
++	return compatsafe.Transport(err, upstreamredirect.IsRefused)
++}
+diff --git a/internal/runtime/executor/codex_key_safety_test.go b/internal/runtime/executor/codex_key_safety_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/runtime/executor/codex_key_safety_test.go
+@@ -0,0 +1,400 @@
++package executor
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++	"github.com/tidwall/gjson"
++)
++
++// A credential-shaped value made of words; the fake upstreams quote it back.
++const codexKeyTestSecret = "codex-key-fixture-value"
++
++// The HTTP paths of the codex executor: Execute, ExecuteStream and compact.
++var codexKeyTestModes = []string{"execute", "stream", "compact"}
++
++func codexKeyTestAuth(baseURL string, apiKey bool) *cliproxyauth.Auth {
++	auth := &cliproxyauth.Auth{ID: "codex-key-test", Provider: "codex", Attributes: map[string]string{"base_url": baseURL}}
++	if apiKey {
++		auth.Attributes["api_key"] = codexKeyTestSecret
++	} else {
++		auth.Metadata = map[string]any{"access_token": codexKeyTestSecret, "account_id": "codex-key-test-account"}
++	}
++	return auth
++}
++
++// codexKeyTestRun sends one request in mode and returns its failure: the
++// returned error, or the first error chunk of a stream.
++func codexKeyTestRun(t *testing.T, cfg *config.Config, auth *cliproxyauth.Auth, mode string, inbound http.Header) error {
++	t.Helper()
++	payload := `{"model":"gpt-5.5","input":[{"role":"user","content":"fixture"}],"prompt_cache_key":"codex-key-test-cache"}`
++	req := cliproxyexecutor.Request{Model: "gpt-5.5", Payload: []byte(payload)}
++	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Headers: inbound}
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	executor := NewCodexExecutor(cfg)
++	switch mode {
++	case "stream":
++		opts.Stream = true
++		result, err := executor.ExecuteStream(ctx, auth, req, opts)
++		if err != nil {
++			return err
++		}
++		var failure error
++		for chunk := range result.Chunks {
++			if chunk.Err != nil && failure == nil {
++				failure = chunk.Err
++			}
++		}
++		return failure
++	case "compact":
++		opts.Alt = "responses/compact"
++	}
++	_, err := executor.Execute(ctx, auth, req, opts)
++	return err
++}
++
++func codexKeyTestStatus(t *testing.T, err error) int {
++	t.Helper()
++	var coded interface{ StatusCode() int }
++	if !errors.As(err, &coded) {
++		t.Fatalf("failure %T carries no status", err)
++	}
++	return coded.StatusCode()
++}
++
++func codexKeyTestCompleted() string {
++	return `{"type":"response.completed","response":{"id":"resp_key","model":"gpt-5.5","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`
++}
++
++// A non-2xx response that quotes the key becomes the fixed text of its kind;
++// the status, the usage-limit retry delay and the credential scope survive.
++func TestCodexKeyStatusFailureIsLocal(t *testing.T) {
++	retry := 300 * time.Second
++	cases := []struct {
++		name     string
++		status   int
++		body     string
++		kind     compatsafe.Kind
++		want     int
++		retry    *time.Duration
++		scoped   bool
++		jsonBody bool
++	}{
++		{name: "credential", status: http.StatusUnauthorized, jsonBody: true, kind: compatsafe.KindAuthentication, want: http.StatusUnauthorized,
++			body: `{"error":{"message":"Incorrect API key provided: ` + codexKeyTestSecret + `","type":"invalid_request_error","code":"invalid_api_key"}}`},
++		{name: "context", status: http.StatusBadRequest, jsonBody: true, kind: compatsafe.KindContextLength, want: http.StatusBadRequest,
++			body: `{"error":{"message":"request for ` + codexKeyTestSecret + ` exceeds the context window","type":"invalid_request_error","code":"context_length_exceeded"}}`},
++		{name: "usage-limit", status: http.StatusTooManyRequests, jsonBody: true, kind: compatsafe.KindRateLimited, want: http.StatusTooManyRequests,
++			retry: &retry, scoped: true,
++			body: `{"error":{"type":"usage_limit_reached","message":"limit for ` + codexKeyTestSecret + `","resets_in_seconds":300}}`},
++		{name: "server", status: http.StatusInternalServerError, kind: compatsafe.KindServerError, want: http.StatusInternalServerError,
++			body: "upstream failed for " + codexKeyTestSecret},
++		{name: "oversized", status: http.StatusBadRequest, kind: compatsafe.KindErrorBodyTooLarge, want: http.StatusBadRequest,
++			body: strings.Repeat("x", 2*compatsafe.MaxErrorBody) + codexKeyTestSecret},
++	}
++	for _, tc := range cases {
++		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++			_, _ = io.Copy(io.Discard, r.Body)
++			if tc.jsonBody {
++				w.Header().Set("Content-Type", "application/json")
++			}
++			w.WriteHeader(tc.status)
++			_, _ = io.WriteString(w, tc.body)
++		}))
++		for _, mode := range codexKeyTestModes {
++			t.Run(tc.name+"/"+mode, func(t *testing.T) {
++				err := codexKeyTestRun(t, &config.Config{}, codexKeyTestAuth(server.URL, true), mode, nil)
++				if err == nil {
++					t.Fatal("no failure")
++				}
++				if err.Error() != tc.kind.Body() {
++					t.Fatalf("failure text = %q, want the fixed text of %s", err.Error(), tc.kind)
++				}
++				if got := codexKeyTestStatus(t, err); got != tc.want {
++					t.Fatalf("status = %d, want %d", got, tc.want)
++				}
++				var failure statusErr
++				if !errors.As(err, &failure) {
++					t.Fatalf("failure %T is not a classified status", err)
++				}
++				if (failure.RetryAfter() == nil) != (tc.retry == nil) || (tc.retry != nil && *failure.RetryAfter() != *tc.retry) {
++					t.Fatalf("retry delay = %v, want %v", failure.RetryAfter(), tc.retry)
++				}
++				if failure.IsCredentialScoped() != tc.scoped {
++					t.Fatalf("credential scope = %t, want %t", failure.IsCredentialScoped(), tc.scoped)
++				}
++			})
++		}
++		// A ChatGPT account keeps the upstream text (and reads the whole body).
++		t.Run(tc.name+"/account", func(t *testing.T) {
++			err := codexKeyTestRun(t, &config.Config{}, codexKeyTestAuth(server.URL, false), "execute", nil)
++			if err == nil || !strings.Contains(err.Error(), codexKeyTestSecret) {
++				t.Fatalf("account failure changed: %v", err)
++			}
++		})
++		server.Close()
++	}
++}
++
++// A terminal stream event that quotes the key becomes the fixed text of its
++// kind, in the non-stream body, the stream and the buffered stream bootstrap
++// (including the overload rejection a bootstrap fails over with).
++func TestCodexKeyTerminalFailureIsLocal(t *testing.T) {
++	cases := []struct {
++		name  string
++		event string
++		kind  compatsafe.Kind
++		want  int
++	}{
++		{name: "failed", kind: compatsafe.KindServerError, want: http.StatusBadGateway,
++			event: `{"type":"response.failed","response":{"id":"resp_key","status":"failed","error":{"code":"server_error","message":"request with ` + codexKeyTestSecret + ` failed"}}}`},
++		{name: "context", kind: compatsafe.KindContextLength, want: http.StatusBadRequest,
++			event: `{"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"input of ` + codexKeyTestSecret + ` exceeds the context window"}}`},
++		{name: "credential", kind: compatsafe.KindAuthentication, want: http.StatusUnauthorized,
++			event: `{"type":"response.failed","response":{"error":{"type":"authentication_error","code":"invalid_api_key","message":"bad key ` + codexKeyTestSecret + `"}}}`},
++		{name: "overload", kind: compatsafe.KindServerError, want: http.StatusBadGateway,
++			event: `{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"overloaded for ` + codexKeyTestSecret + `"}}`},
++	}
++	for _, tc := range cases {
++		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++			_, _ = io.Copy(io.Discard, r.Body)
++			w.Header().Set("Content-Type", "text/event-stream")
++			_, _ = fmt.Fprintf(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_key\"}}\n\n")
++			_, _ = fmt.Fprintf(w, "data: %s\n\n", tc.event)
++		}))
++		for _, mode := range []string{"execute", "stream", "buffered"} {
++			t.Run(tc.name+"/"+mode, func(t *testing.T) {
++				cfg := &config.Config{}
++				run, want := mode, tc.want
++				if mode == "buffered" {
++					cfg.Codex.StreamBootstrapBuffering = true
++					run = "stream"
++					if tc.name == "overload" {
++						want = http.StatusServiceUnavailable // the bootstrap fails over with 503
++					}
++				}
++				err := codexKeyTestRun(t, cfg, codexKeyTestAuth(server.URL, true), run, nil)
++				if err == nil {
++					t.Fatal("no failure")
++				}
++				if err.Error() != tc.kind.Body() {
++					t.Fatalf("failure text = %q, want the fixed text of %s", err.Error(), tc.kind)
++				}
++				if got := codexKeyTestStatus(t, err); got != want {
++					t.Fatalf("status = %d, want %d", got, want)
++				}
++			})
++		}
++		t.Run(tc.name+"/account", func(t *testing.T) {
++			cfg := &config.Config{}
++			cfg.Codex.StreamBootstrapBuffering = true
++			err := codexKeyTestRun(t, cfg, codexKeyTestAuth(server.URL, false), "stream", nil)
++			if err == nil || !strings.Contains(err.Error(), codexKeyTestSecret) {
++				t.Fatalf("account failure changed: %v", err)
++			}
++		})
++		server.Close()
++	}
++}
++
++// A transport failure keeps only its trusted identity: the request URL (here
++// carrying a marker in its path) never reaches the failure text.
++func TestCodexKeyTransportErrorIsLocal(t *testing.T) {
++	const marker = "transport-marker-path"
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		hijacker, ok := w.(http.Hijacker)
++		if !ok {
++			t.Error("no hijacker")
++			return
++		}
++		conn, _, err := hijacker.Hijack()
++		if err == nil {
++			_ = conn.Close()
++		}
++	}))
++	defer server.Close()
++	base := server.URL + "/" + marker
++	for _, mode := range codexKeyTestModes {
++		t.Run(mode, func(t *testing.T) {
++			err := codexKeyTestRun(t, &config.Config{}, codexKeyTestAuth(base, true), mode, nil)
++			if err == nil {
++				t.Fatal("no failure")
++			}
++			if strings.Contains(err.Error(), marker) {
++				t.Fatalf("transport failure kept the request URL: %q", err.Error())
++			}
++			var transport compatsafe.TransportError
++			if !errors.As(err, &transport) && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
++				t.Fatalf("failure %T is not a trusted transport identity", err)
++			}
++		})
++	}
++	t.Run("account", func(t *testing.T) {
++		err := codexKeyTestRun(t, &config.Config{}, codexKeyTestAuth(base, false), "execute", nil)
++		if err == nil || !strings.Contains(err.Error(), marker) {
++			t.Fatalf("account failure changed: %v", err)
++		}
++	})
++}
++
++type codexKeyTestReader struct {
++	remaining int
++	read      int
++	fail      bool
++}
++
++func (r *codexKeyTestReader) Read(p []byte) (int, error) {
++	if r.fail {
++		return 0, errors.New("read failed for " + codexKeyTestSecret)
++	}
++	if r.remaining == 0 {
++		return 0, io.EOF
++	}
++	n := min(len(p), r.remaining)
++	for i := range p[:n] {
++		p[i] = 'x'
++	}
++	r.remaining -= n
++	r.read += n
++	return n, nil
++}
++
++// A failure body is read through the bound: never more than one byte past
++// compatsafe.MaxErrorBody, and an unreadable body has its own fixed kind.
++func TestCodexKeyErrorBodyReadIsBounded(t *testing.T) {
++	for _, tc := range []struct {
++		name   string
++		status int
++		reader *codexKeyTestReader
++		kind   compatsafe.Kind
++	}{
++		{name: "oversized", status: http.StatusBadRequest, reader: &codexKeyTestReader{remaining: 4 << 20}, kind: compatsafe.KindErrorBodyTooLarge},
++		{name: "oversized-rate-limit", status: http.StatusTooManyRequests, reader: &codexKeyTestReader{remaining: 4 << 20}, kind: compatsafe.KindRateLimited},
++		{name: "unreadable", status: http.StatusBadGateway, reader: &codexKeyTestReader{fail: true}, kind: compatsafe.KindErrorBodyUnreadable},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			resp := &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(tc.reader)}
++			failure, examined := codexKeyHTTPFailure(context.Background(), &config.Config{}, resp, false)
++			if tc.reader.read > compatsafe.MaxErrorBody+1 {
++				t.Fatalf("read %d bytes, bound is %d", tc.reader.read, compatsafe.MaxErrorBody+1)
++			}
++			if examined != nil {
++				t.Fatal("an unbounded or unreadable body was handed on")
++			}
++			if failure.Error() != tc.kind.Body() || failure.StatusCode() != tc.status {
++				t.Fatalf("failure = %d %q, want %d %s", failure.StatusCode(), failure.Error(), tc.status, tc.kind)
++			}
++		})
++	}
++}
++
++// codexKeyTestHeaders returns the final upstream request headers and body of
++// one successful request in mode.
++func codexKeyTestHeaders(t *testing.T, cfg *config.Config, auth *cliproxyauth.Auth, mode string, inbound http.Header) (http.Header, []byte) {
++	t.Helper()
++	type capture struct {
++		header http.Header
++		body   []byte
++	}
++	captured := make(chan capture, 1)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, _ := io.ReadAll(r.Body)
++		captured <- capture{r.Header.Clone(), body}
++		if mode == "compact" {
++			w.Header().Set("Content-Type", "application/json")
++			_, _ = io.WriteString(w, `{"id":"resp_key","object":"response.compaction","output":[]}`)
++			return
++		}
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = fmt.Fprintf(w, "data: %s\n\n", codexKeyTestCompleted())
++	}))
++	defer server.Close()
++	auth.Attributes["base_url"] = server.URL
++	if err := codexKeyTestRun(t, cfg, auth, mode, inbound); err != nil {
++		t.Fatalf("%s request: %v", mode, err)
++	}
++	select {
++	case got := <-captured:
++		return got.header, got.body
++	default:
++		t.Fatal("no upstream request")
++		return nil, nil
++	}
++}
++
++// An API key with codex cloaking disabled is a plain API client: no default
++// codex Version and no session header, whatever set it; the prompt cache key
++// stays in the body and a client's own Version passes through. Cloaked API
++// keys and ChatGPT accounts keep the codex client identity.
++func TestCodexPlainKeyIdentity(t *testing.T) {
++	uncloaked := &config.Config{}
++	uncloaked.Codex.DisableCodexCloaking = true
++	sessionFromClient := http.Header{"Session-Id": {"client-session"}}
++	for _, mode := range codexKeyTestModes {
++		t.Run(mode+"/plain", func(t *testing.T) {
++			for name, auth := range map[string]*cliproxyauth.Auth{
++				"config":    codexKeyTestAuth("", true),
++				"attribute": codexKeyTestAuth("", true),
++			} {
++				cfg := uncloaked
++				if name == "attribute" {
++					cfg = &config.Config{}
++					auth.Attributes[cliproxyauth.AttributeCodexDisableCloaking] = "true"
++				}
++				header, body := codexKeyTestHeaders(t, cfg, auth, mode, sessionFromClient)
++				for _, key := range []string{"Version", "Session-Id", "Session_id", "Originator", "Chatgpt-Account-Id"} {
++					if _, present := header[http.CanonicalHeaderKey(key)]; present || header.Get(key) != "" {
++						t.Fatalf("%s: plain key sent %s", name, key)
++					}
++				}
++				if got := gjson.GetBytes(body, "prompt_cache_key").String(); got != "codex-key-test-cache" {
++					t.Fatalf("%s: prompt cache key = %q", name, got)
++				}
++			}
++			header, _ := codexKeyTestHeaders(t, uncloaked, codexKeyTestAuth("", true), mode, http.Header{"Version": {"0.200.0"}})
++			if got := header.Get("Version"); got != "0.200.0" {
++				t.Fatalf("client Version = %q, want it passed through", got)
++			}
++		})
++		t.Run(mode+"/codex-identity", func(t *testing.T) {
++			for name, tc := range map[string]struct {
++				cfg  *config.Config
++				auth *cliproxyauth.Auth
++			}{
++				"cloaked-key":       {&config.Config{}, codexKeyTestAuth("", true)},
++				"account":           {&config.Config{}, codexKeyTestAuth("", false)},
++				"uncloaked-account": {uncloaked, codexKeyTestAuth("", false)},
++			} {
++				header, _ := codexKeyTestHeaders(t, tc.cfg, tc.auth, mode, nil)
++				if got := header.Get("Version"); got != codexClientVersion {
++					t.Fatalf("%s: Version = %q, want %q", name, got, codexClientVersion)
++				}
++				if got := header.Get("Session-Id"); got != "codex-key-test-cache" {
++					t.Fatalf("%s: Session-Id = %q", name, got)
++				}
++			}
++		})
++	}
++	// The websocket header builder applies the same Version default.
++	plain := codexKeyTestAuth("", true)
++	if got := applyCodexWebsocketHeaders(context.Background(), nil, plain, codexKeyTestSecret, uncloaked, false).Get("Version"); got != "" {
++		t.Fatalf("websocket plain key Version = %q", got)
++	}
++	account := codexKeyTestAuth("", false)
++	if got := applyCodexWebsocketHeaders(context.Background(), nil, account, codexKeyTestSecret, uncloaked, false).Get("Version"); got != codexClientVersion {
++		t.Fatalf("websocket account Version = %q", got)
++	}
++}
+diff --git a/internal/runtime/executor/codex_websockets_request.go b/internal/runtime/executor/codex_websockets_request.go
+--- a/internal/runtime/executor/codex_websockets_request.go
++++ b/internal/runtime/executor/codex_websockets_request.go
+@@ -88,7 +88,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
+ 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
+ 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
+ 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
+-	misc.EnsureHeader(headers, ginHeaders, "Version", "0.159.1")
++	misc.EnsureHeader(headers, ginHeaders, "Version", codexVersionDefault(cfg, auth))
+ 	if nativeRequest {
+ 		misc.EnsureHeader(headers, ginHeaders, codexResponsesLiteHeader, "")
+ 	}

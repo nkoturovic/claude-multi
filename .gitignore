@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+/result
+/result-*
+.claude/
+# A safety net, not a place for credentials: keep keys outside the checkout
+# (the tree's credential check scans ignored files too and fails on them).
+secrets/
+*.env
+/dist/
+# Local development output: a virtual environment (keep yours outside the
+# checkout), build directories and package metadata.
+.venv/
+/build/
+*.egg-info/

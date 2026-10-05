@@ -1,0 +1,26 @@
+{
+  "lines": {},
+  "notes": "Groq's OpenAI-compatible API. It serves several model families. Declaration only: add models with claude-multi discover groq --add WIRE (or claude-multi models add groq WIRE …), then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://console.groq.com/docs/api-reference",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:GROQ_API_KEY"
+    },
+    "base_url": "https://api.groq.com/openai/v1",
+    "display": "Groq",
+    "independence_family": "unknown",
+    "kind": "openai-compatible",
+    "listing": {
+      "auth": "provider",
+      "shape": "openai",
+      "url": "https://api.groq.com/openai/v1/models"
+    }
+  },
+  "version": 1
+}

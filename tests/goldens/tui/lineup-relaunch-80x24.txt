@@ -1,0 +1,24 @@
+
+  change lineup — "api design" (unknown)
+  ─────────────────────────────────────────────────────────────────────────────
+  from  balanced (gen 1)
+  to    [direct ▾]   per-agent edit ▸   direct (no agents)   keep current   fa…
+  diff  explorer             GPT-5.6 Sol · high → (unbound)
+        analyst              GPT-5.6 Sol · high → (unbound)
+        analyst-strong       Opus 5.5 · 1M selector · xhigh → (unbound)
+        implementer-light    GPT-5.6 Sol · high → (unbound)
+        implementer          GPT-5.6 Sol · high → (unbound)
+        implementer-strong   GPT-5.6 Sol · xhigh → (unbound)
+        reviewer             GPT-5.6 Sol · xhigh → (unbound)
+        reviewer-strong      Opus 5.5 · 1M selector · xhigh → (unbound)
+        native agents: explore replace → native
+        native agents: general_purpose off → on
+        lead providers       any → anthropic
+  mode  RELAUNCH — exit the session; resume applies it
+  why   native agents: explore replace → native
+  why   native agents: general_purpose off → on
+  why   lead providers any → anthropic
+  next  recorded as a pending change; it applies at the session's next resume
+
+
+  Enter apply · Tab target · ← → choose · Space pick · ? help · Esc cancel

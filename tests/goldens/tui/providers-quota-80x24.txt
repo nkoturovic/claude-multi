@@ -1,0 +1,24 @@
+
+  providers — local status
+  ─────────────────────────────────────────────────────────────────────────────
+  credential: API key or sign-in · served: models the local gateway serves now
+  (not a test of the provider)
+    provider   on credential      quota                 models served src route
+  › anthropic  on sign-in failing 5h 42% · 7d 18% · 12m 4      9/9    cat n/a
+    deepseek   on key set                               0      no models yet —…
+    kimi       on key set                               1      1/1    cat n/a
+    llm-local  on keyless                               1      1/1    cat n/a
+    meta       on key set                               0      no models yet —…
+    openai     on not signed in   no data               2      3/3    cat n/a
+    openrouter on key set                               6      12/12  cat n/a
+    qwen       on key set                               1      1/1    cat n/a
+  transport: oauth-pool
+  sign-in failing — L signs in again (personal use)
+  claude#1 · 12m · +1 more (claude-multi quota) · 5h 42% (resets 16:00) · 7d 1…
+
+
+
+
+
+  Enter connect · L sign in/out · T test · Space on/off · Q details · N new
+  ? help · Esc back

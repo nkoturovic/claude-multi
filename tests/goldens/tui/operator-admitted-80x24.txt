@@ -1,0 +1,24 @@
+
+  models — catalog 31
+  ─────────────────────────────────────────────────────────────────────────────
+    line          generation    provider       class  efforts        used by
+    gpt55         GPT-5.5       openai         258K   high           —
+    grok46        Grok 4.6      openrouter     500K   high xhigh     —
+    kimi-k3       Kimi K3 · 1…  kimi           1M     max            —
+    opus          Opus 4.8 · …  anthropic      1M     xhigh          —
+    opus5         Opus 5 · 1M…  anthropic      1M     xhigh          2 profiles
+    opus55        Opus 5.5 · …  anthropic      1M     xhigh          6 profiles
+    or-deepseek   DeepSeek V4…  openrouter     1M     high xhigh     1 profile
+    or-gemini     Gemini 3 Fl…  openrouter     1M     high xhigh     1 profile
+    or-gpt        GPT-6 Sol ·…  openrouter     1M     high xhigh     1 profile
+    or-grok       Grok 4.7 · …  openrouter     500K   high xhigh     1 profile
+    or-opus       Opus 5.5 · …  openrouter     1M     high xhigh     1 profile
+    qwen-flash-…  Qwen3.8 Fla…  llm-local      320K   high (lead o…  —
+    qwen38        Qwen3.8 Max   qwen           1M     max            —
+    sol           GPT-5.6 Sol   openai         1M     high xhigh     5 profiles
+  › custom-fixt…  Fixture Rev…  openrouter op  200K   high           admitted
+  retired  muse-spark → (none) · 2 continuity aliases retained
+  op · admitted · qualification and agent eligibility are separate
+  Fixture Reviewer · OpenRouter · gateway-effort · default high · admitted (Ne…
+
+  Enter revoke · Q qualify · E edit · X remove · V details · ? help · Esc back

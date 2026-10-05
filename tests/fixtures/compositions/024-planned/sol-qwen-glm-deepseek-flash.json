@@ -1,0 +1,131 @@
+{
+  "availability": {
+    "models": {
+      "deepseek-flash": "agents",
+      "deepseek-pro": "agents",
+      "fable": "off",
+      "glm52": "agents",
+      "gpt55": "off",
+      "kimi-k3": "off",
+      "opus": "off",
+      "opus5": "off",
+      "qwen38": "agents",
+      "sol": "lead+agents"
+    },
+    "providers": {
+      "anthropic": "off",
+      "deepseek": "agents",
+      "kimi": "off",
+      "openai": "lead+agents",
+      "qwen": "agents"
+    }
+  },
+  "description": "Sol lead; Qwen/GLM plus DeepSeek Flash bug hunting and Pro implementation/finalization (legacy name retained)",
+  "name": "sol-qwen-glm-deepseek-flash",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "slots": [
+    {
+      "model": "sol",
+      "role": "cm-lead"
+    },
+    {
+      "model": "sol",
+      "preferred": true,
+      "role": "cm-analyst"
+    },
+    {
+      "model": "sol",
+      "preferred": true,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "xhigh",
+      "model": "sol",
+      "preferred": true,
+      "role": "cm-reviewer"
+    },
+    {
+      "lane": "max",
+      "model": "glm52",
+      "preferred": false,
+      "role": "cm-analyst"
+    },
+    {
+      "lane": "max",
+      "model": "glm52",
+      "preferred": false,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "high",
+      "model": "sol",
+      "preferred": false,
+      "role": "cm-reviewer"
+    },
+    {
+      "lane": "max",
+      "model": "qwen38",
+      "preferred": false,
+      "role": "cm-analyst"
+    },
+    {
+      "lane": "max",
+      "model": "qwen38",
+      "preferred": false,
+      "role": "cm-reviewer"
+    },
+    {
+      "lane": "max",
+      "model": "glm52",
+      "preferred": false,
+      "role": "cm-reviewer"
+    },
+    {
+      "lane": "max",
+      "model": "qwen38",
+      "preferred": false,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "max",
+      "model": "deepseek-flash",
+      "preferred": false,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "max",
+      "model": "deepseek-flash",
+      "preferred": false,
+      "role": "cm-reviewer"
+    },
+    {
+      "lane": "max",
+      "model": "deepseek-flash",
+      "preferred": false,
+      "role": "cm-analyst"
+    },
+    {
+      "lane": "max",
+      "model": "deepseek-pro",
+      "preferred": false,
+      "role": "cm-analyst"
+    },
+    {
+      "lane": "max",
+      "model": "deepseek-pro",
+      "preferred": false,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "max",
+      "model": "deepseek-pro",
+      "preferred": false,
+      "role": "cm-reviewer"
+    }
+  ],
+  "version": 1
+}

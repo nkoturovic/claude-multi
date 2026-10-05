@@ -1,0 +1,882 @@
+{
+  "client": {
+    "native_contract_file_sha256": "c5b00ad5b20e354dd29c0bb25978a61cec845b3fb8bdf2526f77fa39c24c0afd",
+    "sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+    "version": "2.1.286"
+  },
+  "evidence": {
+    "directory": "tests/fixtures",
+    "files": {
+      "inventory.json": {
+        "document": {
+          "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+          "errors": 0,
+          "failures": 0,
+          "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+          "inventory": {
+            "J1": {
+              "count": 9,
+              "missing": [],
+              "present": [
+                "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_dimmed",
+                "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_declare_approve_apply_admit_qualify_bind",
+                "tests.test_packaging.PackageSourceTests.test_package_payload_excludes_operator_credentials_and_grants",
+                "tests.test_portability.KeyedPortabilityTests.test_keyed_import_closed_target_refuses_audit",
+                "tests.test_portability.KeyedPortabilityTests.test_keyed_import_open_target_requires_local_route_key_and_grants",
+                "tests.test_portability.KeyedPortabilityTests.test_keyed_import_rechecks_headers_origins_collisions",
+                "tests.test_portability.KeyedPortabilityTests.test_keyed_import_uses_existing_single_commit_barrier",
+                "tests.test_portability.KeyedPortabilityTests.test_keyed_json_export_has_logical_refs_and_no_store_reads",
+                "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_new_off_approval_qualification_and_binding"
+              ],
+              "skipped": []
+            },
+            "audit": {
+              "count": 11,
+              "missing": [],
+              "present": [
+                "A1-authority",
+                "CR1",
+                "F1",
+                "F1-losses",
+                "K1-headers",
+                "K1-omissions",
+                "K12-qualification",
+                "KS1",
+                "M1",
+                "P1-CR1-KS1",
+                "P1-controls"
+              ],
+              "skipped": []
+            },
+            "client": {
+              "count": 9,
+              "missing": [],
+              "present": [
+                "C1-agent",
+                "C1-fence-fallback",
+                "C1-lead",
+                "C1-permission",
+                "C1-policy",
+                "C1-replay",
+                "C1-workflow",
+                "C2-auto",
+                "C2-manual"
+              ],
+              "skipped": []
+            },
+            "core": {
+              "count": 5,
+              "missing": [],
+              "present": [
+                "A1-reload",
+                "K1-pairing",
+                "K1-render",
+                "K12",
+                "S1"
+              ],
+              "skipped": []
+            }
+          },
+          "journey_tests": 9,
+          "keyed_client_budget_seconds": 900,
+          "keyed_client_seconds": 44.799,
+          "keyed_client_tests": 26,
+          "keyed_identity": {
+            "client_contract_sha256": "c5b00ad5b20e354dd29c0bb25978a61cec845b3fb8bdf2526f77fa39c24c0afd",
+            "gateway": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "gateway_patch_names": [
+              "cli-proxy-api-loopback-oauth.patch",
+              "cli-proxy-api-kimi-claude-compat.patch",
+              "cli-proxy-api-non-claude-cache-retention.patch",
+              "cli-proxy-api-management-readonly-allowlist.patch",
+              "cli-proxy-api-watcher-parentdir.patch",
+              "cli-proxy-api-serve-after-initial-auth-load.patch",
+              "cli-proxy-api-management-env-only.patch",
+              "cli-proxy-api-credential-save-report.patch",
+              "cli-proxy-api-credentialed-redirects.patch",
+              "cli-proxy-api-openai-compat-keyed-safety.patch",
+              "cli-proxy-api-auth-snapshot-locking.patch",
+              "cli-proxy-api-server-config-snapshot.patch",
+              "cli-proxy-api-plugin-host-locking.patch",
+              "cli-proxy-api-claude-metadata-locking.patch",
+              "cli-proxy-api-oauth-model-overlay.patch",
+              "cli-proxy-api-no-antigravity-egress.patch",
+              "cli-proxy-api-codex-client-identity.patch",
+              "cli-proxy-api-antigravity-loopback-callback.patch",
+              "cli-proxy-api-codex-api-key-safety.patch"
+            ],
+            "gateway_sha256": "acb0bafafb81be13c1993685c3427093dcebecfd1f300a0df0d52560169fd039",
+            "sources": {
+              "schemas/gateway.schema.json": "e047fd635b3d9b351d7390f9c6d9ece244c42f50902049844cb10cd592ff8533",
+              "schemas/models.schema.json": "1d6f195db3b0aec05fda7164a241c1941ed5c9ff9c53aaa957159811c83639d6",
+              "schemas/operator-ledger.schema.json": "19e3b4b472ea01ec4110bdcb4be3667e7c2b078dd22f09566cbe6f137aa652e2",
+              "schemas/operator-provider.schema.json": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6",
+              "schemas/providers.schema.json": "c13f85f84a1d2de669d930b81f26815c96295d55ee19ca5339cb802dbd5e5ff4",
+              "src/claude_multi/catalog.py": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0",
+              "src/claude_multi/cli/commands/models.py": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c",
+              "src/claude_multi/cli/commands/providers.py": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719",
+              "src/claude_multi/compiler.py": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77",
+              "src/claude_multi/discovery.py": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07",
+              "src/claude_multi/operator.py": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15",
+              "src/claude_multi/profile.py": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d",
+              "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
+              "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
+              "src/claude_multi/scope.py": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590",
+              "src/claude_multi/served_plan.py": "ca1af711690b174789b0a9426da3a57936c1972d1f613707cc7f0c394d29788f"
+            }
+          },
+          "not_a_gate_receipt": true,
+          "production_audit_enabled": false,
+          "relevant_sources": [
+            {
+              "path": "src/claude_multi/catalog.py",
+              "sha256": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0"
+            },
+            {
+              "path": "src/claude_multi/operator.py",
+              "sha256": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15"
+            },
+            {
+              "path": "src/claude_multi/render.py",
+              "sha256": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc"
+            },
+            {
+              "path": "src/claude_multi/served_plan.py",
+              "sha256": "ca1af711690b174789b0a9426da3a57936c1972d1f613707cc7f0c394d29788f"
+            },
+            {
+              "path": "src/claude_multi/qualify.py",
+              "sha256": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84"
+            },
+            {
+              "path": "src/claude_multi/discovery.py",
+              "sha256": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07"
+            },
+            {
+              "path": "src/claude_multi/profile.py",
+              "sha256": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d"
+            },
+            {
+              "path": "src/claude_multi/compiler.py",
+              "sha256": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77"
+            },
+            {
+              "path": "src/claude_multi/scope.py",
+              "sha256": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590"
+            },
+            {
+              "path": "src/claude_multi/cli/commands/models.py",
+              "sha256": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c"
+            },
+            {
+              "path": "src/claude_multi/cli/commands/providers.py",
+              "sha256": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719"
+            },
+            {
+              "path": "src/claude_multi/data/schemas/gateway.schema.json",
+              "sha256": "e047fd635b3d9b351d7390f9c6d9ece244c42f50902049844cb10cd592ff8533"
+            },
+            {
+              "path": "src/claude_multi/data/schemas/providers.schema.json",
+              "sha256": "c13f85f84a1d2de669d930b81f26815c96295d55ee19ca5339cb802dbd5e5ff4"
+            },
+            {
+              "path": "src/claude_multi/data/schemas/operator-provider.schema.json",
+              "sha256": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6"
+            },
+            {
+              "path": "src/claude_multi/data/schemas/operator-ledger.schema.json",
+              "sha256": "19e3b4b472ea01ec4110bdcb4be3667e7c2b078dd22f09566cbe6f137aa652e2"
+            },
+            {
+              "path": "src/claude_multi/data/schemas/models.schema.json",
+              "sha256": "1d6f195db3b0aec05fda7164a241c1941ed5c9ff9c53aaa957159811c83639d6"
+            }
+          ],
+          "schema": "keyed-complete-proof-v1",
+          "skipped": 0,
+          "status": "passed"
+        },
+        "sha256": "608410e4635548679321200c34fcff6746c3bf8d638aa6cfd296c19d4bcad62d"
+      },
+      "tests.keyed_journeys.json": {
+        "document": {
+          "binary": {
+            "realpath": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "version": "7.3.15"
+          },
+          "module": "tests.keyed_journeys",
+          "sandbox": {
+            "in_nix_sandbox": false,
+            "nix_build_top": null
+          },
+          "schema": "gwtest-evidence-v1",
+          "tables": {
+            "J1": [
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_dimmed",
+                "status": "passed"
+              },
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_declare_approve_apply_admit_qualify_bind",
+                "status": "passed"
+              },
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_packaging.PackageSourceTests.test_package_payload_excludes_operator_credentials_and_grants",
+                "status": "passed"
+              },
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_closed_target_refuses_audit",
+                "status": "passed"
+              },
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_open_target_requires_local_route_key_and_grants",
+                "status": "passed"
+              },
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_rechecks_headers_origins_collisions",
+                "status": "passed"
+              },
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_uses_existing_single_commit_barrier",
+                "status": "passed"
+              },
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_json_export_has_logical_refs_and_no_store_reads",
+                "status": "passed"
+              },
+              {
+                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "row": "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_new_off_approval_qualification_and_binding",
+                "status": "passed"
+              }
+            ]
+          }
+        },
+        "sha256": "644f10247c53782ff73799c453ba807129bf416463970b93c12143345eb20da0"
+      },
+      "tests.test_gateway_keyed_compat.json": {
+        "document": {
+          "binary": {
+            "realpath": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "version": "7.3.15"
+          },
+          "keyed_identity": {
+            "client_contract_sha256": "c5b00ad5b20e354dd29c0bb25978a61cec845b3fb8bdf2526f77fa39c24c0afd",
+            "gateway": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "gateway_patch_names": [
+              "cli-proxy-api-loopback-oauth.patch",
+              "cli-proxy-api-kimi-claude-compat.patch",
+              "cli-proxy-api-non-claude-cache-retention.patch",
+              "cli-proxy-api-management-readonly-allowlist.patch",
+              "cli-proxy-api-watcher-parentdir.patch",
+              "cli-proxy-api-serve-after-initial-auth-load.patch",
+              "cli-proxy-api-management-env-only.patch",
+              "cli-proxy-api-credential-save-report.patch",
+              "cli-proxy-api-credentialed-redirects.patch",
+              "cli-proxy-api-openai-compat-keyed-safety.patch",
+              "cli-proxy-api-auth-snapshot-locking.patch",
+              "cli-proxy-api-server-config-snapshot.patch",
+              "cli-proxy-api-plugin-host-locking.patch",
+              "cli-proxy-api-claude-metadata-locking.patch",
+              "cli-proxy-api-oauth-model-overlay.patch",
+              "cli-proxy-api-no-antigravity-egress.patch",
+              "cli-proxy-api-codex-client-identity.patch",
+              "cli-proxy-api-antigravity-loopback-callback.patch",
+              "cli-proxy-api-codex-api-key-safety.patch"
+            ],
+            "gateway_sha256": "acb0bafafb81be13c1993685c3427093dcebecfd1f300a0df0d52560169fd039",
+            "sources": {
+              "schemas/gateway.schema.json": "e047fd635b3d9b351d7390f9c6d9ece244c42f50902049844cb10cd592ff8533",
+              "schemas/models.schema.json": "1d6f195db3b0aec05fda7164a241c1941ed5c9ff9c53aaa957159811c83639d6",
+              "schemas/operator-ledger.schema.json": "19e3b4b472ea01ec4110bdcb4be3667e7c2b078dd22f09566cbe6f137aa652e2",
+              "schemas/operator-provider.schema.json": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6",
+              "schemas/providers.schema.json": "c13f85f84a1d2de669d930b81f26815c96295d55ee19ca5339cb802dbd5e5ff4",
+              "src/claude_multi/catalog.py": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0",
+              "src/claude_multi/cli/commands/models.py": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c",
+              "src/claude_multi/cli/commands/providers.py": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719",
+              "src/claude_multi/compiler.py": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77",
+              "src/claude_multi/discovery.py": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07",
+              "src/claude_multi/operator.py": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15",
+              "src/claude_multi/profile.py": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d",
+              "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
+              "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
+              "src/claude_multi/scope.py": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590",
+              "src/claude_multi/served_plan.py": "ca1af711690b174789b0a9426da3a57936c1972d1f613707cc7f0c394d29788f"
+            }
+          },
+          "module": "tests.test_gateway_keyed_compat",
+          "sandbox": {
+            "in_nix_sandbox": false,
+            "nix_build_top": null
+          },
+          "schema": "gwtest-evidence-v1",
+          "selected": [
+            "audit",
+            "core"
+          ],
+          "tables": {
+            "audit": [
+              {
+                "credential_match": true,
+                "refused_gateway_auth_hits": 0,
+                "row": "K1-headers",
+                "status": "passed"
+              },
+              {
+                "matching_final_discriminators": 3,
+                "row": "P1-CR1-KS1",
+                "status": "passed"
+              },
+              {
+                "alias_and_sentinel_required": true,
+                "audit_is_not_admission": true,
+                "capture_before_publish": true,
+                "row": "A1-authority",
+                "status": "passed"
+              },
+              {
+                "requests": 12,
+                "row": "K12-qualification",
+                "status": "passed",
+                "strict_no_retry": true,
+                "transmitted_levels": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
+              },
+              {
+                "captured_only": true,
+                "row": "K1-omissions",
+                "shared_wire_sibling": true,
+                "status": "passed",
+                "unusable_keys": 5
+              },
+              {
+                "diagnostics": 5,
+                "managed_chat_hits": 2,
+                "raw_non_authorable": true,
+                "row": "P1-controls",
+                "status": "passed"
+              },
+              {
+                "canary_absent": true,
+                "management_modes": 2,
+                "row": "M1",
+                "status": "passed"
+              },
+              {
+                "cases": 50,
+                "destination_hits": 0,
+                "fixed_error": true,
+                "row": "CR1",
+                "status": "passed"
+              },
+              {
+                "parallel_split_calls": 2,
+                "returned_history_equal": true,
+                "row": "F1",
+                "status": "passed",
+                "tool_variants": 2
+              },
+              {
+                "cases": 64,
+                "credential_echo": false,
+                "debug_checked": true,
+                "diagnostics": 9,
+                "row": "KS1",
+                "status": "passed"
+              },
+              {
+                "default_preserves_reasoning": false,
+                "is_error_lost": true,
+                "is_error_refusal_hits": 1,
+                "max_completion_tokens_absent": true,
+                "raw_compat_control_preserves": true,
+                "row": "F1-losses",
+                "schema_normalized": true,
+                "status": "passed",
+                "strict_flag_lost": true,
+                "strict_no_retry": true,
+                "strict_refusal_features": [
+                  "effort",
+                  "history",
+                  "max-completion",
+                  "schema",
+                  "strict",
+                  "usage"
+                ],
+                "unsigned_reasoning": true
+              }
+            ],
+            "core": [
+              {
+                "credential_version_match": true,
+                "row": "A1-reload",
+                "sentinel_changed": true,
+                "status": "passed"
+              },
+              {
+                "clean_missing_done_accepted": true,
+                "count_tokens_hits": 0,
+                "delayed_usage": true,
+                "generation_hits": 1,
+                "malformed_frame_failed": true,
+                "missing_usage_output_zero": true,
+                "premature_disconnect_failed": true,
+                "row": "S1",
+                "status": "passed",
+                "terminal_cases": 10
+              },
+              {
+                "capability_sets": 3,
+                "row": "K12",
+                "status": "passed",
+                "streaming_modes": 2,
+                "suffix_cells": 30,
+                "suffix_wins": true,
+                "unknown_level_cells": 6,
+                "unknown_level_hits": 0
+              },
+              {
+                "cases": 4,
+                "credential_match": true,
+                "row": "K1-pairing",
+                "status": "passed"
+              },
+              {
+                "row": "K1-render",
+                "status": "passed",
+                "tls": true,
+                "upstream_hits": 1
+              }
+            ]
+          }
+        },
+        "sha256": "ad61daef27861c03833a48d2b89f04bf696b7138173aad4ef379bfc7f5345005"
+      },
+      "tests.test_keyed_compat_client.json": {
+        "document": {
+          "binary": {
+            "realpath": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "version": "7.3.15"
+          },
+          "keyed_identity": {
+            "client_contract_sha256": "c5b00ad5b20e354dd29c0bb25978a61cec845b3fb8bdf2526f77fa39c24c0afd",
+            "gateway": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "gateway_patch_names": [
+              "cli-proxy-api-loopback-oauth.patch",
+              "cli-proxy-api-kimi-claude-compat.patch",
+              "cli-proxy-api-non-claude-cache-retention.patch",
+              "cli-proxy-api-management-readonly-allowlist.patch",
+              "cli-proxy-api-watcher-parentdir.patch",
+              "cli-proxy-api-serve-after-initial-auth-load.patch",
+              "cli-proxy-api-management-env-only.patch",
+              "cli-proxy-api-credential-save-report.patch",
+              "cli-proxy-api-credentialed-redirects.patch",
+              "cli-proxy-api-openai-compat-keyed-safety.patch",
+              "cli-proxy-api-auth-snapshot-locking.patch",
+              "cli-proxy-api-server-config-snapshot.patch",
+              "cli-proxy-api-plugin-host-locking.patch",
+              "cli-proxy-api-claude-metadata-locking.patch",
+              "cli-proxy-api-oauth-model-overlay.patch",
+              "cli-proxy-api-no-antigravity-egress.patch",
+              "cli-proxy-api-codex-client-identity.patch",
+              "cli-proxy-api-antigravity-loopback-callback.patch",
+              "cli-proxy-api-codex-api-key-safety.patch"
+            ],
+            "gateway_sha256": "acb0bafafb81be13c1993685c3427093dcebecfd1f300a0df0d52560169fd039",
+            "sources": {
+              "schemas/gateway.schema.json": "e047fd635b3d9b351d7390f9c6d9ece244c42f50902049844cb10cd592ff8533",
+              "schemas/models.schema.json": "1d6f195db3b0aec05fda7164a241c1941ed5c9ff9c53aaa957159811c83639d6",
+              "schemas/operator-ledger.schema.json": "19e3b4b472ea01ec4110bdcb4be3667e7c2b078dd22f09566cbe6f137aa652e2",
+              "schemas/operator-provider.schema.json": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6",
+              "schemas/providers.schema.json": "c13f85f84a1d2de669d930b81f26815c96295d55ee19ca5339cb802dbd5e5ff4",
+              "src/claude_multi/catalog.py": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0",
+              "src/claude_multi/cli/commands/models.py": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c",
+              "src/claude_multi/cli/commands/providers.py": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719",
+              "src/claude_multi/compiler.py": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77",
+              "src/claude_multi/discovery.py": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07",
+              "src/claude_multi/operator.py": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15",
+              "src/claude_multi/profile.py": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d",
+              "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
+              "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
+              "src/claude_multi/scope.py": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590",
+              "src/claude_multi/served_plan.py": "ca1af711690b174789b0a9426da3a57936c1972d1f613707cc7f0c394d29788f"
+            }
+          },
+          "module": "tests.test_keyed_compat_client",
+          "sandbox": {
+            "in_nix_sandbox": false,
+            "nix_build_top": null
+          },
+          "schema": "gwtest-evidence-v1",
+          "selected": [
+            "client"
+          ],
+          "tables": {
+            "client": [
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "compact_events": 1,
+                "count_tokens_ingress": 0,
+                "genuine_compact_image_sdk_hits": 0,
+                "requests": 6,
+                "row": "C2-auto",
+                "status": "passed",
+                "thinking_type_present": true,
+                "transport_requests": 1
+              },
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "distinct_wire": true,
+                "intended_effort": "max",
+                "requests": 4,
+                "row": "C1-agent",
+                "status": "passed",
+                "thinking_type_present": true
+              },
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "default_child_dispatched": true,
+                "explicit_auto_child_hits": 0,
+                "requests": 12,
+                "row": "C1-permission",
+                "status": "passed",
+                "thinking_type_present": true
+              },
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "requests": 2,
+                "row": "C1-lead",
+                "status": "passed",
+                "thinking_type_present": true,
+                "tool_continuation": true
+              },
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "requests": 2,
+                "returned_thinking_history": true,
+                "returned_tool_history": true,
+                "row": "C1-replay",
+                "status": "passed",
+                "thinking_type_present": true
+              },
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "fast_speed": false,
+                "requests": 2,
+                "row": "C1-policy",
+                "spawning_skill_child_hits": 0,
+                "status": "passed",
+                "thinking_type_present": true
+              },
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "intended_effort": "high",
+                "requests": 4,
+                "row": "C1-workflow",
+                "status": "passed",
+                "thinking_type_present": true,
+                "workflow_distinct_wire": true
+              },
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "forbidden_wire_hits": 0,
+                "lead_wire_child_hits": 0,
+                "permission_modes": 2,
+                "requests": 4,
+                "row": "C1-fence-fallback",
+                "status": "passed",
+                "thinking_type_present": true,
+                "workflow_default_child_hits": 1
+              },
+              {
+                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "compact_events": 1,
+                "count_tokens_ingress": 0,
+                "genuine_compact_image_sdk_hits": 0,
+                "requests": 4,
+                "row": "C2-manual",
+                "status": "passed",
+                "thinking_type_present": true,
+                "transport_requests": 1
+              }
+            ]
+          }
+        },
+        "sha256": "85e5e964d3078cbf2024e4646848c1b95e37432a00ba089af7c68bec8c8c600e"
+      }
+    },
+    "validated_exit": 0
+  },
+  "excluded_patch_numbers": [
+    11
+  ],
+  "gateway": {
+    "base_inputs": {
+      "nodes": {
+        "nixpkgs": {
+          "locked": {
+            "lastModified": 1783776592,
+            "narHash": "sha256-UgCQzxeWI75XM8G+hPrPh+MKzEPjG3SpAj7dtqSbksA=",
+            "owner": "nixos",
+            "repo": "nixpkgs",
+            "rev": "e7a3ca8092b61ff85b6a45bf863ea2b2d6a661b3",
+            "type": "github"
+          },
+          "original": {
+            "owner": "nixos",
+            "ref": "nixos-unstable",
+            "repo": "nixpkgs",
+            "type": "github"
+          }
+        },
+        "root": {
+          "inputs": {
+            "nixpkgs": "nixpkgs"
+          }
+        }
+      },
+      "root": "root",
+      "version": 7
+    },
+    "binary_sha256": {
+      "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api": "acb0bafafb81be13c1993685c3427093dcebecfd1f300a0df0d52560169fd039",
+      "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-executor-probe": "6027263e907a7039d458303910080fea458366d21bc47d9c67025048071e545b",
+      "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-handlers-probe": "cf22d760a0a5273cbdfd39aa6916fd228d36f130d71305264e49ffdd2de47d32",
+      "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-startup-probe": "f689d430f78b91d2ff0434e89bf16f5dbb40aa31bf0aac34613faa7a85fc111c"
+    },
+    "build_definition_sha256": "4e721a9fa02dd9859bdb34d593d719cf4b596568af0dd6f115742559adeba916",
+    "consumed_go_modules": "/nix/store/xkljmgxi3cwh12myims7q3m9hjgmw0yf-cli-proxy-api-7.3.15-go-modules",
+    "derivation": "/nix/store/k0wh7hfggmjmjp4bk596q7q8vpxgbrir-cli-proxy-api-linux-amd64-7.3.15.drv",
+    "executor_omission": "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-executor-probe",
+    "gateway": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+    "handlers_omission": "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-handlers-probe",
+    "numbered_to_shipped": [
+      {
+        "identity": "cli-proxy-api-loopback-oauth.patch@2eb510b85f5204820d7a3d70c9b9a7bce283b1a7f23ead305ddfe28d500163a5",
+        "number": 1
+      },
+      {
+        "identity": "cli-proxy-api-kimi-claude-compat.patch@d8b4be92c5fd496980c4ad02e3e973cabb5570dc19f416b6336a608a044d2d44",
+        "number": 2
+      },
+      {
+        "identity": "cli-proxy-api-non-claude-cache-retention.patch@6e022c54355322e5a307156ec1301710d50faff3f75dfc058506b17c6145128b",
+        "number": 3
+      },
+      {
+        "identity": "cli-proxy-api-management-readonly-allowlist.patch@c51d077d12280eee9419e7f928293c43a82b6839e279539ff9195a5fd885b59c",
+        "number": 4
+      },
+      {
+        "identity": "cli-proxy-api-watcher-parentdir.patch@a31e05f009b66c6b74a4d6767073553f05edad8de362542899773955672c7b5c",
+        "number": 5
+      },
+      {
+        "identity": "cli-proxy-api-serve-after-initial-auth-load.patch@600f4c5bc0cf90dbd11ad5a48b84c007050a948efcc754b30648856f4e8bba70",
+        "number": 6
+      },
+      {
+        "identity": "cli-proxy-api-management-env-only.patch@09e56ff25352761b2f7c3b208876e09c108daf259def78e47a260d9e9cf564cd",
+        "number": 7
+      },
+      {
+        "identity": "cli-proxy-api-credential-save-report.patch@c04cc0fc0af41dca57a801e87ee8cf4e4aba8377c716a8ca2ff1621d0f8d5107",
+        "number": 8
+      },
+      {
+        "identity": "cli-proxy-api-credentialed-redirects.patch@211c8157076a8a5e640796aae913853ba7719a5d9222349e58b98fe8102a40b1",
+        "number": 9
+      },
+      {
+        "identity": "cli-proxy-api-openai-compat-keyed-safety.patch@70878f4df3027f322aa2be2298b6f9472d9815ab3d3411578e9bcdf1cabf9f20",
+        "number": 10
+      },
+      {
+        "identity": "cli-proxy-api-auth-snapshot-locking.patch@a6ecd426d45d91d74ef4c830982c1b0ad3b6f7dfcad3c0f1ff6123fbfe29dbfd",
+        "number": 12
+      },
+      {
+        "identity": "cli-proxy-api-server-config-snapshot.patch@aa5106979d08018c80e0c3fabd7784f7b44c49bac5350ff5a760bac2e7279c0d",
+        "number": 13
+      },
+      {
+        "identity": "cli-proxy-api-plugin-host-locking.patch@d7ec5447735613fa64ce21269ebbd578ea70561d091120de8fc26379de756567",
+        "number": 14
+      },
+      {
+        "identity": "cli-proxy-api-claude-metadata-locking.patch@35b69fdcfac2223f76a71956c82f772e3608af20dea68dd1ff393443d707e4e0",
+        "number": 15
+      },
+      {
+        "identity": "cli-proxy-api-oauth-model-overlay.patch@ee11e0e82bbe81b4953b02d0c7e881e84a5d0d78425420e5cca1d76cb4228a2f",
+        "number": 16
+      },
+      {
+        "identity": "cli-proxy-api-no-antigravity-egress.patch@233443d22a411ee935b4c0776c26992543a5b97d1241784db5bf726ca80464c6",
+        "number": 17
+      },
+      {
+        "identity": "cli-proxy-api-codex-client-identity.patch@b4ffbda891ee82dbd0441dfa6a6b1d154fd82be33dc4c5e2edb2526eeb041c65",
+        "number": 18
+      },
+      {
+        "identity": "cli-proxy-api-antigravity-loopback-callback.patch@f728ba3eb999266d30137cd7d4501d54cdb9613c2cc33579194a6d7b9a23a523",
+        "number": 19
+      },
+      {
+        "identity": "cli-proxy-api-codex-api-key-safety.patch@b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628",
+        "number": 20
+      }
+    ],
+    "ordered_manifest": {
+      "patches": [
+        "cli-proxy-api-loopback-oauth.patch@2eb510b85f5204820d7a3d70c9b9a7bce283b1a7f23ead305ddfe28d500163a5",
+        "cli-proxy-api-kimi-claude-compat.patch@d8b4be92c5fd496980c4ad02e3e973cabb5570dc19f416b6336a608a044d2d44",
+        "cli-proxy-api-non-claude-cache-retention.patch@6e022c54355322e5a307156ec1301710d50faff3f75dfc058506b17c6145128b",
+        "cli-proxy-api-management-readonly-allowlist.patch@c51d077d12280eee9419e7f928293c43a82b6839e279539ff9195a5fd885b59c",
+        "cli-proxy-api-watcher-parentdir.patch@a31e05f009b66c6b74a4d6767073553f05edad8de362542899773955672c7b5c",
+        "cli-proxy-api-serve-after-initial-auth-load.patch@600f4c5bc0cf90dbd11ad5a48b84c007050a948efcc754b30648856f4e8bba70",
+        "cli-proxy-api-management-env-only.patch@09e56ff25352761b2f7c3b208876e09c108daf259def78e47a260d9e9cf564cd",
+        "cli-proxy-api-credential-save-report.patch@c04cc0fc0af41dca57a801e87ee8cf4e4aba8377c716a8ca2ff1621d0f8d5107",
+        "cli-proxy-api-credentialed-redirects.patch@211c8157076a8a5e640796aae913853ba7719a5d9222349e58b98fe8102a40b1",
+        "cli-proxy-api-openai-compat-keyed-safety.patch@70878f4df3027f322aa2be2298b6f9472d9815ab3d3411578e9bcdf1cabf9f20",
+        "cli-proxy-api-auth-snapshot-locking.patch@a6ecd426d45d91d74ef4c830982c1b0ad3b6f7dfcad3c0f1ff6123fbfe29dbfd",
+        "cli-proxy-api-server-config-snapshot.patch@aa5106979d08018c80e0c3fabd7784f7b44c49bac5350ff5a760bac2e7279c0d",
+        "cli-proxy-api-plugin-host-locking.patch@d7ec5447735613fa64ce21269ebbd578ea70561d091120de8fc26379de756567",
+        "cli-proxy-api-claude-metadata-locking.patch@35b69fdcfac2223f76a71956c82f772e3608af20dea68dd1ff393443d707e4e0",
+        "cli-proxy-api-oauth-model-overlay.patch@ee11e0e82bbe81b4953b02d0c7e881e84a5d0d78425420e5cca1d76cb4228a2f",
+        "cli-proxy-api-no-antigravity-egress.patch@233443d22a411ee935b4c0776c26992543a5b97d1241784db5bf726ca80464c6",
+        "cli-proxy-api-codex-client-identity.patch@b4ffbda891ee82dbd0441dfa6a6b1d154fd82be33dc4c5e2edb2526eeb041c65",
+        "cli-proxy-api-antigravity-loopback-callback.patch@f728ba3eb999266d30137cd7d4501d54cdb9613c2cc33579194a6d7b9a23a523",
+        "cli-proxy-api-codex-api-key-safety.patch@b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628"
+      ],
+      "upstream_version": "7.3.15",
+      "version": 1
+    },
+    "recipe_sha256": {
+      "gateway/UPSTREAM.json": "d4cd7c46695f35fec02016c88ffa125d057bf6f04dbdeaef1fa88b7c22f0174a",
+      "tools/build.py": "c9a41cda7b5d5e39da9e6ce9b4c780c46e64d0e27762f15b59828dd8df91007c"
+    },
+    "source_hash": "sha256-s6Vdpcl7Hr85azsZ2DpkEQyod9eE9UQizKiYAJtguwY=",
+    "source_tag": "v7.3.15",
+    "startup": "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-startup-probe",
+    "upstream_version": "7.3.15",
+    "vendor_hash": "sha256-r3yWkdMcM40G9jV7MxW/qNv3E9WrHavFilW24quEf+8="
+  },
+  "package_root": ".",
+  "required_patch_numbers": [
+    3,
+    9,
+    10
+  ],
+  "route": {
+    "adapter": "cliproxy-openai-compat-v1",
+    "auth": "bearer",
+    "ingress": "/v1/messages",
+    "kind": "openai-compatible",
+    "scheme": "https",
+    "transport": "direct-openai",
+    "upstream": "/chat/completions"
+  },
+  "route_dependencies": [
+    "#2 compatibility selection/translation context",
+    "#3 final outbound retention",
+    "#4/#7 management boundary",
+    "#5 reload and #6 initial auth barrier",
+    "#9 redirects -> #10 keyed safety (declared dependency)",
+    "#12 auth snapshot/#13 server config/#14 plugin host/#15 Claude metadata snapshots",
+    "#16 OAuth overlay and capability registration coexistence",
+    "#17 local-model egress suppression",
+    "#18 Codex identity consumed unchanged (not a keyed safety fix)",
+    "#19 Antigravity callback confinement and #20 dedicated Codex API-key safety coexistence",
+    "Pinned upstream translator/thinking/config/auth/capability selection, Go/vendor inputs, renderer/operator/schema/served-plan/qualifier and final client compiler"
+  ],
+  "source_report": {
+    "document": {
+      "evidence_dir": "tests/fixtures",
+      "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+      "relevant_sources": [
+        {
+          "path": "src/claude_multi/catalog.py",
+          "sha256": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0"
+        },
+        {
+          "path": "src/claude_multi/operator.py",
+          "sha256": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15"
+        },
+        {
+          "path": "src/claude_multi/render.py",
+          "sha256": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc"
+        },
+        {
+          "path": "src/claude_multi/served_plan.py",
+          "sha256": "ca1af711690b174789b0a9426da3a57936c1972d1f613707cc7f0c394d29788f"
+        },
+        {
+          "path": "src/claude_multi/qualify.py",
+          "sha256": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84"
+        },
+        {
+          "path": "src/claude_multi/discovery.py",
+          "sha256": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07"
+        },
+        {
+          "path": "src/claude_multi/profile.py",
+          "sha256": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d"
+        },
+        {
+          "path": "src/claude_multi/compiler.py",
+          "sha256": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77"
+        },
+        {
+          "path": "src/claude_multi/scope.py",
+          "sha256": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590"
+        },
+        {
+          "path": "src/claude_multi/cli/commands/models.py",
+          "sha256": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c"
+        },
+        {
+          "path": "src/claude_multi/cli/commands/providers.py",
+          "sha256": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719"
+        },
+        {
+          "path": "src/claude_multi/data/schemas/gateway.schema.json",
+          "sha256": "e047fd635b3d9b351d7390f9c6d9ece244c42f50902049844cb10cd592ff8533"
+        },
+        {
+          "path": "src/claude_multi/data/schemas/providers.schema.json",
+          "sha256": "c13f85f84a1d2de669d930b81f26815c96295d55ee19ca5339cb802dbd5e5ff4"
+        },
+        {
+          "path": "src/claude_multi/data/schemas/operator-provider.schema.json",
+          "sha256": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6"
+        },
+        {
+          "path": "src/claude_multi/data/schemas/operator-ledger.schema.json",
+          "sha256": "19e3b4b472ea01ec4110bdcb4be3667e7c2b078dd22f09566cbe6f137aa652e2"
+        },
+        {
+          "path": "src/claude_multi/data/schemas/models.schema.json",
+          "sha256": "1d6f195db3b0aec05fda7164a241c1941ed5c9ff9c53aaa957159811c83639d6"
+        }
+      ]
+    },
+    "sha256": "693e0575caec4a8745bf1c1e8d5ed3a6e8d03f871e83a6cfc8c4eb4a40c1d03e"
+  },
+  "version": 1
+}

@@ -1,0 +1,824 @@
+# claude-multi release candidate: resolve, build, reproduce, vulnerabilities,
+# evidence, journeys, service, draft.
+#
+# resolve      the one commit every job checks out: a tag push's commit, or
+#              a manual run's ref (a tag, branch or commit); a manual run
+#              builds only, unless draft is true and ref names an existing
+#              v* tag at that commit (checked here, before anything costly;
+#              .github/scripts/release_ref.py)
+# build        the gateway for the four targets, then the four bundles, on
+#              x86_64 Linux (tools/build.py), and the gateway's diagnostic
+#              probes for the evidence (.github/scripts/gateway_probes.py)
+# reproduce    a second build on arm64 Linux; release compare checks the
+#              gateway bytes, each bundle's uncompressed archive hash (every
+#              file, the bytecode included), the launcher bytecode, the
+#              manifest and both installers (each build's SHA256SUMS against
+#              its files first)
+# bytecode     the launcher bytecode compiled on macOS must equal Linux's
+# vulnerabilities  govulncheck (binary mode) on each shipped gateway binary;
+#              a finding or a check that cannot run fails
+# evidence     every producer of the essential Claude Code evidence on the
+#              exact pinned client (verified against the shipped contract),
+#              under bubblewrap, on ubuntu-24.04, with the candidate gateway
+#              and its probes (bound to the build record); the product's own
+#              completion check on the log, which is kept with a manifest
+#              (.github/scripts/evidence.py)
+# journeys     the exact bundles installed as a new user would (install.sh
+#              with an ephemeral key) on Ubuntu 22.04 and 24.04, Debian 12
+#              and Fedora containers, arm64 Linux (linux-aarch64), macOS 15
+#              (on-demand gateway), Intel macOS (darwin-x86_64, only when the
+#              repository variable CM_MACOS_INTEL_RUNNER names a runner) and
+#              WSL 2 on Windows Server 2025, where install.ps1 itself checks
+#              and installs WSL 2 and runs install.sh in the distribution
+#              (its Pester suite too): the installation channel, the pinned
+#              Claude Code, the gateway lifecycle and its loopback
+#              confinement, a first managed turn against a fixture provider
+#              and its resume, the uninstall once the session recorded its
+#              end; the update and rollback journey on two test builds of
+#              this commit that trust the ephemeral key (the release key
+#              never enters CI)
+# service      the supervised gateway service under a real systemd user
+#              manager (a dedicated user with lingering)
+# draft        a draft GitHub release with the unsigned assets, behind the
+#              protected "release" environment (tag pushes, and manual runs
+#              with draft: true on a v* tag)
+#
+# Signing is never done here: the release key stays with the maintainer,
+# who signs SHA256SUMS after reproducing the build and attaches the
+# signature to the draft. No Claude Code bytes are uploaded or cached (the
+# no-bundle guard runs before every upload); the pinned client lives in the
+# runner's temporary directory only. Build and test jobs hold read access
+# only; only the draft job can write, and only after its environment's
+# approval. No provider calls.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: tag, branch or commit to build
+        required: true
+        type: string
+      draft:
+        description: also draft the release (ref must name an existing v* tag)
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONPATH: src:tests
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      draft: ${{ steps.resolve.outputs.draft }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: One commit for every job, and whether this run drafts
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          PUSH_REF: ${{ github.ref }}
+          PUSH_SHA: ${{ github.sha }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+        run: |
+          umask 077
+          python3 .github/scripts/release_ref.py --event="$EVENT" --ref="$PUSH_REF" --sha="$PUSH_SHA" \
+            --input-ref="$INPUT_REF" --draft="${INPUT_DRAFT:-false}" >"$RUNNER_TEMP/resolved"
+          cat "$RUNNER_TEMP/resolved"
+          cat "$RUNNER_TEMP/resolved" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      epoch: ${{ steps.epoch.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Source date
+        id: epoch
+        run: |
+          umask 077
+          echo "epoch=$(git log -1 --format=%ct)" >>"$GITHUB_OUTPUT"
+      - name: Build the gateway (four shipped targets)
+        run: |
+          umask 077
+          python3 tools/build.py gateway fetch vendor apply build inspect record --target shipped \
+            --work "$RUNNER_TEMP/gateway-work" --dist gateway-dist
+      - name: The gateway's diagnostic probes (this host's target, from the same prepared tree)
+        run: |
+          umask 077
+          python3 .github/scripts/gateway_probes.py compile --work "$RUNNER_TEMP/gateway-work" \
+            --dist gateway-dist --out gateway-probes
+      - name: Build the release
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.epoch }}
+        run: |
+          umask 077
+          python3 tools/build.py release --out dist --gateway-dist gateway-dist
+      - name: Launcher bytecode identity (Linux)
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.epoch }}
+        run: |
+          umask 077
+          python3 tools/_build/python_runtime.py host-interpreter --work "$RUNNER_TEMP/py" >"$RUNNER_TEMP/host.json"
+          python=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["python"])' "$RUNNER_TEMP/host.json")
+          cp -R src "$RUNNER_TEMP/src"
+          python3 tools/_build/python_runtime.py compile --python "$python" --tree "$RUNNER_TEMP/src" \
+            --ddir lib/python3.14/site-packages --epoch "$SOURCE_DATE_EPOCH" >dist/bytecode-linux.json
+      - name: No Claude Code bytes
+        run: |
+          umask 077
+          python3 tools/_build/no_bundle_guard.py dist gateway-dist gateway-probes
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gateway-dist
+          path: gateway-dist
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gateway-probes
+          path: gateway-probes
+          retention-days: 7
+          if-no-files-found: error
+
+  reproduce:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Rebuild everything on another architecture
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.build.outputs.epoch }}
+        run: |
+          umask 077
+          python3 tools/build.py release --out rebuilt
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Gateway bytes, archive contents and bytecode are identical
+        run: |
+          umask 077
+          python3 tools/build.py release compare --out dist --other rebuilt
+
+  bytecode:
+    needs: [resolve, build]
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Compile the launcher on macOS and compare
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.build.outputs.epoch }}
+        run: |
+          umask 077
+          python3 tools/_build/python_runtime.py host-interpreter --work "$RUNNER_TEMP/py" >"$RUNNER_TEMP/host.json"
+          python=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["python"])' "$RUNNER_TEMP/host.json")
+          cp -R src "$RUNNER_TEMP/src"
+          python3 tools/_build/python_runtime.py compile --python "$python" --tree "$RUNNER_TEMP/src" \
+            --ddir lib/python3.14/site-packages --epoch "$SOURCE_DATE_EPOCH" >"$RUNNER_TEMP/bytecode-macos.json"
+          python3 - dist/bytecode-linux.json "$RUNNER_TEMP/bytecode-macos.json" <<'EOF'
+          import json, sys
+          linux, macos = (json.load(open(path))["pyc_sha256"] for path in sys.argv[1:3])
+          if linux != macos:
+              sys.exit("Linux and macOS bytecode differ: compile at install time instead")
+          EOF
+
+  vulnerabilities:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: govulncheck on each shipped gateway binary
+        run: |
+          umask 077
+          GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          mkdir -p evidence
+          python3 tools/_build/vulncheck.py --dist dist --out evidence/vulncheck.json \
+            --govulncheck "$RUNNER_TEMP/bin/govulncheck" \
+            --dispositions gateway/vulnerability-dispositions.json
+      - name: No Claude Code bytes
+        id: guard
+        if: always()
+        run: |
+          umask 077
+          python3 tools/_build/no_bundle_guard.py evidence
+      # The evidence is uploaded after a failed vulnerability check too, but
+      # never when the guard itself failed or did not run.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.guard.outcome == 'success'
+        with:
+          name: vulncheck
+          path: evidence
+          retention-days: 30
+          if-no-files-found: error
+
+  evidence:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Unprivileged user namespaces for bubblewrap
+        run: |
+          umask 077
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gateway-dist
+          path: ${{ runner.temp }}/gateway-dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gateway-probes
+          path: ${{ runner.temp }}/gateway-probes
+      - name: The candidate gateway and its diagnostic probes, bound to the build record
+        run: |
+          umask 077
+          python3 .github/scripts/gateway_probes.py provision --dist "$RUNNER_TEMP/gateway-dist" \
+            --probes "$RUNNER_TEMP/gateway-probes" >"$RUNNER_TEMP/gateway.env"
+          cat "$RUNNER_TEMP/gateway.env"
+          cat "$RUNNER_TEMP/gateway.env" >>"$GITHUB_ENV"
+      - name: The exact pinned Claude Code (outside the workspace; verified when the runner places it)
+        run: |
+          umask 077
+          python3 - "$RUNNER_TEMP/pin.json" <<'EOF'
+          import json, sys
+          sys.path.insert(0, "src")
+          from claude_multi import acquire, pin, strict_json
+          contract = strict_json.load("src/claude_multi/data/catalog/native-contract.json")
+          platform = pin.host_platform()
+          record = pin.platform_record(contract, platform)
+          json.dump({"version": pin.version(contract), "platform": platform, "sha256": record["sha256"],
+                     "size": record["size"], "url": acquire.download_url(pin.version(contract), platform)},
+                    open(sys.argv[1], "w"))
+          EOF
+          url=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["url"])' "$RUNNER_TEMP/pin.json")
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$RUNNER_TEMP/claude" "$url"
+          chmod 755 "$RUNNER_TEMP/claude"
+          cat "$RUNNER_TEMP/pin.json"
+      # Every module that prints an essential completion line (a test in
+      # tests/test_release_ci.py derives this from claude_multi.upgrade).
+      # The real-client tests must run; the two retained-client diagnostics
+      # (the stop-gate probe and AD, daemon adoption onto a newer client)
+      # need clients this runner does not have, so their skips are allowed.
+      # --verbose keeps each skipped test with its reason in the log (the AD
+      # outcome); unbuffered output keeps each completion line whole.
+      - name: Essential evidence on the pinned client (isolated, no login, fixture providers), checked for completion
+        timeout-minutes: 170
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          umask 077
+          modules=(tests.test_scope_probe tests.test_scope_probe_client tests.test_scope_probe_seeds
+            tests.test_managed_skill_policy tests.test_client_agents tests.test_client_gateway_auth
+            tests.test_client_hooks tests.test_client_models tests.test_client_skill_workflow
+            tests.test_agent_window_probe)
+          printf '%s\n' "${modules[@]}" >"$RUNNER_TEMP/modules"
+          required='test_client_(agents|gateway_auth|hooks|models|skill_workflow)\b|RealPinnedBinaryTests(?!\.(test_real_takeover_probe_stop_gate|test_real_adoption_onto_newer_plain_claude)$)'
+          python3 tools/test.py --verbose --claude "$RUNNER_TEMP/claude" --require "$required" \
+            "${modules[@]}" 2>&1 | tee "$RUNNER_TEMP/battery.log"
+          status=${PIPESTATUS[0]}
+          python3 .github/scripts/evidence.py --log "$RUNNER_TEMP/battery.log" --status "$status" \
+            --claude "$RUNNER_TEMP/claude" --modules "$RUNNER_TEMP/modules" --out evidence
+      - name: No Claude Code bytes in the workspace
+        id: guard
+        if: always()
+        run: |
+          umask 077
+          rm -f "$RUNNER_TEMP/claude"
+          python3 tools/_build/no_bundle_guard.py .
+      # The evidence (the log and its manifest) is kept after a failed
+      # battery too, but never when the guard itself failed or did not run.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.guard.outcome == 'success'
+        with:
+          name: evidence
+          path: evidence
+          retention-days: 30
+          if-no-files-found: error
+
+  journeys-linux:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned by image index digest (.github/PINS.md).
+        image:
+          - "ubuntu:22.04@sha256:b1066385161d28ddf6bc7e7b28a9170eec11484c821d1a5150d176cbde41d7f7"
+          - "ubuntu:24.04@sha256:a853f94d226358a79c740cfc7bce0c289748f3fe3488d921d038ccd752c61b60"
+          - "debian:12@sha256:f37a335e82bca302e955fa39f9dfe28f1be618f016f8a2b56318e5a5111afc26"
+          - "fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80"
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Base tools
+        run: |
+          umask 077
+          if command -v apt-get >/dev/null; then
+            apt-get update && apt-get install --yes --no-install-recommends openssh-client ca-certificates procps curl
+          else
+            dnf install --assumeyes openssh-clients tar gzip procps-ng
+            command -v curl >/dev/null || dnf install --assumeyes curl
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Fresh install, doctor, gateway lifecycle and confinement, managed fixture turn and resume, uninstall keeping the state (an unprivileged user)
+        timeout-minutes: 20
+        run: |
+          umask 077
+          useradd --create-home journey
+          cp -R dist .github packaging /home/journey/
+          chown -R journey /home/journey
+          # shellcheck disable=SC2016 # $HOME is the journey user's, expanded by its shell
+          su journey -c 'umask 077; cd "$HOME" && JOURNEY_PERMISSIONS=1 JOURNEY_CLIENT=fetch sh .github/scripts/journey.sh install dist'
+
+  journeys-linux-arm64:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Fresh install of the linux-aarch64 bundle, doctor, client smoke, gateway lifecycle and confinement, managed fixture turn and resume, uninstall keeping the state
+        timeout-minutes: 20
+        run: |
+          umask 077
+          JOURNEY_CLIENT=fetch JOURNEY_TARGET=linux-aarch64 sh .github/scripts/journey.sh install dist
+      - name: No Claude Code bytes in the workspace
+        if: always()
+        run: |
+          umask 077
+          python3 tools/_build/no_bundle_guard.py .
+
+  service-linux:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: The supervised gateway service under a real systemd user manager (a dedicated user with lingering, an alternate port)
+        timeout-minutes: 20
+        run: |
+          umask 077
+          sudo useradd --create-home service-journey
+          sudo cp -R dist .github packaging /home/service-journey/
+          sudo chown -R service-journey /home/service-journey
+          grep -n '^XDG_' /etc/environment || true
+          sudo -H -u service-journey env | grep '^XDG_' || true
+          # PAM loads this image-wide file for sudo and the user manager.
+          # Remove only XDG paths into another user's home on this disposable runner.
+          sudo python3 - <<'PY'
+          import os
+          from pathlib import Path
+          home = Path('/home/service-journey')
+          environment = Path('/etc/environment')
+          def foreign_home(value):
+              path = Path(os.path.normpath(value))
+              private = path == Path('/root') or Path('/root') in path.parents or Path('/home') in path.parents
+              return private and path != home and home not in path.parents
+          kept = []
+          for line in environment.read_text().splitlines(keepends=True):
+              name, separator, value = line.strip().partition('=')
+              value = value.strip().strip('\"\'')
+              if separator and name.startswith('XDG_') and any(foreign_home(p) for p in value.split(':')):
+                  print(f'Removing foreign {name} from /etc/environment')
+              else:
+                  kept.append(line)
+          environment.write_text(''.join(kept))
+          PY
+          sudo loginctl enable-linger service-journey
+          uid=$(id -u service-journey)
+          sudo systemctl start "user@$uid.service"
+          # Runtime directories are private to their owner, not the runner.
+          for _ in $(seq 60); do
+            sudo -H -u service-journey test -S "/run/user/$uid/systemd/private" && break
+            sleep 1
+          done
+          sudo -H -u service-journey test -S "/run/user/$uid/systemd/private" || { echo "::error::no user manager runs for service-journey"; exit 1; }
+          manager_environment=$(sudo -H -u service-journey env XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user show-environment) ||
+            { echo "::error::could not read the service user manager environment"; exit 1; }
+          manager_config=$(printf '%s\n' "$manager_environment" | sed -n 's/^XDG_CONFIG_HOME=//p')
+          case "$manager_config" in
+            ''|/home/service-journey|/home/service-journey/*) ;;
+            *) echo "::error::service user manager has foreign XDG_CONFIG_HOME=$manager_config"; exit 1 ;;
+          esac
+          sysctl kernel.apparmor_restrict_unprivileged_userns
+          if sudo -H -u service-journey env XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            systemd-run --user --wait --pipe -p PrivateUsers=yes -p ProtectHome=tmpfs /bin/true; then
+            probe_status=0
+          else
+            probe_status=$?
+          fi
+          echo "User namespace probe before lifting AppArmor restriction: exit $probe_status"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          if ! sudo -H -u service-journey env XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            systemd-run --user --wait --pipe -p PrivateUsers=yes -p ProtectHome=tmpfs /bin/true; then
+            echo "::error::service user manager cannot create the hardened namespace after lifting the AppArmor restriction"
+            exit 1
+          fi
+          # shellcheck disable=SC2016 # $HOME is the service user's, expanded by its shell
+          if ! sudo -H -u service-journey env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME \
+            -u XDG_CACHE_HOME -u XDG_CONFIG_DIRS -u XDG_DATA_DIRS XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" JOURNEY_PERMISSIONS=1 \
+            sh -c 'umask 077; cd "$HOME" && sh .github/scripts/journey.sh service dist'; then
+            sudo -H -u service-journey env XDG_RUNTIME_DIR="/run/user/$uid" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+              systemctl --user status 'claude-multi-gateway*' --no-pager || true
+            sudo -H -u service-journey env XDG_RUNTIME_DIR="/run/user/$uid" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+              journalctl --user -u claude-multi-gateway -n 200 --no-pager || true
+            echo "::error::supervised gateway service journey failed"
+            exit 1
+          fi
+
+  journeys-update:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gateway-dist
+          path: gateway-dist
+      - name: Two test builds of this commit that trust an ephemeral key
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.build.outputs.epoch }}
+        run: |
+          umask 077
+          keys="$RUNNER_TEMP/keys"
+          mkdir -p "$keys"
+          ssh-keygen -q -t ed25519 -N '' -C 'ephemeral journey key' -f "$keys/key"
+          printf 'release@claude-multi %s\n' "$(cut -d ' ' -f 1,2 "$keys/key.pub")" >"$keys/allowed_signers"
+          for label in a b; do
+            tree="$RUNNER_TEMP/tree-$label"
+            git worktree add --detach "$tree" HEAD
+            cp "$keys/allowed_signers" "$tree/src/claude_multi/data/release-trust/allowed_signers"
+            python3 - "$tree/src/claude_multi/data/version.json" "$label" <<'EOF'
+          import json, sys
+          path, label = sys.argv[1:3]
+          doc = json.load(open(path))
+          major, minor, patch = doc["launcher_version"].removesuffix("-dev").split(".")
+          doc["launcher_version"] = f"{major}.{minor}.{int(patch) + (1 if label == 'b' else 0)}"
+          json.dump(doc, open(path, "w"), indent=2)
+          open(path, "a").write("\n")
+          EOF
+            python3 tools/build.py bundle --repo "$tree" --out "test-$label" --gateway-dist gateway-dist \
+              --target linux-x86_64
+          done
+      - name: Update, up to date and rollback through the installed command
+        timeout-minutes: 15
+        run: |
+          umask 077
+          sh .github/scripts/journey.sh update "$RUNNER_TEMP/keys" test-a test-b
+
+  journeys-macos:
+    needs: [resolve, build]
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: The exact pinned Claude Code for this platform (outside the workspace)
+        run: |
+          umask 077
+          url=$(python3 -c 'import sys; sys.path.insert(0, "src"); from claude_multi import acquire, pin, strict_json; c = strict_json.load("src/claude_multi/data/catalog/native-contract.json"); print(acquire.download_url(pin.version(c), pin.host_platform()))')
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$RUNNER_TEMP/claude" "$url"
+          chmod 755 "$RUNNER_TEMP/claude"
+      - name: Fresh install, doctor, client smoke, on-demand gateway lifecycle (no launchd) and loopback confinement, managed fixture turn and resume, uninstall keeping the state
+        timeout-minutes: 20
+        env:
+          JOURNEY_CLIENT: ${{ runner.temp }}/claude
+        run: |
+          umask 077
+          sh .github/scripts/journey.sh install dist
+      - name: No Claude Code bytes in the workspace
+        if: always()
+        run: |
+          umask 077
+          rm -f "$RUNNER_TEMP/claude"
+          python3 tools/_build/no_bundle_guard.py .
+
+  # darwin-x86_64 natively, only when the repository variable
+  # CM_MACOS_INTEL_RUNNER names a supported Intel macOS runner label (unset
+  # by default: darwin-x86_64 then ships built and reproduced, with no
+  # native journey).
+  journeys-macos-intel:
+    needs: [resolve, build]
+    if: vars.CM_MACOS_INTEL_RUNNER != ''
+    runs-on: ${{ vars.CM_MACOS_INTEL_RUNNER }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Fresh install of the darwin-x86_64 bundle, doctor, client smoke, on-demand gateway lifecycle and loopback confinement, managed fixture turn and resume, uninstall keeping the state
+        timeout-minutes: 20
+        run: |
+          umask 077
+          JOURNEY_CLIENT=fetch JOURNEY_TARGET=darwin-x86_64 sh .github/scripts/journey.sh install dist
+      - name: No Claude Code bytes in the workspace
+        if: always()
+        run: |
+          umask 077
+          python3 tools/_build/no_bundle_guard.py .
+
+  journeys-windows:
+    needs: [resolve, build]
+    runs-on: windows-2025
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: install.ps1 Pester suite
+        shell: pwsh
+        run: |
+          Install-Module Pester -RequiredVersion 6.2.0 -Repository PSGallery -Scope CurrentUser -Force -SkipPublisherCheck
+          Import-Module Pester -RequiredVersion 6.2.0
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'tests/pwsh'
+          $config.Run.Exit = $true
+          Invoke-Pester -Configuration $config
+      - name: WSL 2 through the release's install.ps1 (its own readiness check and installation)
+        shell: pwsh
+        run: |
+          . ./dist/install.ps1
+          if (-not (Test-WslReady)) { Install-Wsl -AssumeYes }
+          if (-not (Test-WslReady)) { throw 'install.ps1 installed WSL 2, which needs a restart this runner cannot make' }
+      - name: A WSL 2 distribution with an ordinary default user (what its interactive first start makes)
+        shell: pwsh
+        run: |
+          wsl --install --distribution Ubuntu-24.04 --no-launch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $workspace = (wsl --distribution Ubuntu-24.04 --user root --exec wslpath -a "$PWD").Trim()
+          wsl --distribution Ubuntu-24.04 --user root --cd "$workspace" --exec sh .github/scripts/wsl_prepare.sh
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          wsl --terminate Ubuntu-24.04
+          wsl --set-default Ubuntu-24.04
+      # install.ps1's own test seam gives the download locations (install.sh
+      # from a loopback https server, the release from a signed local copy):
+      # before publication there is no published URL. Its published defaults
+      # (install.sh and the release from the release URL) are not exercised
+      # here; the public-URL install after publication covers them.
+      - name: The release's install.ps1 installs into WSL 2 (install.sh over loopback https), then the installed journey there
+        shell: pwsh
+        run: |
+          # Dot-sourced param defaults must run before our same-named variables.
+          . ./dist/install.ps1
+          $distribution = 'Ubuntu-24.04'
+          $workspace = (wsl --distribution $distribution --exec wslpath -a "$PWD").Trim()
+          $linuxHome = (wsl --distribution $distribution --exec sh -c 'printf %s "$HOME"').Trim()
+          wsl --distribution $distribution --cd "$workspace" --exec sh -c 'umask 077; sh .github/scripts/journey.sh prepare dist "$HOME/journey"'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Record the Linux interpreter, not the Windows wsl.exe launcher.
+          # Encode the source so Start-Process's argument joining cannot split it.
+          $startSource = @'
+          import os, sys
+          from pathlib import Path
+          home = Path.home()
+          pidfile = home / 'journey/server.pid'
+          pending = pidfile.with_suffix('.pending')
+          pending.write_text(str(os.getpid()))
+          pending.replace(pidfile)
+          if (home / 'journey/server.stop').exists():
+              sys.exit(0)
+          os.execv(sys.executable, [sys.executable, '-I', '.github/scripts/journey_fixture.py',
+              'serve-files', '--dir', str(home / 'journey/release'),
+              '--port-file', str(home / 'journey/port'), '--cert', str(home / 'tls/server.pem'),
+              '--key', str(home / 'tls/server.key')])
+          '@
+          $stopSource = @'
+          import os, signal, time
+          from pathlib import Path
+          home = Path.home()
+          # A delayed launcher must not start serving after cleanup returned.
+          (home / 'journey/server.stop').touch()
+          pidfile = home / 'journey/server.pid'
+          if pidfile.exists():
+              pid = int(pidfile.read_text())
+              try:
+                  os.kill(pid, signal.SIGKILL)
+              except ProcessLookupError:
+                  pass
+              for attempt in range(100):
+                  try:
+                      state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+                  except FileNotFoundError:
+                      break
+                  if state == 'Z':
+                      break
+                  time.sleep(0.05)
+              else:
+                  raise SystemExit('the Linux loopback server did not exit')
+          print('Linux loopback server stopped (or prevented from starting)')
+          '@
+          $startEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($startSource))
+          $stopEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($stopSource))
+          $server = $null
+          try {
+            $server = Start-Process -FilePath wsl.exe -PassThru -NoNewWindow -ArgumentList @(
+              '--distribution', $distribution, '--cd', $workspace, '--exec', 'python3', '-I', '-c',
+              "exec(__import__('base64').b64decode('$startEncoded'))")
+            $port = ''
+            foreach ($attempt in 1..60) {
+              $port = "$(wsl --distribution $distribution --exec sh -c 'cat "$HOME/journey/port" 2>/dev/null')".Trim()
+              if ($port) { break }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $port) { throw 'the loopback https server did not start' }
+            $version = (Get-Content dist/MANIFEST.json -Raw | ConvertFrom-Json).version
+            $sum = (Get-FileHash dist/install.sh -Algorithm SHA256).Hash.ToLowerInvariant()
+            Invoke-Main -Distribution $distribution -AssumeYes -NoSetup -InstallerUrl "https://localhost:$port/install.sh" `
+              -InstallerSha256 $sum -InstallerArguments @('--from-dir', "$linuxHome/journey/release",
+                '--allowed-signers', "$linuxHome/journey/key/allowed_signers", '--no-modify-path')
+            $code = $script:MainExitCode
+            if ($code -ne 0) { throw "install.ps1 exited $code" }
+          } finally {
+            try {
+              wsl --distribution $distribution --exec python3 -I -c "exec(__import__('base64').b64decode('$stopEncoded'))"
+              if ($LASTEXITCODE -ne 0) { throw 'could not verify Linux loopback server cleanup' }
+            } finally {
+              if ($null -ne $server) { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
+            }
+          }
+          wsl --distribution $distribution --cd "$workspace" --exec sh -c 'umask 077; JOURNEY_CLIENT=fetch sh .github/scripts/journey.sh installed "$0"' $version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  draft:
+    needs: [resolve, build, reproduce, bytecode, vulnerabilities, evidence, journeys-linux, journeys-linux-arm64,
+            service-linux, journeys-update, journeys-macos, journeys-macos-intel, journeys-windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Protected: the environment's required reviewers approve before this job
+    # gets its write token; a pull request never reaches it. It runs only
+    # when resolve allowed a draft (a tag push, or a manual run with draft
+    # on a v* tag) and no job it needs failed or was cancelled (the Intel
+    # macOS journey may be skipped: it runs only when its runner is named).
+    environment: release
+    if: ${{ !cancelled() && needs.resolve.outputs.draft == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    permissions:
+      contents: write # create the draft release and upload its files
+      id-token: write # sign the provenance attestation (Sigstore)
+      attestations: write # store the provenance attestation
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Provenance attestation (public repository only)
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Draft release (unsigned; the maintainer adds SHA256SUMS.sshsig)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          umask 077
+          tag=$TAG
+          gh release create "$tag" --draft --verify-tag --title "claude-multi ${tag#v}" \
+            --notes "Release candidate. Not signed yet." dist/*.tar.gz dist/MANIFEST.json dist/SHA256SUMS \
+            dist/install.sh dist/install.ps1

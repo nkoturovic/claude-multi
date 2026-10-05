@@ -1,0 +1,25 @@
+{
+  "lines": {},
+  "notes": "Ollama's OpenAI-compatible server on this computer (no key). Another computer: --base-url http://HOST:11434/v1. Use model names without a :tag for the latest tag. Declaration only: add models with claude-multi discover ollama --add WIRE (or claude-multi models add ollama WIRE …), then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://docs.ollama.com/api/openai-compatibility",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "none"
+    },
+    "base_url": "http://localhost:11434/v1",
+    "display": "Ollama",
+    "independence_family": "local",
+    "kind": "openai-compatible-lan",
+    "listing": {
+      "auth": "none",
+      "shape": "openai",
+      "url": "http://localhost:11434/v1/models"
+    }
+  },
+  "version": 1
+}

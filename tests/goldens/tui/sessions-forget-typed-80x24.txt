@@ -1,0 +1,24 @@
+
+  sessions — project (cwd) · 1 total
+  ─────────────────────────────────────────────────────────────────────────────
+    state      profile   lead      agents  follow  last seen  title
+  › ◐ unknown  balanced  Opus 5.5  8       follow  2 min      api design
+  +--------------------------------------------------------------------------+
+  | Forget 11111111… without a liveness check?                               |
+  | Whether session 11111111-1111-4111-8111-111111111111 runs in the         |
+  | background cannot be checked (fixture: unreadable).                      |
+  | Only continue if you know the session is not running. Type the session   |
+  | id to confirm:                                                           |
+  | 11111111-1111-4111-8111-111111111111                                     |
+  | [11111111                                                              ] |
+  |                                                                          |
+  |                                                                          |
+  |                                                                          |
+  | [ Cancel ] [ Forget ]                                                    |
+  +--------------------------------------------------------------------------+
+
+
+  lineup gen 1 · 8 agents · follow
+
+  Enter resume · V details · T lineup · F follow/pin · R rename · X forget
+  M mark ended · P repair · L link · C all dirs · ? help · Esc back

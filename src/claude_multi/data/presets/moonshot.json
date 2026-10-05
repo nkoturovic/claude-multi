@@ -1,0 +1,21 @@
+{
+  "lines": {},
+  "notes": "The Kimi API platform's pay-per-token Anthropic-compatible endpoint (keys from platform.kimi.ai); the Kimi provider that ships with claude-multi is the separate Kimi Code subscription. Its documentation names no model-list endpoint for this route. Declaration only: add models with claude-multi models add moonshot WIRE …, then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://platform.kimi.ai/docs/guide/claude-code-kimi",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "kind": "bearer",
+      "secret_ref": "env:MOONSHOT_API_KEY"
+    },
+    "base_url": "https://api.moonshot.ai/anthropic",
+    "display": "Moonshot AI (Kimi platform)",
+    "independence_family": "moonshot",
+    "kind": "anthropic-compatible"
+  },
+  "version": 1
+}

@@ -1,0 +1,5 @@
+lineup gen 2: lineup.md restated (no agent changes)
+session now follows profile lead-in
+Running agents keep their current model; do not SendMessage-continue an agent spawned before this change — spawn it fresh.
+Forks sharing this scope see the change too.
+lead: Opus 5 · 1M selector · xhigh — now with /model Opus 5 · 1M selector · anthropic · 1M (press s), or at the next resume

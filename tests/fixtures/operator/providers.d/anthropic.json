@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "lines": {
+    "custom-claude-fixture": {
+      "wire_model": "claude-fixture-9",
+      "display": "Claude fixture 9",
+      "efforts": [
+        "high",
+        "max"
+      ],
+      "default_effort": "high",
+      "context": {
+        "declared_tokens": 1000000,
+        "source": "operator"
+      },
+      "output": {
+        "declared_tokens": 64000,
+        "source": "operator"
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+
+  change lineup — "api design" (unknown)
+  ─────────────────────────────────────────────────────────────────────────────
+  from  balanced (gen 1)
+  to    …  direct (no agents)   keep current   fallback [anthropic ▾]
+  plan  Fallback target: anthropic · profile claude
+        cm-explorer: GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+        cm-analyst: GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+        cm-implementer-light: GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+        cm-implementer: GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+        cm-implementer-strong: GPT-5.6 Sol · xhigh → Opus 5.5 · 1M selector · …
+        cm-reviewer: GPT-5.6 Sol · xhigh → Opus 5 · 1M selector · xhigh
+        cm-reviewer-strong: Opus 5.5 · 1M selector · xhigh → Fable 5 · 1M sele…
+        ! review same-family (reduced independence)
+        Effect: LIVE
+        Existing agents keep their current task and model. Start fresh agents …
+        Preview only; nothing changed. Enter applies.
+
+
+
+
+
+
+  Enter apply · Tab target · ← → choose · Space pick · ? help · Esc cancel

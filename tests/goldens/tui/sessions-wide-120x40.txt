@@ -1,0 +1,40 @@
+
+  sessions — project (cwd) · 4 total
+  ──────────────────────────────────────────────────────────────────────────────
+    state      profile   lead          agents  follow  last seen   title
+  › ● running  balanced  Opus 5.5      8       follow  2 min ago   api design
+    ◐ unknown  claude    Opus 5.5      8       pinned  yesterday   ↻ gateway patch
+    ○ ended    direct    Opus 5.5      —       follow  3 days ago  notes
+    ○ ended    balanced  muse-spark !  8       follow  5 days ago  ! needs a choice
+    ! 1 session(s) need a profile choice (lead model removed)   [Enter]
+  native (not managed): 1 — L links one
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  lineup gen 1 · 8 agents · follow
+
+  Enter resume · V details · T lineup · F follow/pin · R rename · X forget · E stop · P repair · L link · C all dirs
+  ? help · Esc back

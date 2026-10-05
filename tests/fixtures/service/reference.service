@@ -1,0 +1,56 @@
+# The reference supervised unit: the renderer must match every hardening and
+# lifecycle directive of it. Store paths are normalised.
+[Install]
+WantedBy=default.target
+
+[Service]
+BindPaths=%h/.local/share/claude-multi/auth
+BindPaths=%h/.local/share/claude-multi/traces
+BindPaths=%h/.local/state/claude-multi/gateway
+BindReadOnlyPaths=%h/.config/claude-multi
+BindReadOnlyPaths=%h/.local/share/claude-multi
+BindReadOnlyPaths=%h/.local/share/claude-multi-release
+BindReadOnlyPaths=%h/.local/state/claude-multi
+ExecReload=+%h/.local/share/claude-multi-release/current/bin/claude-multi-proxy init --reload-check --state-root %h/.local/state/claude-multi
+ExecStart=%h/.local/share/claude-multi-release/current/bin/claude-multi-proxy run --prepared --state-root %h/.local/state/claude-multi
+ExecStartPre=+%h/.local/share/claude-multi-release/current/bin/claude-multi-proxy init --prepare-start --state-root %h/.local/state/claude-multi
+LimitCORE=0
+LockPersonality=true
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=tmpfs
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+Restart=on-failure
+RestartSec=5s
+RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_INET
+RestrictAddressFamilies=AF_INET6
+RestrictAddressFamilies=AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallErrorNumber=EPERM
+SystemCallFilter=@system-service
+Type=simple
+UMask=0077
+UnsetEnvironment=XDG_CONFIG_HOME
+UnsetEnvironment=CLAUDE_MULTI_SECRET_ENV
+WorkingDirectory=-%h/.local/state/claude-multi/gateway
+
+[Unit]
+After=network-online.target
+Description=claude-multi local model gateway
+OnFailure=cli-proxy-api-failure.service
+StartLimitBurst=5
+StartLimitIntervalSec=300
+Wants=network-online.target
+X-Reload-Triggers=/nix/store/00000000000000000000000000000000-claude-multi
+X-Restart-Triggers=/nix/store/00000000000000000000000000000000-cli-proxy-api
+X-Restart-Triggers=0000000000000000000000000000000000000000000000000000000000000000

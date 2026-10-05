@@ -1,0 +1,75 @@
+# The claude-multi Python package: the launcher, its runtime resources and
+# its documents. The package is a component and the contributor's interface
+# (an editable install for development); the complete product is the release
+# bundle or the Nix package, which also carry the gateway.
+#
+# The version comes from src/claude_multi/data/version.json (the one version
+# authority) through claude_multi.PACKAGE_VERSION, its PEP 440 form:
+# X.Y.Z-dev becomes X.Y.Z.dev0.
+
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-multi"
+dynamic = ["version"]
+description = "A durable multi-model launcher for Claude Code"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = []
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+claude-multi = "claude_multi.entrypoints:claude_multi"
+claude-multi-proxy = "claude_multi.entrypoints:claude_multi_proxy"
+claude-multi-dev = "claude_multi.entrypoints:claude_multi_dev"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = { attr = "claude_multi.PACKAGE_VERSION" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["claude_multi", "claude_multi.*"]
+
+[tool.setuptools.package-data]
+# Every runtime resource under the package's data directory.
+claude_multi = ["data/**/*"]
+
+[tool.setuptools.data-files]
+# The installed documents: every page under docs/, at its relative path (a
+# key per directory), so links between pages resolve the same in a checkout
+# and in every installation. The help pointers name the three manuals at the
+# top (claude_multi.layout.document).
+"share/claude-multi" = [
+    "docs/USAGE.md", "docs/CHEATSHEET.md", "docs/STANDALONE.md",
+    "docs/quickstart.md", "docs/troubleshooting.md", "docs/update.md", "docs/uninstall.md",
+    "docs/privacy.md", "docs/security.md",
+]
+"share/claude-multi/install" = [
+    "docs/install/linux.md", "docs/install/macos.md", "docs/install/windows-wsl2.md", "docs/install/nix.md",
+]
+"share/claude-multi/providers" = [
+    "docs/providers/api-keys.md", "docs/providers/openrouter.md", "docs/providers/claude-account.md",
+    "docs/providers/chatgpt-account.md", "docs/providers/anthropic-compatible.md",
+    "docs/providers/openai-compatible.md", "docs/providers/lan.md",
+]
+"share/claude-multi/guides" = [
+    "docs/guides/profiles.md", "docs/guides/models.md", "docs/guides/sessions.md", "docs/guides/lineup.md",
+    "docs/guides/gateway.md", "docs/guides/networking.md", "docs/guides/move-machines.md",
+]
+"share/claude-multi/reference" = [
+    "docs/reference/cli.md", "docs/reference/tasks.md", "docs/reference/settings.md",
+    "docs/reference/compatibility.md", "docs/reference/licenses.md",
+]

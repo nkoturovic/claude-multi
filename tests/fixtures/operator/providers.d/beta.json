@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "provider": {
+    "display": "Beta",
+    "kind": "anthropic-compatible",
+    "base_url": "https://beta.example/v1",
+    "auth": {
+      "kind": "header",
+      "secret_ref": "env:BETA_API_KEY",
+      "header": "x-api-key"
+    },
+    "independence_family": "beta"
+  },
+  "lines": {
+    "custom-beta-one": {
+      "wire_model": "beta-one",
+      "display": "Beta One",
+      "efforts": [
+        "high"
+      ],
+      "default_effort": "high",
+      "context": {
+        "declared_tokens": 65536,
+        "source": "operator"
+      }
+    }
+  }
+}

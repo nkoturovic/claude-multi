@@ -1,0 +1,2425 @@
+diff --git a/internal/config/config.go b/internal/config/config.go
+index fe251c3..e80842b 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -179,6 +179,11 @@ type Config struct {
+ 	// gemini-api-key, interactions-api-key, codex-api-key, xai-api-key, meta-api-key, claude-api-key, openai-compatibility, and vertex-api-key.
+ 	OAuthModelAlias map[string][]OAuthModelAlias `yaml:"oauth-model-alias,omitempty" json:"oauth-model-alias,omitempty"`
+ 
++	// OAuthExtraModels (claude-multi local patch, oauth-model-overlay) lists extra
++	// models per OAuth channel (claude, codex), registered for every OAuth auth of the
++	// channel like static models. See oauth_extra_models.go.
++	OAuthExtraModels map[string][]OAuthExtraModel `yaml:"oauth-extra-models,omitempty" json:"oauth-extra-models,omitempty"`
++
+ 	// OAuthRequestScopedErrors defines per-provider request-scoped error rules applied to OAuth/file-backed auth entries.
+ 	// Supported channels include: vertex, aistudio, antigravity, claude, codex, kimi, xai, meta, and OAuth plugin provider keys.
+ 	//
+diff --git a/internal/config/config_load.go b/internal/config/config_load.go
+index ac5d0e1..20568c3 100644
+--- a/internal/config/config_load.go
++++ b/internal/config/config_load.go
+@@ -70,6 +70,18 @@ func loadConfigBytes(configFile string, data []byte, optional bool) (*Config, er
+ 		}
+ 		return nil, errValidate
+ 	}
++	// claude-multi local patch (oauth-model-overlay): the overlay is
++	// validated structurally on the parsed node and decoded from it; an invalid
++	// overlay refuses the whole load.
++	oauthExtraModels, errValidate := parseOAuthExtraModelsYAML(data)
++	if errValidate != nil {
++		if optional {
++			cfgOptional := &Config{CredentialInFlight: DefaultCredentialInFlightConfig()}
++			cfgOptional.NormalizePluginsConfig()
++			return cfgOptional, nil
++		}
++		return nil, errValidate
++	}
+ 
+ 	// Unmarshal the YAML data into the Config struct.
+ 	var cfg Config
+@@ -101,6 +113,16 @@ func loadConfigBytes(configFile string, data []byte, optional bool) (*Config, er
+ 		}
+ 		return nil, fmt.Errorf("failed to parse config file: %w", err)
+ 	}
++	// claude-multi local patch (oauth-model-overlay): the config carries
++	// the validated overlay; a decoded overlay that differs refuses the load.
++	if errValidate := adoptOAuthExtraModels(&cfg, oauthExtraModels); errValidate != nil {
++		if optional {
++			cfgOptional := &Config{CredentialInFlight: DefaultCredentialInFlightConfig()}
++			cfgOptional.NormalizePluginsConfig()
++			return cfgOptional, nil
++		}
++		return nil, errValidate
++	}
+ 	if errValidate := validateTrustedProxies(cfg.TrustedProxies); errValidate != nil {
+ 		return nil, errValidate
+ 	}
+@@ -196,6 +218,9 @@ func loadConfigBytes(configFile string, data []byte, optional bool) (*Config, er
+ 	// Normalize global OAuth model name aliases.
+ 	cfg.SanitizeOAuthModelAlias()
+ 
++	// claude-multi local patch (oauth-model-overlay): canonical overlay form.
++	cfg.OAuthExtraModels = NormalizeOAuthExtraModels(cfg.OAuthExtraModels)
++
+ 	// Normalize global OAuth request-scoped error rules.
+ 	cfg.SanitizeOAuthRequestScopedErrors()
+ 
+diff --git a/internal/config/oauth_extra_models.go b/internal/config/oauth_extra_models.go
+new file mode 100644
+index 0000000..6fdafd6
+--- /dev/null
++++ b/internal/config/oauth_extra_models.go
+@@ -0,0 +1,576 @@
++package config
++
++// claude-multi local patch (oauth-model-overlay): an explicit list of extra
++// models per OAuth channel. The OAuth pools register models only from the
++// pinned static registry, so a newly released first-party model is never
++// advertised (and an oauth-model-alias cannot attach to it) until a gateway
++// release. `oauth-extra-models` registers such a model for every OAuth auth of
++// the channel, like a static entry. The schema is closed: no aliases (those
++// stay in oauth-model-alias), no ModelInfo.Config header overrides and no
++// transport controls. An invalid overlay refuses the whole load or reload.
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"reflect"
++	"regexp"
++	"sort"
++	"strings"
++	"unicode"
++	"unicode/utf8"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
++	"gopkg.in/yaml.v3"
++)
++
++// OAuthExtraModelsKey is the top-level config key of the OAuth model overlay.
++const OAuthExtraModelsKey = "oauth-extra-models"
++
++// maxOAuthExtraModelDisplayName bounds display-name (in runes).
++const maxOAuthExtraModelDisplayName = 256
++
++// oauthExtraModelChannels are the only OAuth channels the overlay accepts.
++var oauthExtraModelChannels = map[string]struct{}{"claude": {}, "codex": {}}
++
++// oauthExtraModelNamePattern is the accepted upstream model id charset: no
++// whitespace, no prefix separator "/", no thinking suffix "(...)".
++var oauthExtraModelNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
++
++// OAuthExtraModel is one overlay entry: an upstream model id plus the
++// capability fields upstream validates.
++type OAuthExtraModel struct {
++	// Name is the upstream model identifier, forwarded unchanged.
++	Name string `yaml:"name" json:"name"`
++
++	// DisplayName is the optional human-readable name shown in model catalogs.
++	DisplayName string `yaml:"display-name,omitempty" json:"display-name,omitempty"`
++
++	// MaxContextLength is the context window advertised to clients.
++	MaxContextLength int `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
++
++	// MaxCompletionTokens is the maximum output length advertised to clients.
++	MaxCompletionTokens int `yaml:"max-completion-tokens,omitempty" json:"max-completion-tokens,omitempty"`
++
++	// Thinking is the model's thinking/reasoning capability.
++	Thinking *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
++}
++
++// oauthExtraModelStrict is the strict decode shape: pointers tell an explicit
++// zero from an absent field. Unknown fields (also inside thinking) are refused.
++type oauthExtraModelStrict struct {
++	Name                *string                   `yaml:"name"`
++	DisplayName         *string                   `yaml:"display-name"`
++	MaxContextLength    *int                      `yaml:"max-context-length"`
++	MaxCompletionTokens *int                      `yaml:"max-completion-tokens"`
++	Thinking            *registry.ThinkingSupport `yaml:"thinking"`
++}
++
++// IsOAuthExtraModelChannel reports whether channel accepts overlay entries.
++func IsOAuthExtraModelChannel(channel string) bool {
++	_, ok := oauthExtraModelChannels[channel]
++	return ok
++}
++
++// parseOAuthExtraModelsYAML validates the overlay of a config document
++// structurally, on the parsed yaml.Node and before any decode, and then
++// decodes it strictly from that validated node. The decoder alone cannot be
++// trusted with the overlay's shape: a !!null tag on a mapping skips any
++// Unmarshaler yet still fills the field, a merge ("<<") or an alias supplies
++// content from elsewhere, and an explicit 0 decodes like an omitted key. So:
++//   - a root mapping is plain (standard tag, no anchor);
++//   - the overlay is a literal top-level key: a plain string key, and no root
++//     merge may supply the key (directly, through an alias or a sequence, or
++//     through a nested merge);
++//   - the overlay node and every descendant carry only the standard tag of
++//     their kind (!!map, !!seq, !!str, !!int, !!bool; !!null only on a
++//     scalar), and there is no anchor, alias or merge key anywhere inside.
++//
++// It returns the validated overlay (nil when absent). A document the YAML
++// parser rejects is left to the main unmarshal, which reports it.
++func parseOAuthExtraModelsYAML(data []byte) (map[string][]OAuthExtraModel, error) {
++	var document yaml.Node
++	if errUnmarshal := yaml.Unmarshal(data, &document); errUnmarshal != nil {
++		return nil, nil
++	}
++	if len(document.Content) == 0 {
++		return nil, nil
++	}
++	root := document.Content[0]
++	if root.Kind != yaml.MappingNode {
++		// No overlay key exists outside a root mapping; the main unmarshal
++		// decides such a document (and adoptOAuthExtraModels refuses any
++		// overlay it would still produce).
++		return nil, nil
++	}
++	if root.ShortTag() != "!!map" || root.Anchor != "" {
++		return nil, fmt.Errorf("invalid %s: the config root must be a plain mapping (no tag or anchor)", OAuthExtraModelsKey)
++	}
++	var overlay *yaml.Node
++	for index := 0; index+1 < len(root.Content); index += 2 {
++		keyNode, value := root.Content[index], root.Content[index+1]
++		if isYAMLMergeKey(keyNode) {
++			if yamlMergeSuppliesKey(value, OAuthExtraModelsKey, map[*yaml.Node]bool{}) {
++				return nil, fmt.Errorf("invalid %s: must be a literal top-level key, not supplied through a merge (<<)", OAuthExtraModelsKey)
++			}
++			continue
++		}
++		if !yamlKeyMatches(keyNode, OAuthExtraModelsKey) {
++			continue
++		}
++		if !isPlainYAMLKey(keyNode) {
++			return nil, fmt.Errorf("invalid %s: must be a literal top-level key (no alias, anchor or tag)", OAuthExtraModelsKey)
++		}
++		if overlay != nil {
++			return nil, fmt.Errorf("invalid %s: the key is defined more than once", OAuthExtraModelsKey)
++		}
++		overlay = value
++	}
++	if overlay == nil {
++		return nil, nil
++	}
++	if errShape := validateOAuthExtraModelsShape(overlay); errShape != nil {
++		return nil, fmt.Errorf("invalid %s: %w", OAuthExtraModelsKey, errShape)
++	}
++	entries, errDecode := decodeOAuthExtraModelsNode(overlay)
++	if errDecode != nil {
++		return nil, fmt.Errorf("invalid %s: %w", OAuthExtraModelsKey, errDecode)
++	}
++	return entries, nil
++}
++
++// adoptOAuthExtraModels installs the overlay validated by
++// parseOAuthExtraModelsYAML into the decoded config. The main decode must have
++// produced the same overlay: a difference means some YAML construct reached
++// the field around the structural check, and the whole load is refused.
++func adoptOAuthExtraModels(cfg *Config, entries map[string][]OAuthExtraModel) error {
++	if !reflect.DeepEqual(NormalizeOAuthExtraModels(cfg.OAuthExtraModels), NormalizeOAuthExtraModels(entries)) {
++		return fmt.Errorf("invalid %s: the decoded overlay differs from the validated literal overlay", OAuthExtraModelsKey)
++	}
++	if errValidate := validateOAuthExtraModelsDecoded(entries); errValidate != nil {
++		return errValidate
++	}
++	cfg.OAuthExtraModels = entries
++	return nil
++}
++
++// validateOAuthExtraModelsDecoded re-checks the decoded overlay semantically
++// (channel, name, display-name, limits, thinking, duplicates), so no decode
++// path can populate Config.OAuthExtraModels without validation.
++func validateOAuthExtraModelsDecoded(entries map[string][]OAuthExtraModel) error {
++	channels := make([]string, 0, len(entries))
++	for channel := range entries {
++		channels = append(channels, channel)
++	}
++	sort.Strings(channels)
++	for _, channel := range channels {
++		if !IsOAuthExtraModelChannel(channel) {
++			return fmt.Errorf("invalid %s: channel %q is not allowed (allowed: claude, codex)", OAuthExtraModelsKey, channel)
++		}
++		seen := make(map[string]struct{}, len(entries[channel]))
++		for position, model := range entries[channel] {
++			name := model.Name
++			entry := oauthExtraModelStrict{Name: &name, Thinking: model.Thinking}
++			if model.DisplayName != "" {
++				displayName := model.DisplayName
++				entry.DisplayName = &displayName
++			}
++			if model.MaxContextLength != 0 {
++				maxContextLength := model.MaxContextLength
++				entry.MaxContextLength = &maxContextLength
++			}
++			if model.MaxCompletionTokens != 0 {
++				maxCompletionTokens := model.MaxCompletionTokens
++				entry.MaxCompletionTokens = &maxCompletionTokens
++			}
++			if errEntry := validateOAuthExtraModelEntry(entry); errEntry != nil {
++				return fmt.Errorf("invalid %s: %s[%d]: %w", OAuthExtraModelsKey, channel, position, errEntry)
++			}
++			key := strings.ToLower(name)
++			if _, exists := seen[key]; exists {
++				return fmt.Errorf("invalid %s: %s[%d]: duplicate model %q", OAuthExtraModelsKey, channel, position, name)
++			}
++			seen[key] = struct{}{}
++		}
++	}
++	return nil
++}
++
++func isYAMLNullScalar(node *yaml.Node) bool {
++	return node.Kind == yaml.ScalarNode && node.ShortTag() == "!!null"
++}
++
++// isYAMLMergeKey is the decoder's own merge-key test.
++func isYAMLMergeKey(node *yaml.Node) bool {
++	return node.Kind == yaml.ScalarNode && node.Value == "<<" && (node.Tag == "" || node.Tag == "!" || node.ShortTag() == "!!merge")
++}
++
++// isPlainYAMLKey reports whether a mapping key is a plain string scalar: no
++// alias, anchor or non-string tag.
++func isPlainYAMLKey(node *yaml.Node) bool {
++	return node.Kind == yaml.ScalarNode && node.ShortTag() == "!!str" && node.Anchor == ""
++}
++
++// yamlKeyMatches reports whether a mapping key names name as written or as the
++// decoder resolves it (through an alias, a !!binary or a custom tag).
++func yamlKeyMatches(key *yaml.Node, name string) bool {
++	resolved := key
++	if resolved.Kind == yaml.AliasNode && resolved.Alias != nil {
++		resolved = resolved.Alias
++	}
++	if resolved.Value == name {
++		return true
++	}
++	var decoded string
++	return key.Decode(&decoded) == nil && decoded == name
++}
++
++// yamlMergeSuppliesKey reports whether the value of a merge key would supply
++// name to the mapping it is merged into: a mapping (or an alias of one) that
++// has the key, directly or through its own merge, or a sequence of such.
++func yamlMergeSuppliesKey(value *yaml.Node, name string, visited map[*yaml.Node]bool) bool {
++	if value == nil {
++		return false
++	}
++	if value.Kind == yaml.AliasNode {
++		if value.Alias == nil {
++			return false
++		}
++		value = value.Alias
++	}
++	if visited[value] {
++		return false
++	}
++	visited[value] = true
++	switch value.Kind {
++	case yaml.MappingNode:
++		for index := 0; index+1 < len(value.Content); index += 2 {
++			keyNode := value.Content[index]
++			if isYAMLMergeKey(keyNode) {
++				if yamlMergeSuppliesKey(value.Content[index+1], name, visited) {
++					return true
++				}
++				continue
++			}
++			if yamlKeyMatches(keyNode, name) {
++				return true
++			}
++		}
++	case yaml.SequenceNode:
++		for _, item := range value.Content {
++			if yamlMergeSuppliesKey(item, name, visited) {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++// validateOAuthExtraModelsShape refuses anything but plain YAML inside the
++// overlay: every node carries the standard tag of its kind (!!map, !!seq,
++// !!str, !!int, !!bool, or !!null on a scalar), and there is no anchor, alias
++// or merge key; every mapping key is a plain string.
++func validateOAuthExtraModelsShape(node *yaml.Node) error {
++	if node.Anchor != "" {
++		return errors.New("anchors are not supported inside the overlay")
++	}
++	switch node.Kind {
++	case yaml.AliasNode:
++		return errors.New("aliases are not supported inside the overlay")
++	case yaml.MappingNode:
++		if tag := node.ShortTag(); tag != "!!map" {
++			return fmt.Errorf("a mapping carries the tag %s (only the standard tag is supported)", tag)
++		}
++		for index := 0; index+1 < len(node.Content); index += 2 {
++			keyNode := node.Content[index]
++			if isYAMLMergeKey(keyNode) {
++				return errors.New("merge keys are not supported inside the overlay")
++			}
++			if !isPlainYAMLKey(keyNode) {
++				return fmt.Errorf("key %q must be a plain string (no alias, anchor or tag)", keyNode.Value)
++			}
++			if errValue := validateOAuthExtraModelsShape(node.Content[index+1]); errValue != nil {
++				return errValue
++			}
++		}
++	case yaml.SequenceNode:
++		if tag := node.ShortTag(); tag != "!!seq" {
++			return fmt.Errorf("a list carries the tag %s (only the standard tag is supported)", tag)
++		}
++		for _, item := range node.Content {
++			if errItem := validateOAuthExtraModelsShape(item); errItem != nil {
++				return errItem
++			}
++		}
++	case yaml.ScalarNode:
++		switch tag := node.ShortTag(); tag {
++		case "!!str", "!!int", "!!bool", "!!null":
++		default:
++			return fmt.Errorf("a scalar carries the tag %s (only !!str, !!int, !!bool and !!null are supported)", tag)
++		}
++	default:
++		return errors.New("unsupported YAML node inside the overlay")
++	}
++	return nil
++}
++
++// decodeOAuthExtraModelsNode decodes a structurally validated overlay node, a
++// mapping of channel to a list of entries. Each entry is type-checked on its
++// node, strictly decoded (unknown fields refused) and value-validated.
++// Presence comes from the node: an explicitly written limit must be > 0, an
++// omitted one stays omitted.
++func decodeOAuthExtraModelsNode(node *yaml.Node) (map[string][]OAuthExtraModel, error) {
++	if isYAMLNullScalar(node) {
++		return nil, nil
++	}
++	if node.Kind != yaml.MappingNode {
++		return nil, errors.New("must be a mapping of OAuth channel to a list of models")
++	}
++	entries := make(map[string][]OAuthExtraModel, len(node.Content)/2)
++	for index := 0; index+1 < len(node.Content); index += 2 {
++		channel, value := node.Content[index].Value, node.Content[index+1]
++		if !IsOAuthExtraModelChannel(channel) {
++			return nil, fmt.Errorf("channel %q is not allowed (allowed: claude, codex)", channel)
++		}
++		if _, exists := entries[channel]; exists {
++			return nil, fmt.Errorf("channel %q is defined more than once", channel)
++		}
++		if isYAMLNullScalar(value) {
++			entries[channel] = nil
++			continue
++		}
++		if value.Kind != yaml.SequenceNode {
++			return nil, fmt.Errorf("%s: must be a list of models", channel)
++		}
++		list := make([]OAuthExtraModel, 0, len(value.Content))
++		seen := make(map[string]struct{}, len(value.Content))
++		for position, item := range value.Content {
++			model, errEntry := decodeOAuthExtraModelItem(item)
++			if errEntry != nil {
++				return nil, fmt.Errorf("%s[%d]: %w", channel, position, errEntry)
++			}
++			key := strings.ToLower(model.Name)
++			if _, exists := seen[key]; exists {
++				return nil, fmt.Errorf("%s[%d]: duplicate model %q", channel, position, model.Name)
++			}
++			seen[key] = struct{}{}
++			list = append(list, model)
++		}
++		entries[channel] = list
++	}
++	return NormalizeOAuthExtraModels(entries), nil
++}
++
++// oauthExtraModelFields and oauthExtraModelThinkingFields are the closed
++// schemas of an entry and of its thinking capability: field -> required kind.
++var (
++	oauthExtraModelFields = map[string]string{
++		"name": "string", "display-name": "string",
++		"max-context-length": "integer", "max-completion-tokens": "integer",
++		"thinking": "thinking",
++	}
++	oauthExtraModelThinkingFields = map[string]string{
++		"min": "integer", "max": "integer",
++		"zero-allowed": "boolean", "dynamic-allowed": "boolean",
++		"levels": "list of strings",
++	}
++)
++
++// validateOAuthExtraModelFields checks an entry's (or its thinking's) fields
++// on the node: only schema fields, each explicitly present one of its type. The
++// decoder would otherwise truncate a float (1.9 -> 1) into a Go int, turn a
++// null into an omitted field and drop unknown fields silently.
++func validateOAuthExtraModelFields(node *yaml.Node, fields map[string]string, prefix string) error {
++	if node.Kind != yaml.MappingNode {
++		return errors.New("must be a mapping")
++	}
++	for index := 0; index+1 < len(node.Content); index += 2 {
++		field, value := node.Content[index].Value, node.Content[index+1]
++		kind, known := fields[field]
++		if !known {
++			return fmt.Errorf("field %s%q is not supported", prefix, field)
++		}
++		name := prefix + field
++		switch kind {
++		case "integer":
++			if errInt := validateOAuthExtraModelInt(name, value); errInt != nil {
++				return errInt
++			}
++		case "string", "boolean":
++			tag := map[string]string{"string": "!!str", "boolean": "!!bool"}[kind]
++			if value.Kind != yaml.ScalarNode || value.ShortTag() != tag {
++				return fmt.Errorf("%s must be a %s", name, kind)
++			}
++		case "thinking":
++			if value.Kind != yaml.MappingNode {
++				return fmt.Errorf("%s must be a mapping", name)
++			}
++			if errThinking := validateOAuthExtraModelFields(value, oauthExtraModelThinkingFields, name+" "); errThinking != nil {
++				return errThinking
++			}
++		case "list of strings":
++			if value.Kind != yaml.SequenceNode {
++				return fmt.Errorf("%s must be a list of strings", name)
++			}
++			for _, item := range value.Content {
++				if item.Kind != yaml.ScalarNode || item.ShortTag() != "!!str" {
++					return fmt.Errorf("%s must be a list of strings", name)
++				}
++			}
++		}
++	}
++	return nil
++}
++
++func validateOAuthExtraModelInt(field string, node *yaml.Node) error {
++	if node.Kind == yaml.ScalarNode && node.ShortTag() == "!!int" {
++		var value interface{}
++		if node.Decode(&value) == nil {
++			switch value.(type) {
++			case int, int64, uint64:
++				return nil
++			}
++		}
++	}
++	return fmt.Errorf("%s must be an integer", field)
++}
++
++// decodeOAuthExtraModelItem type-checks one entry node, decodes it strictly
++// (KnownFields) and validates its values.
++func decodeOAuthExtraModelItem(item *yaml.Node) (OAuthExtraModel, error) {
++	if errFields := validateOAuthExtraModelFields(item, oauthExtraModelFields, ""); errFields != nil {
++		return OAuthExtraModel{}, errFields
++	}
++	raw, errMarshal := yaml.Marshal(item)
++	if errMarshal != nil {
++		return OAuthExtraModel{}, errMarshal
++	}
++	var entry oauthExtraModelStrict
++	decoder := yaml.NewDecoder(bytes.NewReader(raw))
++	decoder.KnownFields(true)
++	if errDecode := decoder.Decode(&entry); errDecode != nil {
++		return OAuthExtraModel{}, errDecode
++	}
++	if errEntry := validateOAuthExtraModelEntry(entry); errEntry != nil {
++		return OAuthExtraModel{}, errEntry
++	}
++	model := OAuthExtraModel{Name: *entry.Name, Thinking: entry.Thinking}
++	if entry.DisplayName != nil {
++		model.DisplayName = *entry.DisplayName
++	}
++	if entry.MaxContextLength != nil {
++		model.MaxContextLength = *entry.MaxContextLength
++	}
++	if entry.MaxCompletionTokens != nil {
++		model.MaxCompletionTokens = *entry.MaxCompletionTokens
++	}
++	return model, nil
++}
++
++func validateOAuthExtraModelEntry(entry oauthExtraModelStrict) error {
++	if entry.Name == nil {
++		return errors.New("name is required")
++	}
++	if !oauthExtraModelNamePattern.MatchString(*entry.Name) {
++		return fmt.Errorf("name %q is not a valid upstream model id", *entry.Name)
++	}
++	if entry.DisplayName != nil {
++		displayName := *entry.DisplayName
++		if strings.TrimSpace(displayName) == "" || strings.TrimSpace(displayName) != displayName {
++			return errors.New("display-name must be non-blank without surrounding whitespace")
++		}
++		if !utf8.ValidString(displayName) || utf8.RuneCountInString(displayName) > maxOAuthExtraModelDisplayName {
++			return fmt.Errorf("display-name must be valid UTF-8 of at most %d characters", maxOAuthExtraModelDisplayName)
++		}
++		for _, r := range displayName {
++			if unicode.IsControl(r) {
++				return errors.New("display-name must not contain control characters")
++			}
++		}
++	}
++	if entry.MaxContextLength != nil && *entry.MaxContextLength <= 0 {
++		return errors.New("max-context-length must be > 0")
++	}
++	if entry.MaxCompletionTokens != nil && *entry.MaxCompletionTokens <= 0 {
++		return errors.New("max-completion-tokens must be > 0")
++	}
++	if entry.Thinking != nil {
++		if errThinking := ValidateOAuthExtraModelThinking(entry.Thinking); errThinking != nil {
++			return fmt.Errorf("thinking: %w", errThinking)
++		}
++	}
++	return nil
++}
++
++// ValidateOAuthExtraModelThinking checks a thinking capability with the
++// thinking package's own level vocabulary: levels are the discrete effort
++// levels and the special modes none/auto, lower case, without duplicates; a
++// budget range needs 0 <= min <= max; the capability must declare levels or a
++// budget.
++func ValidateOAuthExtraModelThinking(support *registry.ThinkingSupport) error {
++	if support == nil {
++		return nil
++	}
++	if support.Min < 0 || support.Max < 0 {
++		return errors.New("min and max must be >= 0")
++	}
++	if support.Min > 0 && support.Max == 0 {
++		return errors.New("min needs a max")
++	}
++	if support.Max > 0 && support.Min > support.Max {
++		return errors.New("min must be <= max")
++	}
++	if len(support.Levels) == 0 && support.Max == 0 {
++		return errors.New("must declare levels or a budget (max)")
++	}
++	seen := make(map[string]struct{}, len(support.Levels))
++	for _, level := range support.Levels {
++		if level != strings.ToLower(strings.TrimSpace(level)) {
++			return fmt.Errorf("level %q must be lower case without whitespace", level)
++		}
++		_, isLevel := thinking.ParseLevelSuffix(level)
++		_, isSpecial := thinking.ParseSpecialSuffix(level)
++		if !isLevel && !(isSpecial && level != "-1") {
++			return fmt.Errorf("level %q is not a thinking level", level)
++		}
++		if _, exists := seen[level]; exists {
++			return fmt.Errorf("duplicate level %q", level)
++		}
++		seen[level] = struct{}{}
++	}
++	return nil
++}
++
++// NormalizeOAuthExtraModels returns the validated overlay in canonical form:
++// empty channel lists dropped, a nil map when nothing remains, and no empty
++// slices, so a reload compares overlay content exactly.
++func NormalizeOAuthExtraModels(entries map[string][]OAuthExtraModel) map[string][]OAuthExtraModel {
++	if len(entries) == 0 {
++		return nil
++	}
++	out := make(map[string][]OAuthExtraModel, len(entries))
++	for channel, models := range entries {
++		if len(models) == 0 {
++			continue
++		}
++		list := make([]OAuthExtraModel, 0, len(models))
++		for _, model := range models {
++			if model.Thinking != nil {
++				support := *model.Thinking
++				if len(support.Levels) == 0 {
++					support.Levels = nil
++				} else {
++					support.Levels = append([]string(nil), support.Levels...)
++				}
++				model.Thinking = &support
++			}
++			list = append(list, model)
++		}
++		out[channel] = list
++	}
++	if len(out) == 0 {
++		return nil
++	}
++	return out
++}
+diff --git a/internal/config/oauth_extra_models_cm053_test.go b/internal/config/oauth_extra_models_cm053_test.go
+new file mode 100644
+index 0000000..3a022d8
+--- /dev/null
++++ b/internal/config/oauth_extra_models_cm053_test.go
+@@ -0,0 +1,327 @@
++package config
++
++// claude-multi local patch (oauth-model-overlay) load gates.
++
++import (
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	"gopkg.in/yaml.v3"
++)
++
++const cm053OverlayValidYAML = `oauth-extra-models:
++  claude:
++    - name: claude-cm053-overlay-example-1
++      display-name: Claude CM053 Overlay Example
++      max-context-length: 1000000
++      max-completion-tokens: 128000
++      thinking:
++        zero-allowed: true
++        dynamic-allowed: true
++        levels: [low, medium, high, xhigh, max]
++  codex:
++    - name: gpt-cm053-overlay-example-1
++      display-name: GPT CM053 Overlay Example
++      max-context-length: 272000
++      max-completion-tokens: 128000
++      thinking:
++        levels: [low, medium, high, xhigh]
++`
++
++func cm053OverlayEntry(fields string) string {
++	return "oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-invalid\n" + fields
++}
++
++func TestCM053OverlayInvalidRefusedAtLoad(t *testing.T) {
++	cases := map[string]string{
++		// channel
++		"channel-unknown":        "oauth-extra-models:\n  gemini:\n    - name: gemini-cm053\n",
++		"channel-case":           "oauth-extra-models:\n  Claude:\n    - name: claude-cm053\n",
++		"channel-api-key-family": "oauth-extra-models:\n  claude-api-key:\n    - name: claude-cm053\n",
++		"channel-openai-compat":  "oauth-extra-models:\n  openai-compatibility:\n    - name: gpt-cm053\n",
++		"overlay-not-mapping":    "oauth-extra-models:\n  - name: claude-cm053\n",
++		"channel-not-list":       "oauth-extra-models:\n  claude:\n    name: claude-cm053\n",
++		"entry-not-mapping":      "oauth-extra-models:\n  claude:\n    - claude-cm053\n",
++		// field
++		"field-alias":          cm053OverlayEntry("      alias: cm053-alias\n"),
++		"field-fork":           cm053OverlayEntry("      fork: true\n"),
++		"field-headers":        cm053OverlayEntry("      headers:\n        x-cm053: one\n"),
++		"field-config":         cm053OverlayEntry("      config:\n        headers: {}\n"),
++		"field-base-url":       cm053OverlayEntry("      base-url: https://example.invalid\n"),
++		"field-proxy-url":      cm053OverlayEntry("      proxy-url: socks5://127.0.0.1:1\n"),
++		"field-context-length": cm053OverlayEntry("      context-length: 1000\n"),
++		"field-owned-by":       cm053OverlayEntry("      owned-by: cm053\n"),
++		"name-missing":         "oauth-extra-models:\n  claude:\n    - display-name: No Name\n",
++		"name-null":            "oauth-extra-models:\n  claude:\n    - name: ~\n",
++		"name-empty":           "oauth-extra-models:\n  claude:\n    - name: ''\n",
++		"name-space":           "oauth-extra-models:\n  claude:\n    - name: claude cm053\n",
++		"name-prefix":          "oauth-extra-models:\n  claude:\n    - name: team/claude-cm053\n",
++		"name-suffix":          "oauth-extra-models:\n  claude:\n    - name: claude-cm053(high)\n",
++		"name-leading-dash":    "oauth-extra-models:\n  claude:\n    - name: -claude-cm053\n",
++		"name-too-long":        "oauth-extra-models:\n  claude:\n    - name: c" + strings.Repeat("x", 128) + "\n",
++		"display-name-blank":   cm053OverlayEntry("      display-name: '  '\n"),
++		"display-name-control": cm053OverlayEntry("      display-name: \"a\\tb\"\n"),
++		"context-zero":         cm053OverlayEntry("      max-context-length: 0\n"),
++		"context-negative":     cm053OverlayEntry("      max-context-length: -1\n"),
++		"context-string":       cm053OverlayEntry("      max-context-length: large\n"),
++		"output-zero":          cm053OverlayEntry("      max-completion-tokens: 0\n"),
++		// thinking
++		"thinking-unknown-field": cm053OverlayEntry("      thinking:\n        levels: [low]\n        budget: 10\n"),
++		"thinking-unknown-level": cm053OverlayEntry("      thinking:\n        levels: [low, ultra]\n"),
++		"thinking-upper-level":   cm053OverlayEntry("      thinking:\n        levels: [HIGH]\n"),
++		"thinking-numeric-level": cm053OverlayEntry("      thinking:\n        levels: [\"-1\"]\n"),
++		"thinking-dup-level":     cm053OverlayEntry("      thinking:\n        levels: [low, low]\n"),
++		"thinking-empty":         cm053OverlayEntry("      thinking: {}\n"),
++		"thinking-flags-only":    cm053OverlayEntry("      thinking:\n        zero-allowed: true\n"),
++		"thinking-min-gt-max":    cm053OverlayEntry("      thinking:\n        min: 4096\n        max: 1024\n"),
++		"thinking-min-no-max":    cm053OverlayEntry("      thinking:\n        min: 1024\n        levels: [low]\n"),
++		"thinking-negative":      cm053OverlayEntry("      thinking:\n        min: -1\n        max: 1024\n"),
++		"thinking-not-mapping":   cm053OverlayEntry("      thinking: [low]\n"),
++		// duplicate
++		"duplicate":             "oauth-extra-models:\n  claude:\n    - name: claude-cm053-dup\n    - name: claude-cm053-dup\n",
++		"duplicate-case":        "oauth-extra-models:\n  codex:\n    - name: gpt-cm053-dup\n    - name: GPT-CM053-DUP\n",
++		"duplicate-channel-key": "oauth-extra-models:\n  claude:\n    - name: claude-cm053-a\n  claude:\n    - name: claude-cm053-b\n",
++		// effective overlay: supplied through a root merge, an alias or a
++		// tagged or aliased root key, it is validated like a literal one
++		"merge-root-example":   "<<: {oauth-extra-models: {claude: [{name: claude-cm053-bad, max-context-length: -1, thinking: {levels: [ultra]}, headers: {x-cm053: ignored}}]}}\n",
++		"merge-root-limit":     "<<: {oauth-extra-models: {claude: [{name: claude-cm053-bad, max-context-length: -1}]}}\n",
++		"merge-root-level":     "<<: {oauth-extra-models: {claude: [{name: claude-cm053-bad, thinking: {levels: [ultra]}}]}}\n",
++		"merge-root-field":     "<<: {oauth-extra-models: {claude: [{name: claude-cm053-bad, headers: {x-cm053: ignored}}]}}\n",
++		"merge-root-channel":   "<<: {oauth-extra-models: {gemini: [{name: gemini-cm053}]}}\n",
++		"merge-root-anchor":    "x-cm053-base: &base\n  oauth-extra-models:\n    claude:\n      - name: claude-cm053-bad\n        max-context-length: 0\n<<: *base\n",
++		"merge-root-sequence":  "<<: [{pprof: {enable: false}}, {oauth-extra-models: {codex: [{name: gpt-cm053-bad, max-completion-tokens: -5}]}}]\n",
++		"merge-root-nested":    "<<: {<<: {oauth-extra-models: {claude: [{name: claude-cm053-bad, alias: x}]}}}\n",
++		"alias-root-value":     "x-cm053-overlay: &overlay\n  claude:\n    - name: claude-cm053-bad\n      max-context-length: -1\noauth-extra-models: *overlay\n",
++		"alias-root-key":       "x-cm053-key: &key oauth-extra-models\n*key : {claude: [{name: claude-cm053-bad, max-context-length: -1}]}\n",
++		"binary-root-key":      "!!binary b2F1dGgtZXh0cmEtbW9kZWxz: {claude: [{name: claude-cm053-bad, max-context-length: -1}]}\n",
++		"alias-inside-entry":   "x-cm053-thinking: &thinking {levels: [low]}\noauth-extra-models:\n  claude:\n    - name: claude-cm053-a\n      thinking: *thinking\n",
++		"alias-inside-list":    "x-cm053-entry: &entry {name: claude-cm053-a}\noauth-extra-models:\n  claude:\n    - *entry\n",
++		"merge-inside-entry":   "oauth-extra-models:\n  claude:\n    - <<: {max-context-length: 1000}\n      name: claude-cm053-a\n",
++		"merge-inside-overlay": "oauth-extra-models:\n  <<: {claude: [{name: claude-cm053-a}]}\n",
++		"binary-channel-key":   "oauth-extra-models:\n  !!binary Y2xhdWRl: [{name: claude-cm053-a}]\n",
++		"binary-field-key":     "oauth-extra-models:\n  claude:\n    - !!binary bmFtZQ==: claude-cm053-a\n",
++		// integer fields must be integer scalars (no silent float truncation)
++		"context-fraction":        cm053OverlayEntry("      max-context-length: 1.9\n"),
++		"context-exponent":        cm053OverlayEntry("      max-context-length: 1e6\n"),
++		"context-tagged-fraction": cm053OverlayEntry("      max-context-length: !!int 1.9\n"),
++		"context-quoted":          cm053OverlayEntry("      max-context-length: '1000'\n"),
++		"context-null":            cm053OverlayEntry("      max-context-length: ~\n"),
++		"context-overflow":        cm053OverlayEntry("      max-context-length: 99999999999999999999\n"),
++		"output-fraction":         cm053OverlayEntry("      max-completion-tokens: 2.5\n"),
++		"thinking-min-fraction":   cm053OverlayEntry("      thinking:\n        min: -0.5\n        max: 1024\n"),
++		"thinking-max-fraction":   cm053OverlayEntry("      thinking:\n        max: 1024.5\n"),
++		"merge-root-fraction":     "<<: {oauth-extra-models: {claude: [{name: claude-cm053-bad, max-context-length: 1.9}]}}\n",
++	}
++	dir := t.TempDir()
++	for name, text := range cases {
++		t.Run(name, func(t *testing.T) {
++			document := "api-keys: [cm053]\n" + text
++			if cfg, err := LoadConfigBytes([]byte(document)); err == nil {
++				t.Fatalf("LoadConfigBytes accepted an invalid overlay: %+v", cfg.OAuthExtraModels)
++			}
++			if cfg, err := ParseConfigBytes([]byte(document)); err == nil {
++				t.Fatalf("ParseConfigBytes accepted an invalid overlay: %+v", cfg.OAuthExtraModels)
++			}
++			path := filepath.Join(dir, name+".yaml")
++			if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
++				t.Fatal(err)
++			}
++			if _, err := LoadConfig(path); err == nil {
++				t.Fatal("LoadConfig accepted an invalid overlay")
++			}
++		})
++	}
++
++	// The overlay is a literal top-level key: standard tags written
++	// explicitly, a quoted key, a hex integer, and anchors, aliases and merges
++	// outside the overlay all load the literal overlay exactly.
++	literal := map[string]string{
++		"hex-and-digits":     "oauth-extra-models: {codex: [{name: gpt-cm053-literal-1, max-context-length: 0x3e8}]}\n",
++		"quoted-key":         "\"oauth-extra-models\": {codex: [{name: gpt-cm053-literal-1, max-context-length: 1000}]}\n",
++		"standard-tags":      "!!str oauth-extra-models: !!map {codex: !!seq [!!map {!!str name: !!str gpt-cm053-literal-1, max-context-length: !!int 1000}]}\n",
++		"merge-elsewhere":    "<<: {pprof: {enable: false}}\noauth-extra-models: {codex: [{name: gpt-cm053-literal-1, max-context-length: 1000}]}\n",
++		"anchor-elsewhere":   "x-cm053-pprof: &pprof {enable: false}\npprof: *pprof\noauth-extra-models: {codex: [{name: gpt-cm053-literal-1, max-context-length: 1000}]}\n",
++		"null-channel-empty": "oauth-extra-models:\n  claude: ~\n  codex: [{name: gpt-cm053-literal-1, max-context-length: 1000}]\n",
++	}
++	wantLiteral := map[string][]OAuthExtraModel{"codex": {{Name: "gpt-cm053-literal-1", MaxContextLength: 1000}}}
++	for name, text := range literal {
++		loaded, err := LoadConfigBytes([]byte("api-keys: [cm053]\n" + text))
++		if err != nil || !reflect.DeepEqual(loaded.OAuthExtraModels, wantLiteral) {
++			t.Fatalf("%s: LoadConfigBytes = %+v, %v", name, loaded, err)
++		}
++		parsed, err := ParseConfigBytes([]byte("api-keys: [cm053]\n" + text))
++		if err != nil || !reflect.DeepEqual(parsed.OAuthExtraModels, wantLiteral) {
++			t.Fatalf("%s: ParseConfigBytes = %+v, %v", name, parsed, err)
++		}
++	}
++	if loaded, err := LoadConfigBytes([]byte("---\napi-keys: [cm053]\noauth-extra-models: {codex: [{name: gpt-cm053-literal-1, max-context-length: 1000}]}\n")); err != nil || !reflect.DeepEqual(loaded.OAuthExtraModels, wantLiteral) {
++		t.Fatalf("document-start: LoadConfigBytes = %+v, %v", loaded, err)
++	}
++	for _, text := range []string{"oauth-extra-models:\n", "oauth-extra-models: ~\n", "oauth-extra-models: {}\n", "oauth-extra-models: {claude: []}\n"} {
++		loaded, err := LoadConfigBytes([]byte("api-keys: [cm053]\n" + text))
++		if err != nil || loaded.OAuthExtraModels != nil {
++			t.Fatalf("%q: empty overlay = %+v, %v", text, loaded, err)
++		}
++	}
++
++	// The decoded overlay is re-validated after the main decode.
++	decoded := map[string]map[string][]OAuthExtraModel{
++		"channel":  {"gemini": {{Name: "gemini-cm053"}}},
++		"name":     {"claude": {{Name: "claude cm053"}}},
++		"display":  {"claude": {{Name: "claude-cm053", DisplayName: " x"}}},
++		"context":  {"claude": {{Name: "claude-cm053", MaxContextLength: -1}}},
++		"output":   {"codex": {{Name: "gpt-cm053", MaxCompletionTokens: -1}}},
++		"thinking": {"claude": {{Name: "claude-cm053", Thinking: &registry.ThinkingSupport{Levels: []string{"ultra"}}}}},
++		"budget":   {"claude": {{Name: "claude-cm053", Thinking: &registry.ThinkingSupport{Min: -1, Max: 1024}}}},
++		"dup":      {"codex": {{Name: "gpt-cm053"}, {Name: "GPT-cm053"}}},
++	}
++	for name, entries := range decoded {
++		if err := validateOAuthExtraModelsDecoded(entries); err == nil {
++			t.Fatalf("decoded %s: invalid overlay accepted", name)
++		}
++	}
++	if err := validateOAuthExtraModelsDecoded(map[string][]OAuthExtraModel{"claude": {{Name: "claude-cm053", MaxContextLength: 1, Thinking: &registry.ThinkingSupport{Levels: []string{"low"}}}}}); err != nil {
++		t.Fatalf("decoded valid overlay refused: %v", err)
++	}
++
++	// The config carries only the validated overlay: a decoded overlay that
++	// differs from it (a construct reaching the field around the structural
++	// check) refuses the load.
++	validated := map[string][]OAuthExtraModel{"codex": {{Name: "gpt-cm053-validated-1", MaxContextLength: 1000}}}
++	for name, decodedOverlay := range map[string]map[string][]OAuthExtraModel{
++		"extra":   {"codex": {{Name: "gpt-cm053-validated-1", MaxContextLength: 1000}, {Name: "gpt-cm053-injected-1"}}},
++		"missing": nil,
++		"zeroed":  {"codex": {{Name: "gpt-cm053-validated-1"}}},
++	} {
++		if err := adoptOAuthExtraModels(&Config{OAuthExtraModels: decodedOverlay}, validated); err == nil {
++			t.Fatalf("adopt %s: a differing decoded overlay was accepted", name)
++		}
++	}
++	if err := adoptOAuthExtraModels(&Config{OAuthExtraModels: map[string][]OAuthExtraModel{"codex": {{Name: "gpt-cm053-injected-1"}}}}, nil); err == nil {
++		t.Fatal("adopt: a decoded overlay without a validated one was accepted")
++	}
++	adopted := &Config{OAuthExtraModels: map[string][]OAuthExtraModel{"codex": {{Name: "gpt-cm053-validated-1", MaxContextLength: 1000}}, "claude": {}}}
++	if err := adoptOAuthExtraModels(adopted, validated); err != nil || !reflect.DeepEqual(adopted.OAuthExtraModels, validated) {
++		t.Fatalf("adopt: equal overlay = %+v, %v", adopted.OAuthExtraModels, err)
++	}
++
++	// The contract example loads exactly, through every loader.
++	want := map[string][]OAuthExtraModel{
++		"claude": {{
++			Name: "claude-cm053-overlay-example-1", DisplayName: "Claude CM053 Overlay Example",
++			MaxContextLength: 1000000, MaxCompletionTokens: 128000,
++			Thinking: &registry.ThinkingSupport{ZeroAllowed: true, DynamicAllowed: true, Levels: []string{"low", "medium", "high", "xhigh", "max"}},
++		}},
++		"codex": {{
++			Name: "gpt-cm053-overlay-example-1", DisplayName: "GPT CM053 Overlay Example",
++			MaxContextLength: 272000, MaxCompletionTokens: 128000,
++			Thinking: &registry.ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh"}},
++		}},
++	}
++	loaded, err := LoadConfigBytes([]byte(cm053OverlayValidYAML))
++	if err != nil {
++		t.Fatalf("valid overlay refused: %v", err)
++	}
++	if !reflect.DeepEqual(loaded.OAuthExtraModels, want) {
++		t.Fatalf("loaded overlay = %+v", loaded.OAuthExtraModels)
++	}
++	parsed, err := ParseConfigBytes([]byte(cm053OverlayValidYAML))
++	if err != nil || !reflect.DeepEqual(parsed.OAuthExtraModels, want) {
++		t.Fatalf("ParseConfigBytes = %+v, %v", parsed, err)
++	}
++	minimal, err := LoadConfigBytes([]byte("oauth-extra-models:\n  codex:\n    - name: gpt-cm053.minimal_1\n"))
++	if err != nil || !reflect.DeepEqual(minimal.OAuthExtraModels, map[string][]OAuthExtraModel{"codex": {{Name: "gpt-cm053.minimal_1"}}}) {
++		t.Fatalf("minimal entry = %+v, %v", minimal, err)
++	}
++	budget, err := LoadConfigBytes([]byte(cm053OverlayEntry("      thinking:\n        min: 1024\n        max: 64000\n        zero-allowed: true\n        levels: [none, auto, minimal, low, medium, high, xhigh, max]\n")))
++	if err != nil || budget.OAuthExtraModels["claude"][0].Thinking.Max != 64000 {
++		t.Fatalf("budget and full level vocabulary refused: %v", err)
++	}
++	// The watcher compares a YAML round trip of the previous config: the
++	// canonical overlay must survive it exactly (no spurious refresh).
++	raw, err := yaml.Marshal(loaded)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var roundTrip *Config
++	if err := yaml.Unmarshal(raw, &roundTrip); err != nil {
++		t.Fatal(err)
++	}
++	if !reflect.DeepEqual(NormalizeOAuthExtraModels(roundTrip.OAuthExtraModels), loaded.OAuthExtraModels) {
++		t.Fatalf("round trip changed the overlay: %+v", roundTrip.OAuthExtraModels)
++	}
++	if clone := loaded.CloneForRuntime(); !reflect.DeepEqual(clone.OAuthExtraModels, want) || &clone.OAuthExtraModels["claude"][0] == &loaded.OAuthExtraModels["claude"][0] {
++		t.Fatal("runtime clone must deep-copy the overlay")
++	}
++}
++
++// cm053OverlayShapeCases are overlays whose YAML shape is refused structurally,
++// before any decode: the overlay must be a literal top-level key of a plain
++// root mapping, and it and every descendant carry only the standard tag of
++// their kind, with no anchor, alias or merge key. Each case (prefix + the
++// config head + body) was accepted by the capture-based validation of the
++// previous revision; the same table drives the watcher reload gate.
++var cm053OverlayShapeCases = map[string]struct{ prefix, body string }{
++	// !!null on a non-scalar skips an Unmarshaler, but the decoder still fills it
++	"null-tag-mapping":      {"", "oauth-extra-models: !!null {claude: [{name: claude-cm053-shape-1, max-context-length: 0, headers: {x-cm053: injected}}]}\n"},
++	"null-tag-headers":      {"", "oauth-extra-models: !!null {codex: [{name: gpt-cm053-shape-1, headers: {x-cm053: injected}}]}\n"},
++	"null-tag-base-url":     {"", "oauth-extra-models: !!null\n  codex:\n    - name: gpt-cm053-shape-1\n      base-url: https://example.invalid\n"},
++	"null-tag-zero-limits":  {"", "oauth-extra-models: !!null {codex: [{name: gpt-cm053-shape-1, max-context-length: 0, max-completion-tokens: 0}]}\n"},
++	"null-tag-float-limit":  {"", "oauth-extra-models: !!null {codex: [{name: gpt-cm053-shape-1, max-context-length: 1.9}]}\n"},
++	"null-tag-channel-list": {"", "oauth-extra-models:\n  codex: !!null [{name: gpt-cm053-shape-1}]\n"},
++	"null-tag-entry":        {"", "oauth-extra-models:\n  codex:\n    - !!null {name: gpt-cm053-shape-1}\n"},
++	// the overlay must be a literal top-level key, never supplied by a merge
++	"merge-overlay":      {"", "<<: {oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}}\n"},
++	"merge-null-tag":     {"", "<<: {oauth-extra-models: !!null {claude: [{name: claude-cm053-shape-1, max-context-length: 0, headers: {x-cm053: injected}}]}}\n"},
++	"merge-alias":        {"", "x-cm053-base: &base {oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}}\n<<: *base\n"},
++	"merge-sequence":     {"", "<<: [{pprof: {enable: false}}, {oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}}]\n"},
++	"merge-nested":       {"", "<<: {<<: {oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}}}\n"},
++	"merge-with-literal": {"", "<<: {oauth-extra-models: {gemini: [{name: gemini-cm053}]}}\noauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	// no anchors or aliases on or inside the overlay, and a literal key
++	"anchor-overlay": {"", "oauth-extra-models: &overlay {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"anchor-entry":   {"", "oauth-extra-models:\n  codex:\n    - &entry {name: gpt-cm053-shape-1}\n"},
++	"anchor-scalar":  {"", "oauth-extra-models:\n  codex:\n    - name: &name gpt-cm053-shape-1\n"},
++	"anchor-key":     {"", "&key oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"alias-overlay":  {"", "x-cm053-overlay: &overlay {codex: [{name: gpt-cm053-shape-1}]}\noauth-extra-models: *overlay\n"},
++	"alias-key":      {"", "x-cm053-key: &key oauth-extra-models\n*key : {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	// standard tags only
++	"custom-tag-overlay": {"", "oauth-extra-models: !cm053 {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"custom-tag-entry":   {"", "oauth-extra-models:\n  codex:\n    - !cm053 {name: gpt-cm053-shape-1}\n"},
++	"custom-tag-scalar":  {"", "oauth-extra-models:\n  codex:\n    - name: !cm053 gpt-cm053-shape-1\n"},
++	"custom-tag-key":     {"", "!cm053 oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"str-tag-list":       {"", "oauth-extra-models:\n  codex: !!str [{name: gpt-cm053-shape-1}]\n"},
++	"float-display-name": {"", "oauth-extra-models:\n  codex:\n    - name: gpt-cm053-shape-1\n      display-name: 1.5\n"},
++	"binary-name":        {"", "oauth-extra-models:\n  codex:\n    - name: !!binary Z3B0LWNtMDUzLXNoYXBlLTE=\n"},
++	// the root is a plain mapping
++	"root-custom-tag": {"--- !cm053\n", "oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"root-anchor":     {"--- &root\n", "oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++}
++
++func TestCM053OverlayShapeRefused(t *testing.T) {
++	dir := t.TempDir()
++	for name, shape := range cm053OverlayShapeCases {
++		t.Run(name, func(t *testing.T) {
++			document := shape.prefix + "api-keys: [cm053]\n" + shape.body
++			if cfg, err := LoadConfigBytes([]byte(document)); err == nil {
++				t.Fatalf("LoadConfigBytes accepted the overlay shape: %+v", cfg.OAuthExtraModels)
++			}
++			if cfg, err := ParseConfigBytes([]byte(document)); err == nil {
++				t.Fatalf("ParseConfigBytes accepted the overlay shape: %+v", cfg.OAuthExtraModels)
++			}
++			path := filepath.Join(dir, name+".yaml")
++			if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
++				t.Fatal(err)
++			}
++			if _, err := LoadConfig(path); err == nil {
++				t.Fatal("LoadConfig accepted the overlay shape")
++			}
++			if cfg, err := LoadConfigOptional(path, true); err != nil || cfg.OAuthExtraModels != nil || len(cfg.APIKeys) != 0 {
++				t.Fatalf("LoadConfigOptional did not fall back to the empty config: %+v, %v", cfg, err)
++			}
++		})
++	}
++}
+diff --git a/internal/config/parse.go b/internal/config/parse.go
+index 8b2f22a..a34e985 100644
+--- a/internal/config/parse.go
++++ b/internal/config/parse.go
+@@ -18,6 +18,13 @@ func ParseConfigBytes(data []byte) (*Config, error) {
+ 	if errValidate := validateCredentialWeightYAML(data); errValidate != nil {
+ 		return nil, errValidate
+ 	}
++	// claude-multi local patch (oauth-model-overlay): the overlay is
++	// validated structurally on the parsed node and decoded from it; an invalid
++	// overlay refuses the whole payload.
++	oauthExtraModels, errValidate := parseOAuthExtraModelsYAML(data)
++	if errValidate != nil {
++		return nil, errValidate
++	}
+ 
+ 	var cfg Config
+ 	// Keep defaults aligned with LoadConfigOptional.
+@@ -43,6 +50,11 @@ func ParseConfigBytes(data []byte) (*Config, error) {
+ 	if err := yaml.Unmarshal(data, &cfg); err != nil {
+ 		return nil, fmt.Errorf("parse config payload: %w", err)
+ 	}
++	// claude-multi local patch (oauth-model-overlay): the config carries
++	// the validated overlay; a decoded overlay that differs refuses the payload.
++	if errValidate := adoptOAuthExtraModels(&cfg, oauthExtraModels); errValidate != nil {
++		return nil, errValidate
++	}
+ 	if errValidate := validateTrustedProxies(cfg.TrustedProxies); errValidate != nil {
+ 		return nil, errValidate
+ 	}
+@@ -112,6 +124,7 @@ func ParseConfigBytes(data []byte) (*Config, error) {
+ 	cfg.SanitizeOpenAICompatibility()
+ 	cfg.OAuthExcludedModels = NormalizeOAuthExcludedModels(cfg.OAuthExcludedModels)
+ 	cfg.SanitizeOAuthModelAlias()
++	cfg.OAuthExtraModels = NormalizeOAuthExtraModels(cfg.OAuthExtraModels)
+ 	cfg.SanitizeOAuthRequestScopedErrors()
+ 	cfg.SanitizePayloadRules()
+ 
+diff --git a/internal/modelconfig/oauth_extra_models.go b/internal/modelconfig/oauth_extra_models.go
+new file mode 100644
+index 0000000..88dc8aa
+--- /dev/null
++++ b/internal/modelconfig/oauth_extra_models.go
+@@ -0,0 +1,83 @@
++package modelconfig
++
++// claude-multi local patch (oauth-model-overlay): the one builder of the
++// ModelInfo for an oauth-extra-models entry, shared by registration and by the
++// execution-time capability lookup, and the one static-collision rule.
++
++import (
++	"strings"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++)
++
++// OAuthExtraModelInfo returns the registry entry of one validated overlay
++// entry. It carries exactly the closed schema's fields: id, display name,
++// context, max output and thinking; nothing else (no header overrides, no
++// transport controls).
++func OAuthExtraModelInfo(channel string, entry config.OAuthExtraModel, created int64) *registry.ModelInfo {
++	name := strings.TrimSpace(entry.Name)
++	if name == "" {
++		return nil
++	}
++	ownedBy, modelType := "", ""
++	switch channel {
++	case "claude":
++		ownedBy, modelType = "anthropic", "claude"
++	case "codex":
++		ownedBy, modelType = "openai", "openai"
++	default:
++		return nil
++	}
++	displayName := strings.TrimSpace(entry.DisplayName)
++	if displayName == "" {
++		displayName = name
++	}
++	info := &registry.ModelInfo{
++		ID:          name,
++		Object:      "model",
++		Created:     created,
++		OwnedBy:     ownedBy,
++		Type:        modelType,
++		DisplayName: displayName,
++	}
++	if entry.MaxContextLength > 0 {
++		info.ContextLength = entry.MaxContextLength
++		info.MaxContextLength = entry.MaxContextLength
++	}
++	if entry.MaxCompletionTokens > 0 {
++		info.MaxCompletionTokens = entry.MaxCompletionTokens
++	}
++	if entry.Thinking != nil {
++		info.Thinking = NormalizeThinkingSupport(entry.Thinking)
++		info.ExplicitThinking = true
++	}
++	return info
++}
++
++// OAuthExtraModelStaticKnown reports whether the pinned static registry already
++// defines modelID for the channel (case-normalized; for codex, any plan). The
++// static definition then wins: the overlay never redefines a known model.
++func OAuthExtraModelStaticKnown(channel, modelID string) bool {
++	key := strings.ToLower(strings.TrimSpace(modelID))
++	if key == "" {
++		return false
++	}
++	var lists [][]*registry.ModelInfo
++	switch channel {
++	case "claude":
++		lists = [][]*registry.ModelInfo{registry.GetClaudeModels()}
++	case "codex":
++		lists = [][]*registry.ModelInfo{registry.GetCodexProModels(), registry.GetCodexPlusModels(), registry.GetCodexTeamModels(), registry.GetCodexFreeModels()}
++	default:
++		return false
++	}
++	for _, list := range lists {
++		for _, model := range list {
++			if model != nil && strings.ToLower(strings.TrimSpace(model.ID)) == key {
++				return true
++			}
++		}
++	}
++	return false
++}
+diff --git a/internal/watcher/config_reload.go b/internal/watcher/config_reload.go
+index 13f30ff..7950769 100644
+--- a/internal/watcher/config_reload.go
++++ b/internal/watcher/config_reload.go
+@@ -161,7 +161,10 @@ func (w *Watcher) reloadConfigBytes(data []byte) bool {
+ 
+ 	authDirChanged := oldConfig == nil || oldConfig.AuthDir != newConfig.AuthDir
+ 	retryConfigChanged := oldConfig != nil && (oldConfig.RequestRetry != newConfig.RequestRetry || oldConfig.MaxRetryInterval != newConfig.MaxRetryInterval || oldConfig.MaxRetryCredentials != newConfig.MaxRetryCredentials)
+-	forceAuthRefresh := oldConfig != nil && (oldConfig.ForceModelPrefix != newConfig.ForceModelPrefix || !reflect.DeepEqual(oldConfig.OAuthModelAlias, newConfig.OAuthModelAlias) || retryConfigChanged)
++	// claude-multi local patch (oauth-model-overlay): any change to overlay
++	// content re-registers the OAuth models, even with aliases and prefixes unchanged.
++	overlayChanged := oldConfig != nil && !reflect.DeepEqual(config.NormalizeOAuthExtraModels(oldConfig.OAuthExtraModels), config.NormalizeOAuthExtraModels(newConfig.OAuthExtraModels))
++	forceAuthRefresh := oldConfig != nil && (oldConfig.ForceModelPrefix != newConfig.ForceModelPrefix || !reflect.DeepEqual(oldConfig.OAuthModelAlias, newConfig.OAuthModelAlias) || retryConfigChanged || overlayChanged)
+ 
+ 	log.Infof("config successfully reloaded, triggering client reload")
+ 	w.reloadClientsLocked(authDirChanged, affectedOAuthProviders, forceAuthRefresh)
+diff --git a/internal/watcher/diff/config_diff.go b/internal/watcher/diff/config_diff.go
+index 1fefbc8..47de015 100644
+--- a/internal/watcher/diff/config_diff.go
++++ b/internal/watcher/diff/config_diff.go
+@@ -453,6 +453,13 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
+ 	if entries, _ := DiffOAuthModelAliasChanges(oldCfg.OAuthModelAlias, newCfg.OAuthModelAlias); len(entries) > 0 {
+ 		changes = append(changes, entries...)
+ 	}
++	// claude-multi local patch (oauth-model-overlay).
++	for _, channel := range []string{"claude", "codex"} {
++		oldModels, newModels := oldCfg.OAuthExtraModels[channel], newCfg.OAuthExtraModels[channel]
++		if !reflect.DeepEqual(config.NormalizeOAuthExtraModels(map[string][]config.OAuthExtraModel{channel: oldModels}), config.NormalizeOAuthExtraModels(map[string][]config.OAuthExtraModel{channel: newModels})) {
++			changes = append(changes, fmt.Sprintf("oauth-extra-models[%s]: updated (%d -> %d entries)", channel, len(oldModels), len(newModels)))
++		}
++	}
+ 	if entries, _ := DiffOAuthRequestScopedErrorsChanges(oldCfg.OAuthRequestScopedErrors, newCfg.OAuthRequestScopedErrors); len(entries) > 0 {
+ 		changes = append(changes, entries...)
+ 	}
+diff --git a/internal/watcher/oauth_extra_models_cm053_test.go b/internal/watcher/oauth_extra_models_cm053_test.go
+new file mode 100644
+index 0000000..4ed0be5
+--- /dev/null
++++ b/internal/watcher/oauth_extra_models_cm053_test.go
+@@ -0,0 +1,228 @@
++package watcher
++
++// claude-multi local patch (oauth-model-overlay): any change to overlay
++// content forces the OAuth registration refresh, with aliases and
++// prefixes unchanged; an invalid overlay reload is refused and keeps the
++// previous config.
++
++import (
++	"os"
++	"path/filepath"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/diff"
++)
++
++func TestCM053OverlayReloadRefresh(t *testing.T) {
++	dir := t.TempDir()
++	authDir := filepath.Join(dir, "auth")
++	if err := os.MkdirAll(authDir, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(authDir, "claude-cm053.json"), []byte(`{"type":"claude","email":"cm053@example.invalid","access_token":"sk-ant-oat01-cm053"}`), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	configPath := filepath.Join(dir, "config.yaml")
++	head := "auth-dir: " + authDir + "\napi-keys: [cm053-key]\noauth-model-alias:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      alias: cm053-overlay-reload-alias\n"
++	write := func(body string) {
++		t.Helper()
++		if err := os.WriteFile(configPath, []byte(head+body), 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	write("")
++	initial, err := config.LoadConfig(configPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	var mu sync.Mutex
++	var callbacks []*config.Config
++	queue := make(chan AuthUpdate, 64)
++	w := &Watcher{
++		configPath:     configPath,
++		authDir:        authDir,
++		lastAuthHashes: make(map[string]string),
++		reloadCallback: func(cfg *config.Config) {
++			mu.Lock()
++			callbacks = append(callbacks, cfg)
++			mu.Unlock()
++		},
++	}
++	w.SetConfig(initial)
++	w.SetAuthUpdateQueue(queue)
++	defer w.stopDispatch()
++
++	// drain returns the actions dispatched for the auth since the last drain.
++	drain := func(step string) []AuthUpdateAction {
++		t.Helper()
++		barrier := w.DispatchAuthBarrier()
++		var actions []AuthUpdateAction
++		deadline := time.After(10 * time.Second)
++		for {
++			select {
++			case update := <-queue:
++				if update.IsBarrier() {
++					update.ReleaseBarrier()
++					<-barrier
++					return actions
++				}
++				actions = append(actions, update.Action)
++			case <-deadline:
++				t.Fatalf("%s: dispatch did not complete", step)
++			}
++		}
++	}
++	reload := func(step, body string, wantOK bool) []AuthUpdateAction {
++		t.Helper()
++		write(body)
++		if ok := w.reloadConfig(); ok != wantOK {
++			t.Fatalf("%s: reloadConfig = %v, want %v", step, ok, wantOK)
++		}
++		return drain(step)
++	}
++
++	if actions := reload("start", "", true); len(actions) != 1 || actions[0] != AuthUpdateActionAdd {
++		t.Fatalf("start: actions = %v, want one add", actions)
++	}
++	// Control: a reload without an overlay content change re-registers nothing.
++	if actions := reload("unrelated", "pprof:\n  addr: 127.0.0.1:18317\n", true); len(actions) != 0 {
++		t.Fatalf("unrelated change: actions = %v, want none", actions)
++	}
++	steps := []struct{ name, body string }{
++		{"add", "oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      max-context-length: 200000\n"},
++		{"edit", "oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      max-context-length: 400000\n"},
++		{"edit-thinking", "oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      max-context-length: 400000\n      thinking:\n        levels: [low, high]\n"},
++		{"add-channel", "oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      max-context-length: 400000\n      thinking:\n        levels: [low, high]\n  codex:\n    - name: gpt-cm053-overlay-reload-1\n"},
++		{"remove", ""},
++	}
++	for _, step := range steps {
++		if actions := reload(step.name, step.body, true); len(actions) != 1 || actions[0] != AuthUpdateActionModify {
++			t.Fatalf("%s: actions = %v, want one forced modify (aliases unchanged)", step.name, actions)
++		}
++	}
++	// Same overlay content, different YAML layout: no refresh.
++	write("oauth-extra-models: {claude: [{name: claude-cm053-overlay-reload-1, max-context-length: 400000}]}\n")
++	if !w.reloadConfig() {
++		t.Fatal("flow-style overlay refused")
++	}
++	drain("flow")
++	if actions := reload("same-content", "oauth-extra-models:\n  claude:\n    - max-context-length: 400000\n      name: claude-cm053-overlay-reload-1\n", true); len(actions) != 0 {
++		t.Fatalf("same content: actions = %v, want none", actions)
++	}
++
++	// Invalid overlay: refused through the reload refusal path; the previous
++	// config stays and no callback or refresh happens.
++	mu.Lock()
++	before := len(callbacks)
++	mu.Unlock()
++	w.clientsMutex.RLock()
++	previous := w.config
++	w.clientsMutex.RUnlock()
++	invalid := []struct{ name, body string }{
++		{"invalid", "oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      max-context-length: 400000\n      headers: {x: y}\n"},
++		// an overlay supplied through a root merge is validated like a literal one
++		{"invalid-merge", "<<: {oauth-extra-models: {claude: [{name: claude-cm053-bad, max-context-length: -1, thinking: {levels: [ultra]}, headers: {x-cm053: ignored}}]}}\n"},
++		{"invalid-merge-field", "<<: {oauth-extra-models: {claude: [{name: claude-cm053-bad, headers: {x-cm053: ignored}}]}}\n"},
++		{"invalid-merge-anchor", "x-cm053-base: &base\n  oauth-extra-models:\n    claude:\n      - name: claude-cm053-bad\n        max-context-length: -1\n<<: *base\n"},
++		{"invalid-fraction", "oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      max-context-length: 1.9\n"},
++	}
++	for _, step := range invalid {
++		if actions := reload(step.name, step.body, false); len(actions) != 0 {
++			t.Fatalf("%s: actions = %v, want none", step.name, actions)
++		}
++		w.clientsMutex.RLock()
++		kept := w.config
++		w.clientsMutex.RUnlock()
++		mu.Lock()
++		after := len(callbacks)
++		mu.Unlock()
++		if kept != previous || after != before {
++			t.Fatalf("%s: invalid overlay reload replaced the running config", step.name)
++		}
++	}
++	// Every overlay shape refused at load is refused on reload as well (the
++	// config gate's table), and the previous config stays.
++	for name, shape := range cm053WatcherShapeCases {
++		if err := os.WriteFile(configPath, []byte(shape.prefix+head+shape.body), 0o600); err != nil {
++			t.Fatal(err)
++		}
++		if w.reloadConfig() {
++			// Report every accepted shape, then put the previous config back
++			// so the remaining cases are still checked against it.
++			t.Errorf("shape %s: reload accepted", name)
++			drain("accepted " + name)
++			w.clientsMutex.Lock()
++			w.config = previous
++			w.clientsMutex.Unlock()
++			mu.Lock()
++			before = len(callbacks)
++			mu.Unlock()
++			continue
++		}
++		if actions := drain("shape " + name); len(actions) != 0 {
++			t.Fatalf("shape %s: actions = %v, want none", name, actions)
++		}
++		w.clientsMutex.RLock()
++		kept := w.config
++		w.clientsMutex.RUnlock()
++		mu.Lock()
++		after := len(callbacks)
++		mu.Unlock()
++		if kept != previous || after != before {
++			t.Fatalf("shape %s: refused reload replaced the running config", name)
++		}
++	}
++
++	details := diff.BuildConfigChangeDetails(&config.Config{}, &config.Config{OAuthExtraModels: map[string][]config.OAuthExtraModel{"codex": {{Name: "gpt-cm053"}}}})
++	found := false
++	for _, detail := range details {
++		if detail == "oauth-extra-models[codex]: updated (0 -> 1 entries)" {
++			found = true
++		}
++	}
++	if !found {
++		t.Fatalf("config change details = %v", details)
++	}
++}
++
++// cm053WatcherShapeCases mirrors the config package's cm053OverlayShapeCases
++// (test tables are not shared across packages).
++var cm053WatcherShapeCases = map[string]struct{ prefix, body string }{
++	// !!null on a non-scalar skips an Unmarshaler, but the decoder still fills it
++	"null-tag-mapping":      {"", "oauth-extra-models: !!null {claude: [{name: claude-cm053-shape-1, max-context-length: 0, headers: {x-cm053: injected}}]}\n"},
++	"null-tag-headers":      {"", "oauth-extra-models: !!null {codex: [{name: gpt-cm053-shape-1, headers: {x-cm053: injected}}]}\n"},
++	"null-tag-base-url":     {"", "oauth-extra-models: !!null\n  codex:\n    - name: gpt-cm053-shape-1\n      base-url: https://example.invalid\n"},
++	"null-tag-zero-limits":  {"", "oauth-extra-models: !!null {codex: [{name: gpt-cm053-shape-1, max-context-length: 0, max-completion-tokens: 0}]}\n"},
++	"null-tag-float-limit":  {"", "oauth-extra-models: !!null {codex: [{name: gpt-cm053-shape-1, max-context-length: 1.9}]}\n"},
++	"null-tag-channel-list": {"", "oauth-extra-models:\n  codex: !!null [{name: gpt-cm053-shape-1}]\n"},
++	"null-tag-entry":        {"", "oauth-extra-models:\n  codex:\n    - !!null {name: gpt-cm053-shape-1}\n"},
++	// the overlay must be a literal top-level key, never supplied by a merge
++	"merge-overlay":      {"", "<<: {oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}}\n"},
++	"merge-null-tag":     {"", "<<: {oauth-extra-models: !!null {claude: [{name: claude-cm053-shape-1, max-context-length: 0, headers: {x-cm053: injected}}]}}\n"},
++	"merge-alias":        {"", "x-cm053-base: &base {oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}}\n<<: *base\n"},
++	"merge-sequence":     {"", "<<: [{pprof: {enable: false}}, {oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}}]\n"},
++	"merge-nested":       {"", "<<: {<<: {oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}}}\n"},
++	"merge-with-literal": {"", "<<: {oauth-extra-models: {gemini: [{name: gemini-cm053}]}}\noauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	// no anchors or aliases on or inside the overlay, and a literal key
++	"anchor-overlay": {"", "oauth-extra-models: &overlay {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"anchor-entry":   {"", "oauth-extra-models:\n  codex:\n    - &entry {name: gpt-cm053-shape-1}\n"},
++	"anchor-scalar":  {"", "oauth-extra-models:\n  codex:\n    - name: &name gpt-cm053-shape-1\n"},
++	"anchor-key":     {"", "&key oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"alias-overlay":  {"", "x-cm053-overlay: &overlay {codex: [{name: gpt-cm053-shape-1}]}\noauth-extra-models: *overlay\n"},
++	"alias-key":      {"", "x-cm053-key: &key oauth-extra-models\n*key : {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	// standard tags only
++	"custom-tag-overlay": {"", "oauth-extra-models: !cm053 {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"custom-tag-entry":   {"", "oauth-extra-models:\n  codex:\n    - !cm053 {name: gpt-cm053-shape-1}\n"},
++	"custom-tag-scalar":  {"", "oauth-extra-models:\n  codex:\n    - name: !cm053 gpt-cm053-shape-1\n"},
++	"custom-tag-key":     {"", "!cm053 oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"str-tag-list":       {"", "oauth-extra-models:\n  codex: !!str [{name: gpt-cm053-shape-1}]\n"},
++	"float-display-name": {"", "oauth-extra-models:\n  codex:\n    - name: gpt-cm053-shape-1\n      display-name: 1.5\n"},
++	"binary-name":        {"", "oauth-extra-models:\n  codex:\n    - name: !!binary Z3B0LWNtMDUzLXNoYXBlLTE=\n"},
++	// the root is a plain mapping
++	"root-custom-tag": {"--- !cm053\n", "oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++	"root-anchor":     {"--- &root\n", "oauth-extra-models: {codex: [{name: gpt-cm053-shape-1}]}\n"},
++}
+diff --git a/sdk/cliproxy/auth/api_key_model_capabilities.go b/sdk/cliproxy/auth/api_key_model_capabilities.go
+index 2574ad4..fdd7ee1 100644
+--- a/sdk/cliproxy/auth/api_key_model_capabilities.go
++++ b/sdk/cliproxy/auth/api_key_model_capabilities.go
+@@ -136,6 +136,9 @@ func attachResolvedHomeModelInfo(req cliproxyexecutor.Request, modelInfo *regist
+ }
+ 
+ func lookupAPIKeyModelCapability(routing *apiKeyModelRoutingSnapshot, auth *Auth, routeModel, upstreamModel string) (*registry.ModelInfo, bool) {
++	if modelInfo, ok := lookupOAuthExtraModelCapability(routing, auth, upstreamModel); ok {
++		return modelInfo, true
++	}
+ 	if !isConfiguredModelRoutingAuth(auth) || routing == nil {
+ 		return nil, false
+ 	}
+@@ -163,6 +166,34 @@ func lookupAPIKeyModelCapability(routing *apiKeyModelRoutingSnapshot, auth *Auth
+ 	return nil, false
+ }
+ 
++// lookupOAuthExtraModelCapability (claude-multi local patch,
++// oauth-model-overlay) binds an oauth-extra-models entry's capabilities to an
++// OAuth execution attempt after wire resolution, so a non-fork
++// oauth-model-alias onto an overlay model (registered only under its alias)
++// still validates thinking against the overlay entry. A model the static
++// registry defines keeps the registry path (static wins).
++func lookupOAuthExtraModelCapability(routing *apiKeyModelRoutingSnapshot, auth *Auth, upstreamModel string) (*registry.ModelInfo, bool) {
++	if routing == nil || routing.config == nil || auth == nil || len(routing.config.OAuthExtraModels) == 0 {
++		return nil, false
++	}
++	channel := OAuthModelAliasChannel(auth.Provider, auth.AuthKind())
++	if channel != "claude" && channel != "codex" {
++		return nil, false
++	}
++	selected := strings.TrimSpace(thinking.ParseSuffix(strings.TrimSpace(upstreamModel)).ModelName)
++	if selected == "" || modelconfig.OAuthExtraModelStaticKnown(channel, selected) {
++		return nil, false
++	}
++	for _, entry := range routing.config.OAuthExtraModels[channel] {
++		if !strings.EqualFold(strings.TrimSpace(entry.Name), selected) {
++			continue
++		}
++		modelInfo := modelconfig.OAuthExtraModelInfo(channel, entry, 0)
++		return modelInfo, modelInfo != nil
++	}
++	return nil, false
++}
++
+ func configuredUpstreamFallbackMatches(configured, selected string) bool {
+ 	configuredResult := thinking.ParseSuffix(strings.TrimSpace(configured))
+ 	if configuredResult.HasSuffix {
+diff --git a/sdk/cliproxy/oauth_extra_models_cm053_test.go b/sdk/cliproxy/oauth_extra_models_cm053_test.go
+new file mode 100644
+index 0000000..956adb8
+--- /dev/null
++++ b/sdk/cliproxy/oauth_extra_models_cm053_test.go
+@@ -0,0 +1,887 @@
++package cliproxy
++
++// claude-multi local patch (oauth-model-overlay) gates. Model ids are
++// fictional (never shipped ids); a static id is read from the registry.
++
++import (
++	"context"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
++	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	internalregistry "github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	runtimeexecutor "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers/openai"
++	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++	log "github.com/sirupsen/logrus"
++	logtest "github.com/sirupsen/logrus/hooks/test"
++	"github.com/tidwall/gjson"
++)
++
++const (
++	cm053OverlayClaudeID = "claude-cm053-overlay-example-1"
++	cm053OverlayCodexID  = "gpt-cm053-overlay-example-1"
++)
++
++// cm053OverlayExampleYAML is the contract example: one claude
++// and one codex entry with every field of the closed schema.
++const cm053OverlayExampleYAML = `oauth-extra-models:
++  claude:
++    - name: claude-cm053-overlay-example-1
++      display-name: Claude CM053 Overlay Example
++      max-context-length: 1000000
++      max-completion-tokens: 128000
++      thinking:
++        zero-allowed: true
++        dynamic-allowed: true
++        levels: [low, medium, high, xhigh, max]
++  codex:
++    - name: gpt-cm053-overlay-example-1
++      display-name: GPT CM053 Overlay Example
++      max-context-length: 272000
++      max-completion-tokens: 128000
++      thinking:
++        levels: [low, medium, high, xhigh]
++`
++
++func cm053LoadConfig(t *testing.T, text string) *config.Config {
++	t.Helper()
++	cfg, err := internalconfig.LoadConfigBytes([]byte(text))
++	if err != nil {
++		t.Fatalf("LoadConfigBytes: %v\n%s", err, text)
++	}
++	return cfg
++}
++
++func cm053ClaudeOAuth(id string) *coreauth.Auth {
++	return &coreauth.Auth{
++		ID:         id,
++		Provider:   "claude",
++		Status:     coreauth.StatusActive,
++		Attributes: map[string]string{"auth_kind": "oauth"},
++		Metadata: map[string]any{
++			"type":         "claude",
++			"access_token": "sk-ant-oat01-cm053-overlay-test",
++			"account_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
++			claudeauth.ClaudeDeviceIDsMetadataKey: []string{
++				"0000000000000000000000000000000000000000000000000000000000000000",
++			},
++		},
++	}
++}
++
++func cm053CodexOAuth(id, plan string) *coreauth.Auth {
++	return &coreauth.Auth{
++		ID:         id,
++		Provider:   "codex",
++		Status:     coreauth.StatusActive,
++		Attributes: map[string]string{"auth_kind": "oauth", "plan_type": plan},
++		Metadata:   map[string]any{"type": "codex", "access_token": "cm053-overlay-codex-token", "account_id": "acct-cm053"},
++	}
++}
++
++func cm053Register(t *testing.T, service *Service, auth *coreauth.Auth) []*ModelInfo {
++	t.Helper()
++	reg := GlobalModelRegistry()
++	reg.UnregisterClient(auth.ID)
++	t.Cleanup(func() { reg.UnregisterClient(auth.ID) })
++	service.registerModelsForAuth(context.Background(), auth)
++	return reg.GetModelsForClient(auth.ID)
++}
++
++func cm053Find(models []*ModelInfo, id string) []*ModelInfo {
++	var out []*ModelInfo
++	for _, model := range models {
++		if model != nil && strings.EqualFold(model.ID, id) {
++			out = append(out, model)
++		}
++	}
++	return out
++}
++
++func cm053IDs(models []*ModelInfo) []string {
++	out := make([]string, 0, len(models))
++	for _, model := range models {
++		if model != nil {
++			out = append(out, model.ID)
++		}
++	}
++	return out
++}
++
++func TestCM053OverlayRegistersClaudeModel(t *testing.T) {
++	cfg := cm053LoadConfig(t, cm053OverlayExampleYAML)
++	service := &Service{cfg: cfg}
++	static := internalregistry.GetClaudeModels()
++
++	models := cm053Register(t, service, cm053ClaudeOAuth("cm053-overlay-claude-oauth"))
++	found := cm053Find(models, cm053OverlayClaudeID)
++	if len(found) != 1 {
++		t.Fatalf("overlay model registered %d times, want 1: %v", len(found), cm053IDs(models))
++	}
++	got := found[0]
++	if got.ID != cm053OverlayClaudeID || got.DisplayName != "Claude CM053 Overlay Example" || got.OwnedBy != "anthropic" || got.Type != "claude" {
++		t.Fatalf("overlay model identity = %+v", got)
++	}
++	if got.ContextLength != 1000000 || got.MaxContextLength != 1000000 || got.MaxCompletionTokens != 128000 {
++		t.Fatalf("overlay model limits = ctx %d/%d out %d", got.ContextLength, got.MaxContextLength, got.MaxCompletionTokens)
++	}
++	if got.Thinking == nil || !reflect.DeepEqual(got.Thinking.Levels, []string{"low", "medium", "high", "xhigh", "max"}) || !got.Thinking.ZeroAllowed || !got.Thinking.DynamicAllowed {
++		t.Fatalf("overlay model thinking = %+v", got.Thinking)
++	}
++	if got.UserDefined || len(got.SupportedParameters) != 0 {
++		t.Fatalf("overlay model carries fields outside the closed schema: %+v", got)
++	}
++	// Appended to the static list: every static model is still there, once.
++	if len(models) != len(static)+1 {
++		t.Fatalf("registered %d models, want %d static + 1 overlay", len(models), len(static))
++	}
++	for _, model := range static {
++		if len(cm053Find(models, model.ID)) != 1 {
++			t.Fatalf("static model %q missing after overlay append", model.ID)
++		}
++	}
++	if len(cm053Find(models, cm053OverlayCodexID)) != 0 {
++		t.Fatal("codex overlay entry leaked into the claude channel")
++	}
++
++	// API-key credentials of the channel never receive OAuth overlay models.
++	apiKey := &coreauth.Auth{ID: "cm053-overlay-claude-apikey", Provider: "claude", Status: coreauth.StatusActive,
++		Attributes: map[string]string{"auth_kind": "apikey", "api_key": "sk-ant-api03-cm053"}}
++	if found := cm053Find(cm053Register(t, service, apiKey), cm053OverlayClaudeID); len(found) != 0 {
++		t.Fatal("overlay model registered for a claude API-key credential")
++	}
++}
++
++func TestCM053OverlayRegistersCodexModel(t *testing.T) {
++	cfg := cm053LoadConfig(t, cm053OverlayExampleYAML)
++	service := &Service{cfg: cfg}
++	for _, plan := range []string{"pro", "plus", "team", "free", ""} {
++		auth := cm053CodexOAuth("cm053-overlay-codex-oauth-"+plan, plan)
++		models := cm053Register(t, service, auth)
++		found := cm053Find(models, cm053OverlayCodexID)
++		if len(found) != 1 {
++			t.Fatalf("plan %q: overlay model registered %d times: %v", plan, len(found), cm053IDs(models))
++		}
++		got := found[0]
++		if got.DisplayName != "GPT CM053 Overlay Example" || got.OwnedBy != "openai" || got.Type != "openai" ||
++			got.ContextLength != 272000 || got.MaxCompletionTokens != 128000 ||
++			got.Thinking == nil || !reflect.DeepEqual(got.Thinking.Levels, []string{"low", "medium", "high", "xhigh"}) {
++			t.Fatalf("plan %q: overlay model = %+v thinking %+v", plan, got, got.Thinking)
++		}
++		if len(cm053Find(models, cm053OverlayClaudeID)) != 0 {
++			t.Fatalf("plan %q: claude overlay entry leaked into the codex channel", plan)
++		}
++	}
++	apiKeyCfg := cm053LoadConfig(t, cm053OverlayExampleYAML+`codex-api-key:
++  - api-key: cm053-codex-key
++    base-url: https://codex.example.invalid/v1
++`)
++	apiKey := &coreauth.Auth{ID: "cm053-overlay-codex-apikey", Provider: "codex", Status: coreauth.StatusActive,
++		Attributes: map[string]string{"auth_kind": "apikey", "api_key": "cm053-codex-key", "base_url": "https://codex.example.invalid/v1"}}
++	if found := cm053Find(cm053Register(t, &Service{cfg: apiKeyCfg}, apiKey), cm053OverlayCodexID); len(found) != 0 {
++		t.Fatal("overlay model registered for a codex API-key credential")
++	}
++}
++
++func cm053ServeModels(t *testing.T) []string {
++	t.Helper()
++	gin.SetMode(gin.TestMode)
++	handler := openai.NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&config.SDKConfig{}, nil))
++	recorder := httptest.NewRecorder()
++	ctx, _ := gin.CreateTestContext(recorder)
++	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
++	handler.OpenAIModels(ctx)
++	if recorder.Code != http.StatusOK {
++		t.Fatalf("/v1/models status = %d: %s", recorder.Code, recorder.Body.String())
++	}
++	var ids []string
++	for _, item := range gjson.GetBytes(recorder.Body.Bytes(), "data").Array() {
++		ids = append(ids, item.Get("id").String())
++	}
++	return ids
++}
++
++func cm053Contains(ids []string, id string) bool {
++	for _, candidate := range ids {
++		if candidate == id {
++			return true
++		}
++	}
++	return false
++}
++
++func TestCM053OverlayAliasVisibleInModels(t *testing.T) {
++	const alias = "cm053-overlay-alias-served"
++	const forkAlias = "cm053-overlay-fork-alias-served"
++	aliasYAML := `oauth-model-alias:
++  claude:
++    - name: claude-cm053-overlay-example-1
++      alias: ` + alias + `
++  codex:
++    - name: gpt-cm053-overlay-example-1
++      alias: ` + forkAlias + `
++      fork: true
++`
++	// Without the overlay the alias has nothing to attach to.
++	bare := &Service{cfg: cm053LoadConfig(t, aliasYAML)}
++	cm053Register(t, bare, cm053ClaudeOAuth("cm053-overlay-alias-claude"))
++	cm053Register(t, bare, cm053CodexOAuth("cm053-overlay-alias-codex", "pro"))
++	served := cm053ServeModels(t)
++	if cm053Contains(served, alias) || cm053Contains(served, forkAlias) {
++		t.Fatalf("alias served without the overlay: %v", served)
++	}
++
++	service := &Service{cfg: cm053LoadConfig(t, cm053OverlayExampleYAML+aliasYAML)}
++	claudeModels := cm053Register(t, service, cm053ClaudeOAuth("cm053-overlay-alias-claude"))
++	codexModels := cm053Register(t, service, cm053CodexOAuth("cm053-overlay-alias-codex", "pro"))
++	served = cm053ServeModels(t)
++	if !cm053Contains(served, alias) {
++		t.Fatalf("/v1/models does not serve the alias %q onto the overlay model: %v", alias, served)
++	}
++	if cm053Contains(served, cm053OverlayClaudeID) {
++		t.Fatalf("non-fork alias left the overlay id %q served", cm053OverlayClaudeID)
++	}
++	if !cm053Contains(served, forkAlias) || !cm053Contains(served, cm053OverlayCodexID) {
++		t.Fatalf("fork alias must serve both %q and %q: %v", forkAlias, cm053OverlayCodexID, served)
++	}
++	aliased := cm053Find(claudeModels, alias)
++	if len(aliased) != 1 || aliased[0].MetadataModelID != cm053OverlayClaudeID || aliased[0].Thinking == nil || aliased[0].MaxCompletionTokens != 128000 {
++		t.Fatalf("alias registration = %+v", aliased)
++	}
++	if len(cm053Find(codexModels, forkAlias)) != 1 {
++		t.Fatalf("fork alias registration missing: %v", cm053IDs(codexModels))
++	}
++}
++
++func TestCM053OverlayAbsentNoEffect(t *testing.T) {
++	claudeAuth := cm053ClaudeOAuth("cm053-overlay-absent-claude")
++	codexAuth := cm053CodexOAuth("cm053-overlay-absent-codex", "plus")
++	snapshot := func(cfg *config.Config, auth *coreauth.Auth) []ModelInfo {
++		models := cm053Register(t, &Service{cfg: cfg}, auth)
++		out := make([]ModelInfo, 0, len(models))
++		for _, model := range models {
++			out = append(out, *model)
++		}
++		return out
++	}
++	static := map[string][]*ModelInfo{
++		claudeAuth.ID: internalregistry.GetClaudeModels(),
++		codexAuth.ID:  internalregistry.GetCodexPlusModels(),
++	}
++	absent := cm053LoadConfig(t, "debug: false\n")
++	variants := map[string]*config.Config{
++		"null":         cm053LoadConfig(t, "oauth-extra-models:\n"),
++		"empty":        cm053LoadConfig(t, "oauth-extra-models: {}\n"),
++		"empty-lists":  cm053LoadConfig(t, "oauth-extra-models:\n  claude: []\n  codex:\n"),
++		"literal-nil":  {},
++		"empty-map":    {OAuthExtraModels: map[string][]config.OAuthExtraModel{}},
++		"other-claude": cm053LoadConfig(t, "oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-other\n"),
++	}
++	for _, auth := range []*coreauth.Auth{claudeAuth, codexAuth} {
++		want := snapshot(absent, auth)
++		if ids := cm053IDs(static[auth.ID]); !reflect.DeepEqual(cm053IDsFromValues(want), ids) {
++			t.Fatalf("%s: registry without the key = %v, want the static list %v", auth.ID, cm053IDsFromValues(want), ids)
++		}
++		for name, cfg := range variants {
++			if name == "other-claude" && auth.Provider == "claude" {
++				continue
++			}
++			if got := snapshot(cfg, auth); !reflect.DeepEqual(got, want) {
++				t.Fatalf("%s/%s: registry differs from the registry without the key:\n got %v\nwant %v", auth.ID, name, cm053IDsFromValues(got), cm053IDsFromValues(want))
++			}
++		}
++	}
++	if absent.OAuthExtraModels != nil || variants["null"].OAuthExtraModels != nil || variants["empty"].OAuthExtraModels != nil || variants["empty-lists"].OAuthExtraModels != nil {
++		t.Fatal("an absent or empty overlay must load as a nil map")
++	}
++}
++
++func cm053IDsFromValues(models []ModelInfo) []string {
++	out := make([]string, 0, len(models))
++	for i := range models {
++		out = append(out, models[i].ID)
++	}
++	return out
++}
++
++func TestCM053OverlayStaticWins(t *testing.T) {
++	staticClaude := internalregistry.GetClaudeModels()[0]
++	staticCodex := internalregistry.GetCodexPlusModels()[0]
++	proOnly := ""
++	for _, model := range internalregistry.GetCodexProModels() {
++		if internalregistry.LookupStaticModelInfoByChannel(model.ID, "codex") != nil && len(cm053Find(internalregistry.GetCodexFreeModels(), model.ID)) == 0 {
++			proOnly = model.ID
++			break
++		}
++	}
++	shadowName := strings.ToUpper(staticClaude.ID) // case-normalized collision
++	text := `oauth-extra-models:
++  claude:
++    - name: ` + shadowName + `
++      display-name: Overlay Must Not Win
++      max-context-length: 7
++    - name: claude-cm053-overlay-static-wins-new
++  codex:
++    - name: ` + staticCodex.ID + `
++      display-name: Overlay Must Not Win
++`
++	if proOnly != "" {
++		text += "    - name: " + proOnly + "\n      display-name: Overlay Must Not Win\n"
++	}
++	cfg := cm053LoadConfig(t, text)
++
++	hook := logtest.NewGlobal()
++	defer hook.Reset()
++	service := &Service{cfg: cfg}
++	var models []*ModelInfo
++	for i := 0; i < 3; i++ { // repeated registration (refresh) keeps one Warn per entry
++		models = cm053Register(t, service, cm053ClaudeOAuth("cm053-overlay-static-wins-claude"))
++	}
++	found := cm053Find(models, staticClaude.ID)
++	if len(found) != 1 {
++		t.Fatalf("static id %q registered %d times", staticClaude.ID, len(found))
++	}
++	if found[0].ID != staticClaude.ID || found[0].DisplayName != staticClaude.DisplayName || found[0].ContextLength == 7 {
++		t.Fatalf("overlay replaced the static entry: %+v", found[0])
++	}
++	if len(cm053Find(models, "claude-cm053-overlay-static-wins-new")) != 1 {
++		t.Fatal("a non-colliding overlay entry next to a shadowed one must still register")
++	}
++	codexModels := cm053Register(t, service, cm053CodexOAuth("cm053-overlay-static-wins-codex", "free"))
++	if got := cm053Find(codexModels, staticCodex.ID); len(got) != 1 || got[0].DisplayName == "Overlay Must Not Win" {
++		t.Fatalf("codex static entry lost to the overlay: %+v", got)
++	}
++	if proOnly != "" {
++		// A static model of the channel the account's plan list omits stays
++		// omitted: the overlay never redefines a model the registry knows.
++		if got := cm053Find(codexModels, proOnly); len(got) != 0 {
++			t.Fatalf("overlay re-planned the static model %q onto a free account", proOnly)
++		}
++	}
++
++	var warns []string
++	for _, entry := range hook.AllEntries() {
++		if entry.Level == log.WarnLevel && strings.HasPrefix(entry.Message, "oauth-extra-models:") {
++			if entry.Message != "oauth-extra-models: entry duplicates a static model; the static entry wins and the overlay entry is dropped" {
++				t.Fatalf("Warn line text changed: %q", entry.Message)
++			}
++			warns = append(warns, entry.Data["channel"].(string)+"/"+entry.Data["model"].(string))
++		}
++	}
++	want := 2
++	if proOnly != "" {
++		want = 3
++	}
++	if len(warns) != want {
++		t.Fatalf("static-wins Warn lines = %v, want %d (one per dropped entry)", warns, want)
++	}
++}
++
++func TestCM053OverlayExclusionsApply(t *testing.T) {
++	const other = "claude-cm053-overlay-kept"
++	base := cm053OverlayExampleYAML + "    - name: gpt-cm053-overlay-kept\n"
++	base = strings.Replace(base, "  codex:\n", "    - name: "+other+"\n  codex:\n", 1)
++
++	// Global oauth-excluded-models, exact and wildcard.
++	global := &Service{cfg: cm053LoadConfig(t, base+`oauth-excluded-models:
++  claude: [claude-cm053-overlay-example-1]
++  codex: ["gpt-cm053-overlay-*-1"]
++`)}
++	claudeModels := cm053Register(t, global, cm053ClaudeOAuth("cm053-overlay-excl-claude"))
++	if len(cm053Find(claudeModels, cm053OverlayClaudeID)) != 0 || len(cm053Find(claudeModels, other)) != 1 {
++		t.Fatalf("global claude exclusion not applied to the overlay: %v", cm053IDs(claudeModels))
++	}
++	codexModels := cm053Register(t, global, cm053CodexOAuth("cm053-overlay-excl-codex", "pro"))
++	if len(cm053Find(codexModels, cm053OverlayCodexID)) != 0 || len(cm053Find(codexModels, "gpt-cm053-overlay-kept")) != 1 {
++		t.Fatalf("global codex wildcard exclusion not applied to the overlay: %v", cm053IDs(codexModels))
++	}
++
++	// Per-account exclusions (the synthesizer's pre-merged attribute).
++	perAccount := &Service{cfg: cm053LoadConfig(t, base)}
++	claudeAuth := cm053ClaudeOAuth("cm053-overlay-excl-account-claude")
++	claudeAuth.Attributes["excluded_models"] = "CLAUDE-CM053-OVERLAY-EXAMPLE-1"
++	claudeModels = cm053Register(t, perAccount, claudeAuth)
++	if len(cm053Find(claudeModels, cm053OverlayClaudeID)) != 0 || len(cm053Find(claudeModels, other)) != 1 {
++		t.Fatalf("per-account claude exclusion not applied to the overlay: %v", cm053IDs(claudeModels))
++	}
++	codexAuth := cm053CodexOAuth("cm053-overlay-excl-account-codex", "team")
++	codexAuth.Attributes["excluded_models"] = "gpt-cm053-*"
++	codexModels = cm053Register(t, perAccount, codexAuth)
++	if len(cm053Find(codexModels, cm053OverlayCodexID)) != 0 || len(cm053Find(codexModels, "gpt-cm053-overlay-kept")) != 0 {
++		t.Fatalf("per-account codex exclusion not applied to the overlay: %v", cm053IDs(codexModels))
++	}
++	// An unexcluded account of the same config still gets the overlay.
++	if len(cm053Find(cm053Register(t, perAccount, cm053ClaudeOAuth("cm053-overlay-excl-none")), cm053OverlayClaudeID)) != 1 {
++		t.Fatal("overlay missing on an account without exclusions")
++	}
++}
++
++// cm053CapabilityExecutor records the capabilities bound to the attempt and
++// applies thinking exactly as the executors do.
++type cm053CapabilityExecutor struct {
++	mu        sync.Mutex
++	seenModel string
++	info      *internalregistry.ModelInfo
++	infos     []*internalregistry.ModelInfo
++	body      []byte
++	effort    string
++}
++
++func (*cm053CapabilityExecutor) Identifier() string { return "claude" }
++
++func (e *cm053CapabilityExecutor) Execute(_ context.Context, _ *coreauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
++	info, _ := coreauth.ResolvedModelInfo(req)
++	e.mu.Lock()
++	effort := e.effort
++	e.mu.Unlock()
++	if effort == "" {
++		effort = "max"
++	}
++	body := []byte(`{"model":"` + req.Model + `","thinking":{"type":"adaptive"},"output_config":{"effort":"` + effort + `"}}`)
++	out, err := helps.ApplyRequestThinking(body, req, opts, opts.SourceFormat.String(), "claude", "claude")
++	e.mu.Lock()
++	e.seenModel, e.info, e.body = req.Model, info, out
++	e.infos = append(e.infos, info)
++	e.mu.Unlock()
++	return cliproxyexecutor.Response{Payload: []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[]}`)}, err
++}
++
++func (e *cm053CapabilityExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
++	resp, err := e.Execute(ctx, auth, req, opts)
++	if err != nil {
++		return nil, err
++	}
++	chunks := make(chan cliproxyexecutor.StreamChunk, 1)
++	chunks <- cliproxyexecutor.StreamChunk{Payload: resp.Payload}
++	close(chunks)
++	return &cliproxyexecutor.StreamResult{Chunks: chunks}, nil
++}
++
++func (*cm053CapabilityExecutor) Refresh(_ context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
++	return auth, nil
++}
++
++func (e *cm053CapabilityExecutor) CountTokens(ctx context.Context, auth *coreauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
++	return e.Execute(ctx, auth, req, opts)
++}
++
++func (e *cm053CapabilityExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.Request) (*http.Response, error) {
++	return nil, nil
++}
++
++// cm053Pipeline builds the production chain for one OAuth auth: manager with
++// the config snapshot and aliases, the executor, registration through the
++// service (registry + scheduler).
++func cm053Pipeline(t *testing.T, cfg *config.Config, executor coreauth.ProviderExecutor, auth *coreauth.Auth) *coreauth.Manager {
++	t.Helper()
++	manager := coreauth.NewManager(nil, nil, nil)
++	manager.SetConfig(cfg)
++	manager.SetOAuthModelAlias(cfg.OAuthModelAlias)
++	manager.RegisterExecutor(executor)
++	reg := GlobalModelRegistry()
++	reg.UnregisterClient(auth.ID)
++	t.Cleanup(func() { reg.UnregisterClient(auth.ID) })
++	if _, err := manager.Register(context.Background(), auth); err != nil {
++		t.Fatalf("register auth: %v", err)
++	}
++	service := &Service{cfg: cfg, coreManager: manager}
++	service.completeModelRegistrationForAuth(context.Background(), auth)
++	return manager
++}
++
++func TestCM053OverlayCapabilityThroughAlias(t *testing.T) {
++	const alias = "cm053-overlay-capability-alias"
++	staticClaude := internalregistry.GetClaudeModels()[0]
++	cfg := cm053LoadConfig(t, `oauth-extra-models:
++  claude:
++    - name: claude-cm053-overlay-capability-1
++      max-completion-tokens: 32000
++      thinking:
++        levels: [low, medium, high]
++oauth-model-alias:
++  claude:
++    - name: claude-cm053-overlay-capability-1
++      alias: `+alias+`
++`)
++	executor := &cm053CapabilityExecutor{}
++	manager := cm053Pipeline(t, cfg, executor, cm053ClaudeOAuth("cm053-overlay-capability-claude"))
++	registered := GlobalModelRegistry().GetModelsForClient("cm053-overlay-capability-claude")
++	if len(cm053Find(registered, "claude-cm053-overlay-capability-1")) != 0 || len(cm053Find(registered, alias)) != 1 {
++		t.Fatalf("precondition: the non-fork alias must replace the overlay id: %v", cm053IDs(registered))
++	}
++
++	for _, requested := range []string{alias, alias + "(max)"} {
++		_, err := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{
++			Model:   requested,
++			Payload: []byte(`{"model":"` + requested + `","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`),
++		}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude})
++		executor.mu.Lock()
++		seen, info, body := executor.seenModel, executor.info, executor.body
++		executor.mu.Unlock()
++		if seen == "" || !strings.HasPrefix(seen, "claude-cm053-overlay-capability-1") {
++			t.Fatalf("%s: wire resolution = %q (err %v)", requested, seen, err)
++		}
++		if info == nil || info.Thinking == nil || !reflect.DeepEqual(info.Thinking.Levels, []string{"low", "medium", "high"}) || info.MaxCompletionTokens != 32000 || info.UserDefined {
++			t.Fatalf("%s: capabilities bound after wire resolution = %+v (err %v)", requested, info, err)
++		}
++		// The overlay's levels are authoritative: "max" is not one of them, so it
++		// never reaches upstream unvalidated.
++		if err == nil && gjson.GetBytes(body, "output_config.effort").String() == "max" {
++			t.Fatalf("%s: effort max passed through unvalidated: %s", requested, body)
++		}
++	}
++
++	// A model the static registry defines keeps the registry path (static wins).
++	staticCfg := cm053LoadConfig(t, "oauth-extra-models:\n  claude:\n    - name: "+staticClaude.ID+"\n      thinking:\n        levels: [low]\n")
++	staticExec := &cm053CapabilityExecutor{}
++	staticManager := cm053Pipeline(t, staticCfg, staticExec, cm053ClaudeOAuth("cm053-overlay-capability-static"))
++	_, _ = staticManager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{
++		Model:   staticClaude.ID,
++		Payload: []byte(`{"model":"` + staticClaude.ID + `","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`),
++	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude})
++	staticExec.mu.Lock()
++	if staticExec.seenModel != staticClaude.ID || staticExec.info != nil {
++		staticExec.mu.Unlock()
++		t.Fatalf("static model got overlay capabilities: model %q info %+v", staticExec.seenModel, staticExec.info)
++	}
++	staticExec.mu.Unlock()
++
++	// Concurrent reloads: every attempt binds one whole overlay snapshot (the
++	// old or the new entry), never a mix and never none.
++	wider := cm053LoadConfig(t, strings.Replace(`oauth-extra-models:
++  claude:
++    - name: claude-cm053-overlay-capability-1
++      max-completion-tokens: 64000
++      thinking:
++        levels: [low, medium, high, max]
++oauth-model-alias:
++  claude:
++    - name: claude-cm053-overlay-capability-1
++      alias: ALIAS
++`, "ALIAS", alias, 1))
++	executor.mu.Lock()
++	executor.effort = "high"
++	executor.mu.Unlock()
++	var wg sync.WaitGroup
++	stop := make(chan struct{})
++	wg.Add(1)
++	go func() {
++		defer wg.Done()
++		for i := 0; ; i++ {
++			select {
++			case <-stop:
++				manager.SetConfig(cfg)
++				return
++			default:
++			}
++			if i%2 == 0 {
++				manager.SetConfig(wider)
++			} else {
++				manager.SetConfig(cfg)
++			}
++		}
++	}()
++	var workers sync.WaitGroup
++	for worker := 0; worker < 4; worker++ {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			for i := 0; i < 25; i++ {
++				_, _ = manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{
++					Model:   alias,
++					Payload: []byte(`{"model":"` + alias + `","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`),
++				}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude})
++			}
++		}()
++	}
++	workers.Wait()
++	close(stop)
++	wg.Wait()
++	executor.mu.Lock()
++	defer executor.mu.Unlock()
++	if len(executor.infos) < 2+100 {
++		t.Fatalf("concurrent attempts recorded = %d", len(executor.infos))
++	}
++	for _, resolved := range executor.infos[2:] {
++		if resolved == nil || resolved.Thinking == nil {
++			t.Fatal("an attempt ran without the overlay capabilities")
++		}
++		narrow := reflect.DeepEqual(resolved.Thinking.Levels, []string{"low", "medium", "high"}) && resolved.MaxCompletionTokens == 32000
++		broad := reflect.DeepEqual(resolved.Thinking.Levels, []string{"low", "medium", "high", "max"}) && resolved.MaxCompletionTokens == 64000
++		if !narrow && !broad {
++			t.Fatalf("an attempt bound a mixed overlay snapshot: %+v", resolved)
++		}
++	}
++}
++
++type cm053Upstream struct {
++	mu     sync.Mutex
++	models []string
++	paths  []string
++	auth   []string
++}
++
++func (u *cm053Upstream) record(r *http.Request) {
++	body, _ := io.ReadAll(r.Body)
++	u.mu.Lock()
++	defer u.mu.Unlock()
++	u.paths = append(u.paths, r.URL.Path)
++	u.models = append(u.models, gjson.GetBytes(body, "model").String())
++	u.auth = append(u.auth, r.Header.Get("Authorization"))
++}
++
++func (u *cm053Upstream) snapshot() ([]string, []string, []string) {
++	u.mu.Lock()
++	defer u.mu.Unlock()
++	return append([]string(nil), u.models...), append([]string(nil), u.paths...), append([]string(nil), u.auth...)
++}
++
++func TestCM053OverlayPassThroughClaude(t *testing.T) {
++	const alias = "cm053-overlay-passthrough-claude-alias"
++	upstream := &cm053Upstream{}
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		upstream.record(r)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","model":"` + cm053OverlayClaudeID + `","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`))
++	}))
++	defer server.Close()
++
++	execute := func(manager *coreauth.Manager, model string) error {
++		_, err := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{
++			Model:   model,
++			Payload: []byte(`{"model":"` + model + `","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`),
++		}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude})
++		return err
++	}
++
++	// Unregistered: the pool does not route the id at all.
++	bareCfg := cm053LoadConfig(t, "debug: false\n")
++	bareAuth := cm053ClaudeOAuth("cm053-overlay-passthrough-claude-bare")
++	bareAuth.Attributes["base_url"] = server.URL
++	bare := cm053Pipeline(t, bareCfg, runtimeexecutor.NewClaudeExecutor(bareCfg), bareAuth)
++	if err := execute(bare, cm053OverlayClaudeID); err == nil {
++		t.Fatal("precondition: an unregistered id must not route to the OAuth pool")
++	}
++
++	// Overlaid: forwarded upstream unchanged, directly and through a non-fork alias.
++	cfg := cm053LoadConfig(t, cm053OverlayExampleYAML+"oauth-model-alias:\n  claude:\n    - name: "+cm053OverlayClaudeID+"\n      alias: "+alias+"\n")
++	auth := cm053ClaudeOAuth("cm053-overlay-passthrough-claude")
++	auth.Attributes["base_url"] = server.URL
++	manager := cm053Pipeline(t, cfg, runtimeexecutor.NewClaudeExecutor(cfg), auth)
++	if err := execute(manager, alias); err != nil {
++		t.Fatalf("execute via alias: %v", err)
++	}
++	directCfg := cm053LoadConfig(t, cm053OverlayExampleYAML)
++	directAuth := cm053ClaudeOAuth("cm053-overlay-passthrough-claude-direct")
++	directAuth.Attributes["base_url"] = server.URL
++	direct := cm053Pipeline(t, directCfg, runtimeexecutor.NewClaudeExecutor(directCfg), directAuth)
++	if err := execute(direct, cm053OverlayClaudeID); err != nil {
++		t.Fatalf("execute overlay id: %v", err)
++	}
++	models, paths, authz := upstream.snapshot()
++	if len(models) != 2 {
++		t.Fatalf("upstream requests = %d (%v), want 2 (the unregistered id never reaches upstream)", len(models), paths)
++	}
++	for i := range models {
++		if models[i] != cm053OverlayClaudeID || paths[i] != "/v1/messages" || !strings.HasPrefix(authz[i], "Bearer ") {
++			t.Fatalf("upstream request %d: model %q path %q oauth-bearer %v", i, models[i], paths[i], strings.HasPrefix(authz[i], "Bearer "))
++		}
++	}
++}
++
++func TestCM053OverlayPassThroughCodex(t *testing.T) {
++	const alias = "cm053-overlay-passthrough-codex-alias"
++	upstream := &cm053Upstream{}
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		upstream.record(r)
++		w.Header().Set("Content-Type", "text/event-stream")
++		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"" + cm053OverlayCodexID + "\",\"output\":[],\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n"))
++	}))
++	defer server.Close()
++
++	execute := func(manager *coreauth.Manager, model string) error {
++		_, err := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{
++			Model:   model,
++			Payload: []byte(`{"model":"` + model + `","input":[{"role":"user","content":"hi"}],"reasoning":{"effort":"high"}}`),
++		}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-response")})
++		return err
++	}
++
++	bareCfg := cm053LoadConfig(t, "debug: false\n")
++	bareAuth := cm053CodexOAuth("cm053-overlay-passthrough-codex-bare", "plus")
++	bareAuth.Attributes["base_url"] = server.URL
++	bare := cm053Pipeline(t, bareCfg, runtimeexecutor.NewCodexExecutor(bareCfg), bareAuth)
++	if err := execute(bare, cm053OverlayCodexID); err == nil {
++		t.Fatal("precondition: an unregistered id must not route to the OAuth pool")
++	}
++
++	cfg := cm053LoadConfig(t, cm053OverlayExampleYAML+"oauth-model-alias:\n  codex:\n    - name: "+cm053OverlayCodexID+"\n      alias: "+alias+"\n")
++	auth := cm053CodexOAuth("cm053-overlay-passthrough-codex", "plus")
++	auth.Attributes["base_url"] = server.URL
++	manager := cm053Pipeline(t, cfg, runtimeexecutor.NewCodexExecutor(cfg), auth)
++	if err := execute(manager, alias); err != nil {
++		t.Fatalf("execute via alias: %v", err)
++	}
++	directCfg := cm053LoadConfig(t, cm053OverlayExampleYAML)
++	directAuth := cm053CodexOAuth("cm053-overlay-passthrough-codex-direct", "plus")
++	directAuth.Attributes["base_url"] = server.URL
++	direct := cm053Pipeline(t, directCfg, runtimeexecutor.NewCodexExecutor(directCfg), directAuth)
++	if err := execute(direct, cm053OverlayCodexID); err != nil {
++		t.Fatalf("execute overlay id: %v", err)
++	}
++	models, paths, authz := upstream.snapshot()
++	if len(models) != 2 {
++		t.Fatalf("upstream requests = %d (%v), want 2", len(models), paths)
++	}
++	for i := range models {
++		if models[i] != cm053OverlayCodexID || paths[i] != "/responses" || authz[i] != "Bearer cm053-overlay-codex-token" {
++			t.Fatalf("upstream request %d: model %q path %q", i, models[i], paths[i])
++		}
++	}
++}
++
++// TestCM053OverlayReloadRefreshRegistry drives the production reload chain:
++// config file → watcher reload (the existing refusal path) → forced OAuth
++// re-registration → registry, with oauth-model-alias unchanged throughout.
++func TestCM053OverlayReloadRefreshRegistry(t *testing.T) {
++	const alias = "cm053-overlay-reload-alias"
++	dir := t.TempDir()
++	authDir := filepath.Join(dir, "auth")
++	if err := os.MkdirAll(authDir, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	authPath := filepath.Join(authDir, "claude-cm053-reload.json")
++	if err := os.WriteFile(authPath, []byte(`{"type":"claude","email":"cm053-reload@example.invalid","access_token":"sk-ant-oat01-cm053-reload"}`), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	configPath := filepath.Join(dir, "config.yaml")
++	head := "auth-dir: " + authDir + "\napi-keys: [cm053-reload-key]\noauth-model-alias:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      alias: " + alias + "\n"
++	write := func(overlay string) {
++		t.Helper()
++		if err := os.WriteFile(configPath, []byte(head+overlay), 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	write("")
++	initial, err := internalconfig.LoadConfig(configPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	manager := coreauth.NewManager(nil, nil, nil)
++	service := &Service{cfg: initial, coreManager: manager}
++	var callbacks []*config.Config
++	var callbackMu sync.Mutex
++	w, err := watcher.NewWatcher(configPath, authDir, func(cfg *config.Config) {
++		callbackMu.Lock()
++		callbacks = append(callbacks, cfg)
++		callbackMu.Unlock()
++		service.cfgMu.Lock()
++		service.cfg = cfg
++		service.cfgMu.Unlock()
++		manager.SetConfig(cfg)
++		manager.SetOAuthModelAlias(cfg.OAuthModelAlias)
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = w.Stop() }()
++	service.authUpdates = make(chan watcher.AuthUpdate, 256)
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	go service.consumeAuthUpdates(ctx)
++	w.SetAuthUpdateQueue(service.authUpdates)
++	w.SetConfig(initial)
++
++	var authID string
++	reload := func(step string) []*ModelInfo {
++		t.Helper()
++		w.ReloadConfigIfChanged()
++		if barrier := w.DispatchAuthBarrier(); barrier != nil {
++			select {
++			case <-barrier:
++			case <-time.After(10 * time.Second):
++				t.Fatalf("%s: auth updates were not applied", step)
++			}
++		}
++		if authID == "" {
++			for _, auth := range manager.List() {
++				if auth != nil && auth.Provider == "claude" {
++					authID = auth.ID
++				}
++			}
++			if authID == "" {
++				t.Fatalf("%s: the claude OAuth auth was not loaded", step)
++			}
++			t.Cleanup(func() { GlobalModelRegistry().UnregisterClient(authID) })
++		}
++		return GlobalModelRegistry().GetModelsForClient(authID)
++	}
++
++	models := reload("start")
++	if len(cm053Find(models, alias)) != 0 {
++		t.Fatalf("start: alias served before the overlay exists: %v", cm053IDs(models))
++	}
++
++	// add
++	write("oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      display-name: Reload One\n      max-context-length: 200000\n")
++	models = reload("add")
++	if got := cm053Find(models, alias); len(got) != 1 || got[0].DisplayName != "Reload One" || got[0].ContextLength != 200000 {
++		t.Fatalf("add: overlay not registered after an overlay-only reload: %v", cm053IDs(models))
++	}
++
++	// edit (content only: same name, aliases unchanged)
++	write("oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      display-name: Reload One\n      max-context-length: 400000\n      max-completion-tokens: 64000\n")
++	models = reload("edit")
++	if got := cm053Find(models, alias); len(got) != 1 || got[0].ContextLength != 400000 || got[0].MaxCompletionTokens != 64000 {
++		t.Fatalf("edit: registry kept the previous overlay content: %+v", got)
++	}
++
++	// invalid: refused through the existing reload refusal path; the previous
++	// config and registration stay.
++	callbackMu.Lock()
++	before := len(callbacks)
++	callbackMu.Unlock()
++	write("oauth-extra-models:\n  claude:\n    - name: claude-cm053-overlay-reload-1\n      max-context-length: 0\n")
++	models = reload("invalid")
++	callbackMu.Lock()
++	after := len(callbacks)
++	callbackMu.Unlock()
++	if after != before {
++		t.Fatal("invalid: a refused reload reached the config callback")
++	}
++	if got := cm053Find(models, alias); len(got) != 1 || got[0].ContextLength != 400000 {
++		t.Fatalf("invalid: previous registration not kept: %+v", got)
++	}
++
++	// remove
++	write("")
++	models = reload("remove")
++	if len(cm053Find(models, alias)) != 0 || len(cm053Find(models, "claude-cm053-overlay-reload-1")) != 0 {
++		t.Fatalf("remove: overlay still registered: %v", cm053IDs(models))
++	}
++	callbackMu.Lock()
++	defer callbackMu.Unlock()
++	for _, cfg := range callbacks {
++		if !reflect.DeepEqual(cfg.OAuthModelAlias, initial.OAuthModelAlias) {
++			t.Fatal("aliases must stay unchanged across the reload steps")
++		}
++	}
++}
+diff --git a/sdk/cliproxy/service.go b/sdk/cliproxy/service.go
+index ab1b322..c0829bd 100644
+--- a/sdk/cliproxy/service.go
++++ b/sdk/cliproxy/service.go
+@@ -33,6 +33,10 @@ type Service struct {
+ 	// cfgMu protects concurrent access to the configuration.
+ 	cfgMu sync.RWMutex
+ 
++	// oauthExtraShadowWarned keeps the oauth-extra-models static-wins Warn to one
++	// line per channel and model id (claude-multi local patch, oauth-model-overlay).
++	oauthExtraShadowWarned sync.Map
++
+ 	// configUpdateMu serializes config updates across watcher + home.
+ 	configUpdateMu sync.Mutex
+ 
+diff --git a/sdk/cliproxy/service_models.go b/sdk/cliproxy/service_models.go
+index c264fc8..ba33de3 100644
+--- a/sdk/cliproxy/service_models.go
++++ b/sdk/cliproxy/service_models.go
+@@ -11,6 +11,7 @@ import (
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+ 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
++	log "github.com/sirupsen/logrus"
+ )
+ 
+ // registerModelsForAuth (re)binds provider models in the global registry using the core auth ID as client identifier.
+@@ -122,6 +123,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
+ 				excluded = entry.ExcludedModels
+ 			}
+ 		}
++		models = s.appendOAuthExtraModels(provider, authKind, models)
+ 		models = applyExcludedModels(models, excluded)
+ 	case "codex":
+ 		if authKind == "apikey" {
+@@ -149,6 +151,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
+ 		default:
+ 			models = registry.GetCodexProModels()
+ 		}
++		models = s.appendOAuthExtraModels(provider, authKind, models)
+ 		models = applyExcludedModels(models, excluded)
+ 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
+ 		models = registry.GetKimiModels()
+@@ -558,6 +561,51 @@ func resolveConfigCodexStyleKey(auth *coreauth.Auth, entries []config.CodexKey,
+ 	return nil
+ }
+ 
++// appendOAuthExtraModels (claude-multi local patch, oauth-model-overlay)
++// appends the channel's oauth-extra-models entries to an OAuth auth's static
++// list, before exclusions, exactly like static models. On a case-normalized
++// collision with the auth's static list, or with any static definition of the
++// channel, the static entry wins and the overlay entry is dropped.
++func (s *Service) appendOAuthExtraModels(provider, authKind string, models []*ModelInfo) []*ModelInfo {
++	if s == nil {
++		return models
++	}
++	channel := coreauth.OAuthModelAliasChannel(provider, authKind)
++	if channel != "claude" && channel != "codex" {
++		return models
++	}
++	s.cfgMu.RLock()
++	cfg := s.cfg
++	s.cfgMu.RUnlock()
++	if cfg == nil || len(cfg.OAuthExtraModels[channel]) == 0 {
++		return models
++	}
++	existing := make(map[string]struct{}, len(models))
++	for _, model := range models {
++		if model != nil {
++			existing[strings.ToLower(strings.TrimSpace(model.ID))] = struct{}{}
++		}
++	}
++	out := append(make([]*ModelInfo, 0, len(models)+len(cfg.OAuthExtraModels[channel])), models...)
++	now := time.Now().Unix()
++	for _, entry := range cfg.OAuthExtraModels[channel] {
++		info := modelconfig.OAuthExtraModelInfo(channel, entry, now)
++		if info == nil {
++			continue
++		}
++		key := strings.ToLower(info.ID)
++		if _, shadowed := existing[key]; shadowed || modelconfig.OAuthExtraModelStaticKnown(channel, info.ID) {
++			if _, warned := s.oauthExtraShadowWarned.LoadOrStore(channel+"\x00"+key, struct{}{}); !warned {
++				log.WithFields(log.Fields{"channel": channel, "model": info.ID}).Warn("oauth-extra-models: entry duplicates a static model; the static entry wins and the overlay entry is dropped")
++			}
++			continue
++		}
++		existing[key] = struct{}{}
++		out = append(out, info)
++	}
++	return out
++}
++
+ func (s *Service) oauthExcludedModels(provider, authKind string) []string {
+ 	cfg := s.cfg
+ 	if cfg == nil {
+diff --git a/sdk/config/config.go b/sdk/config/config.go
+index 13878f6..01fe9c4 100644
+--- a/sdk/config/config.go
++++ b/sdk/config/config.go
+@@ -17,6 +17,7 @@ type DiscoveryConfig = internalconfig.DiscoveryConfig
+ type DiscoveryInterfacesConfig = internalconfig.DiscoveryInterfacesConfig
+ type RemoteManagement = internalconfig.RemoteManagement
+ type OAuthModelAlias = internalconfig.OAuthModelAlias
++type OAuthExtraModel = internalconfig.OAuthExtraModel
+ type PayloadConfig = internalconfig.PayloadConfig
+ type PayloadRule = internalconfig.PayloadRule
+ type PayloadFilterRule = internalconfig.PayloadFilterRule

@@ -1,0 +1,3532 @@
+diff --git a/internal/compatsafe/compatsafe.go b/internal/compatsafe/compatsafe.go
+new file mode 100644
+index 0000000..f19277f
+--- /dev/null
++++ b/internal/compatsafe/compatsafe.go
+@@ -0,0 +1,878 @@
++// Package compatsafe is the safe failure representation of the keyed
++// OpenAI-compatible chat route.
++//
++// A keyed compatibility provider (an api_key, a configured credential
++// header, or credentials in its URL) can echo the credential back in an
++// error body, an SSE error frame, a response header or a transport error.
++// On the reviewed chat route every such failure is rebuilt from local data
++// only: the numeric status, one Kind from the finite set below, the fixed
++// local text of that Kind, and typed retry metadata (the executor's existing
++// Retry-After / TPM parsing, computed before the raw input is dropped).
++// Provider message, detail, type and code strings, URLs, event names, header
++// maps and wrapped error chains are never retained. A recognized provider
++// code or type only selects a Kind; it is never copied.
++//
++// The fixed text of each Kind is an OpenAI-style error envelope chosen so
++// that the conductor's existing semantic classification (request fault,
++// model not found, model not supported, authentication, Cloudflare
++// challenge, rate limit) reaches the same verdict it reached on the raw
++// provider body for those categories. Arbitrary provider-text matching (for
++// example request-scoped-error rules with free-text match strings) is not
++// supported on this route.
++//
++// The package depends on the standard library only.
++package compatsafe
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"mime"
++	"net"
++	"net/http"
++	"net/url"
++	"strconv"
++	"strings"
++	"syscall"
++	"time"
++)
++
++// MaxErrorBody is the most bytes of an upstream failure body that are ever
++// examined. ReadErrorBody reads one byte more to detect overflow.
++const MaxErrorBody = 64 << 10
++
++// Stream bounds of the keyed chat route: the existing 50 MiB per-line
++// scanner ceiling is kept, and one SSE frame may hold at most 50 MiB of
++// line bytes in at most 65,536 lines.
++const (
++	MaxStreamLine       = 52_428_800
++	MaxStreamFrameBytes = 52_428_800
++	MaxStreamFrameLines = 65_536
++)
++
++// Kind is one locally defined failure kind.
++type Kind uint8
++
++// The finite set of failure kinds.
++const (
++	// KindUpstreamStatus is a non-2xx response with no recognized category.
++	KindUpstreamStatus Kind = iota + 1
++	KindInvalidRequest
++	KindContextLength
++	KindModelNotFound
++	KindModelNotSupported
++	KindAuthentication
++	KindPermission
++	KindRateLimited
++	KindQuota
++	KindCloudflareChallenge
++	KindServerError
++	KindErrorBodyTooLarge
++	KindErrorBodyUnreadable
++	// KindErrorPayload is an error envelope (2xx body or SSE frame) with no
++	// recognized category.
++	KindErrorPayload
++	KindMalformedResponse
++	KindStreamErrorEventNoData
++	KindStreamErrorEventBeforeDone
++	KindStreamIncompleteBeforeDone
++	KindStreamIncompleteFrame
++	KindStreamClosedBeforeDone
++	KindStreamFrameTooLarge
++	kindEnd
++)
++
++type kindText struct {
++	name    string
++	errType string
++	code    string
++	message string
++}
++
++var kindTexts = [...]kindText{
++	KindUpstreamStatus:             {"upstream_status", "upstream_error", "upstream_error", "upstream returned an error status"},
++	KindInvalidRequest:             {"invalid_request", "invalid_request_error", "invalid_request_error", "upstream rejected the request as invalid"},
++	KindContextLength:              {"context_length", "invalid_request_error", "context_length_exceeded", "upstream rejected the request: context length exceeded"},
++	KindModelNotFound:              {"model_not_found", "not_found_error", "model_not_found", "upstream model not found"},
++	KindModelNotSupported:          {"model_not_supported", "upstream_error", "model_not_supported", "upstream model not supported"},
++	KindAuthentication:             {"authentication", "authentication_error", "invalid_api_key", "upstream rejected the credential"},
++	KindPermission:                 {"permission", "permission_error", "permission_denied", "upstream denied permission"},
++	KindRateLimited:                {"rate_limited", "rate_limit_error", "rate_limit_exceeded", "upstream rate limit exceeded"},
++	KindQuota:                      {"quota", "insufficient_quota", "insufficient_quota", "upstream quota or billing limit reached"},
++	KindCloudflareChallenge:        {"cloudflare_challenge", "upstream_error", "cloudflare_challenge", "upstream returned a cloudflare challenge"},
++	KindServerError:                {"server_error", "server_error", "upstream_server_error", "upstream server error"},
++	KindErrorBodyTooLarge:          {"error_body_too_large", "upstream_error", "upstream_error_body_too_large", "upstream error body exceeded the size limit"},
++	KindErrorBodyUnreadable:        {"error_body_unreadable", "upstream_error", "upstream_error_body_unreadable", "upstream error body could not be read"},
++	KindErrorPayload:               {"error_payload", "upstream_error", "upstream_error_payload", "upstream returned an error payload"},
++	KindMalformedResponse:          {"malformed_response", "upstream_error", "malformed_response", "upstream returned a malformed response"},
++	KindStreamErrorEventNoData:     {"stream_error_event_no_data", "upstream_error", "stream_protocol_error", "upstream error event ended without data"},
++	KindStreamErrorEventBeforeDone: {"stream_error_event_before_done", "upstream_error", "stream_protocol_error", "upstream error event ended before [DONE]"},
++	KindStreamIncompleteBeforeDone: {"stream_incomplete_before_done", "upstream_error", "stream_protocol_error", "upstream stream ended with incomplete data before [DONE]"},
++	KindStreamIncompleteFrame:      {"stream_incomplete_frame", "upstream_error", "stream_protocol_error", "upstream stream ended with incomplete SSE data frame"},
++	KindStreamClosedBeforeDone:     {"stream_closed_before_done", "upstream_error", "stream_protocol_error", "upstream stream closed before [DONE]"},
++	KindStreamFrameTooLarge:        {"stream_frame_too_large", "upstream_error", "stream_frame_too_large", "upstream stream frame exceeded the size limit"},
++}
++
++var kindBodies = func() [len(kindTexts)]string {
++	var bodies [len(kindTexts)]string
++	for i := range kindTexts {
++		text := kindTexts[i]
++		if text.name == "" {
++			continue
++		}
++		type detail struct {
++			Message string `json:"message"`
++			Type    string `json:"type"`
++			Code    string `json:"code"`
++		}
++		raw, errMarshal := json.Marshal(struct {
++			Error detail `json:"error"`
++		}{detail{Message: text.message, Type: text.errType, Code: text.code}})
++		if errMarshal != nil {
++			panic("compatsafe: " + errMarshal.Error())
++		}
++		bodies[i] = string(raw)
++	}
++	return bodies
++}()
++
++// Kinds returns every defined Kind.
++func Kinds() []Kind {
++	kinds := make([]Kind, 0, int(kindEnd)-1)
++	for k := KindUpstreamStatus; k < kindEnd; k++ {
++		kinds = append(kinds, k)
++	}
++	return kinds
++}
++
++func (k Kind) valid() bool { return k >= KindUpstreamStatus && k < kindEnd }
++
++// String returns the kind's fixed name.
++func (k Kind) String() string {
++	if !k.valid() {
++		return "unknown"
++	}
++	return kindTexts[k].name
++}
++
++// Message returns the kind's fixed local message.
++func (k Kind) Message() string {
++	if !k.valid() {
++		return "upstream request failed"
++	}
++	return kindTexts[k].message
++}
++
++// Body returns the kind's fixed error envelope.
++func (k Kind) Body() string {
++	if !k.valid() {
++		return kindBodies[KindUpstreamStatus]
++	}
++	return kindBodies[k]
++}
++
++// Error is the safe failure of the keyed chat route: a numeric status, a
++// Kind and typed retry metadata. It wraps nothing.
++type Error struct {
++	Kind   Kind
++	Status int
++	Retry  *time.Duration
++}
++
++// NewError returns the safe failure of kind with status. A status outside
++// 400..599 becomes 502.
++func NewError(kind Kind, status int, retry *time.Duration) Error {
++	if status < http.StatusBadRequest || status > 599 {
++		status = http.StatusBadGateway
++	}
++	if retry != nil {
++		value := *retry
++		retry = &value
++	}
++	return Error{Kind: kind, Status: status, Retry: retry}
++}
++
++// Error returns the kind's fixed error envelope.
++func (e Error) Error() string { return e.Kind.Body() }
++
++// StatusCode returns the numeric status.
++func (e Error) StatusCode() int { return e.Status }
++
++// RetryAfter returns the typed retry metadata, or nil.
++func (e Error) RetryAfter() *time.Duration {
++	if e.Retry == nil {
++		return nil
++	}
++	value := *e.Retry
++	return &value
++}
++
++// IsCredentialScoped reports false: the compatibility executor never marks a
++// failure credential-scoped.
++func (e Error) IsCredentialScoped() bool { return false }
++
++// ReadErrorBody reads at most MaxErrorBody+1 bytes of r. It returns the
++// bytes read (never more than MaxErrorBody), whether the body was larger,
++// and whether it could be read at all.
++func ReadErrorBody(r io.Reader) (body []byte, overflow bool, readable bool) {
++	if r == nil {
++		return nil, false, true
++	}
++	raw, errRead := io.ReadAll(io.LimitReader(r, MaxErrorBody+1))
++	if len(raw) > MaxErrorBody {
++		return raw[:MaxErrorBody], true, true
++	}
++	if errRead != nil {
++		return nil, false, false
++	}
++	return raw, false, true
++}
++
++// HTTPFailure classifies a non-2xx response. body is at most MaxErrorBody
++// bytes; overflow and unreadable select their fixed kinds. retry is the
++// executor's typed retry metadata.
++func HTTPFailure(status int, body []byte, overflow, readable bool, retry *time.Duration) Error {
++	switch {
++	case !readable:
++		return NewError(statusKindOr(status, KindErrorBodyUnreadable), status, retry)
++	case overflow:
++		return NewError(statusKindOr(status, KindErrorBodyTooLarge), status, retry)
++	}
++	return NewError(Classify(status, body), status, retry)
++}
++
++// statusKindOr keeps the authoritative status kinds (402, 429) when the body
++// cannot be examined, and otherwise uses fallback.
++func statusKindOr(status int, fallback Kind) Kind {
++	switch status {
++	case http.StatusPaymentRequired:
++		return KindQuota
++	case http.StatusTooManyRequests:
++		return KindRateLimited
++	}
++	return fallback
++}
++
++// Classify selects the Kind of an upstream failure from its status and at
++// most MaxErrorBody bytes of body. The order mirrors the conductor: 402 and
++// 429 are authoritative; a Cloudflare challenge below 500 is never a request
++// fault; 401 with authentication_error stays a credential failure; model
++// availability wins over a generic request fault; recognized request-fault
++// codes and types come next; the status decides the rest.
++func Classify(status int, body []byte) Kind {
++	if len(body) > MaxErrorBody {
++		body = body[:MaxErrorBody]
++	}
++	return classify(status, body, errorFields(body))
++}
++
++func classify(status int, body []byte, fields fieldSet) Kind {
++	if len(body) > MaxErrorBody {
++		body = body[:MaxErrorBody]
++	}
++	lower := strings.ToLower(string(body))
++	switch {
++	case status == http.StatusPaymentRequired:
++		return KindQuota
++	case status == http.StatusTooManyRequests:
++		return KindRateLimited
++	case status < http.StatusInternalServerError && isCloudflareChallenge(lower):
++		return KindCloudflareChallenge
++	case status == http.StatusUnauthorized && fields.hasType("authentication_error"):
++		return KindAuthentication
++	case fields.modelNotFound():
++		return KindModelNotFound
++	case (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity || status == http.StatusNotFound) && isModelSupportText(lower):
++		return KindModelNotSupported
++	case fields.hasCode("context_length_exceeded"):
++		return KindContextLength
++	case fields.requestFault():
++		return KindInvalidRequest
++	}
++	switch {
++	case status == http.StatusUnauthorized:
++		return KindAuthentication
++	case status == http.StatusForbidden:
++		return KindPermission
++	case status >= http.StatusInternalServerError:
++		return KindServerError
++	}
++	return KindUpstreamStatus
++}
++
++// PayloadFailure classifies an error envelope carried by a 2xx body or an
++// SSE frame: the status is the envelope's numeric status field in 400..599,
++// otherwise 502, and the category comes from Classify; an envelope with no
++// recognized category is KindErrorPayload. A payload that is not exactly
++// one duplicate-free JSON object (see Inspect) is KindMalformedResponse.
++func PayloadFailure(payload []byte) Error {
++	root, ok := decodeStrict(payload)
++	if !ok {
++		return NewError(KindMalformedResponse, http.StatusBadGateway, nil)
++	}
++	if _, isObject := root.(map[string]any); !isObject {
++		return NewError(KindMalformedResponse, http.StatusBadGateway, nil)
++	}
++	return payloadFailure(payload, root)
++}
++
++func payloadFailure(payload []byte, root any) Error {
++	status := payloadStatus(root)
++	kind := classify(status, payload, fieldsOf(root))
++	if kind == KindUpstreamStatus || kind == KindServerError {
++		kind = KindErrorPayload
++	}
++	return NewError(kind, status, nil)
++}
++
++// PayloadStatus returns the numeric status an error envelope names in its
++// usual fields, or 502 (also for a payload that does not decode strictly).
++func PayloadStatus(payload []byte) int {
++	root, ok := decodeStrict(payload)
++	if !ok {
++		return http.StatusBadGateway
++	}
++	return payloadStatus(root)
++}
++
++func payloadStatus(root any) int {
++	for _, path := range [][]string{{"status"}, {"status_code"}, {"error", "status"}, {"error", "status_code"}, {"response", "error", "status"}, {"response", "error", "status_code"}} {
++		if n, ok := lookupNumber(root, path); ok && n >= http.StatusBadRequest && n <= 599 {
++			return n
++		}
++	}
++	return http.StatusBadGateway
++}
++
++// Inspect validates and classifies a keyed JSON payload (a 2xx body or the
++// data of one complete SSE frame) before anything captures, observes or
++// translates it. It reports failed=false only for a validated success: a
++// payload that decodes as exactly one JSON object, with no duplicate member
++// name at any depth, that is not an error envelope. Everything else fails
++// closed with a fixed Error: an error envelope (or any payload of an
++// error-named SSE event) is classified by PayloadFailure; invalid JSON,
++// trailing data, a duplicate member (ambiguous: downstream parsers disagree
++// on which member wins), or a non-object top level (a string, number, array,
++// boolean or null) is KindMalformedResponse. Numbers are decoded without
++// float64 conversion, so a huge number never turns an error envelope into
++// an undecodable success.
++func Inspect(payload []byte, errorEvent bool) (failure Error, failed bool) {
++	trimmed := bytes.TrimSpace(payload)
++	root, ok := decodeStrict(trimmed)
++	if !ok {
++		return NewError(KindMalformedResponse, http.StatusBadGateway, nil), true
++	}
++	object, isObject := root.(map[string]any)
++	if !isObject {
++		return NewError(KindMalformedResponse, http.StatusBadGateway, nil), true
++	}
++	if errorEvent || isErrorEnvelope(object) {
++		return payloadFailure(trimmed, root), true
++	}
++	return Error{}, false
++}
++
++// errNotStrict is the internal verdict of decodeStrict; it never leaves the
++// package.
++var errNotStrict = errors.New("compatsafe: payload is not strict JSON")
++
++// decodeStrict decodes exactly one JSON value: numbers stay json.Number,
++// and an object with a duplicate member name (compared after unescaping) at
++// any depth is rejected. json.Valid runs first, so nesting is bounded by the
++// standard decoder's depth limit before the recursive walk.
++func decodeStrict(payload []byte) (any, bool) {
++	trimmed := bytes.TrimSpace(payload)
++	if len(trimmed) == 0 || !json.Valid(trimmed) {
++		return nil, false
++	}
++	decoder := json.NewDecoder(bytes.NewReader(trimmed))
++	decoder.UseNumber()
++	root, errDecode := decodeStrictValue(decoder)
++	if errDecode != nil {
++		return nil, false
++	}
++	if _, errTrailing := decoder.Token(); errTrailing != io.EOF {
++		return nil, false
++	}
++	return root, true
++}
++
++func decodeStrictValue(decoder *json.Decoder) (any, error) {
++	token, errToken := decoder.Token()
++	if errToken != nil {
++		return nil, errNotStrict
++	}
++	delim, isDelim := token.(json.Delim)
++	if !isDelim {
++		return token, nil
++	}
++	switch delim {
++	case '{':
++		object := make(map[string]any)
++		for decoder.More() {
++			keyToken, errKey := decoder.Token()
++			if errKey != nil {
++				return nil, errNotStrict
++			}
++			key, isString := keyToken.(string)
++			if !isString {
++				return nil, errNotStrict
++			}
++			if _, duplicate := object[key]; duplicate {
++				return nil, errNotStrict
++			}
++			value, errValue := decodeStrictValue(decoder)
++			if errValue != nil {
++				return nil, errNotStrict
++			}
++			object[key] = value
++		}
++		if end, errEnd := decoder.Token(); errEnd != nil || end != json.Delim('}') {
++			return nil, errNotStrict
++		}
++		return object, nil
++	case '[':
++		array := make([]any, 0)
++		for decoder.More() {
++			value, errValue := decodeStrictValue(decoder)
++			if errValue != nil {
++				return nil, errNotStrict
++			}
++			array = append(array, value)
++		}
++		if end, errEnd := decoder.Token(); errEnd != nil || end != json.Delim(']') {
++			return nil, errNotStrict
++		}
++		return array, nil
++	}
++	return nil, errNotStrict
++}
++
++// isErrorEnvelope reports whether a decoded object is an error envelope: a
++// non-null error or response.error, an error/response.error/response.failed
++// type, or a top-level code+message pair.
++func isErrorEnvelope(object map[string]any) bool {
++	if value, exists := object["error"]; exists && value != nil {
++		return true
++	}
++	if response, isObject := object["response"].(map[string]any); isObject {
++		if value, exists := response["error"]; exists && value != nil {
++			return true
++		}
++	}
++	if typ, isString := object["type"].(string); isString {
++		switch strings.ToLower(typ) {
++		case "error", "response.error", "response.failed":
++			return true
++		}
++	}
++	_, hasCode := object["code"]
++	_, hasMessage := object["message"]
++	return hasCode && hasMessage
++}
++
++type fieldSet struct {
++	codes             []string
++	types             []string
++	modelNotFoundTree bool
++}
++
++func (f fieldSet) hasCode(code string) bool {
++	for _, c := range f.codes {
++		if c == code {
++			return true
++		}
++	}
++	return false
++}
++
++func (f fieldSet) hasType(typ string) bool {
++	for _, t := range f.types {
++		if t == typ {
++			return true
++		}
++	}
++	return false
++}
++
++var requestFaultCodes = map[string]struct{}{
++	"cyber_policy": {}, "context_length_exceeded": {}, "message_too_big": {}, "string_above_max_length": {},
++	"invalid_prompt": {}, "invalid_value": {}, "unsupported_value": {}, "invalid_request_error": {},
++	"previous_response_not_found": {},
++}
++
++var requestFaultTypes = map[string]struct{}{
++	"invalid_request": {}, "invalid_request_error": {}, "bad_request_error": {}, "invalid_prompt": {},
++}
++
++func (f fieldSet) requestFault() bool {
++	for _, c := range f.codes {
++		if _, ok := requestFaultCodes[c]; ok {
++			return true
++		}
++	}
++	for _, t := range f.types {
++		if _, ok := requestFaultTypes[t]; ok {
++			return true
++		}
++	}
++	return false
++}
++
++// isModelNotFoundIdentifier mirrors the conductor: the last path segment of
++// a code or type, normalized, names a missing model.
++func isModelNotFoundIdentifier(value string) bool {
++	candidate := strings.ToLower(strings.TrimSpace(value))
++	if fragment := strings.LastIndex(candidate, "#"); fragment >= 0 && fragment+1 < len(candidate) {
++		candidate = candidate[fragment+1:]
++	} else {
++		if query := strings.Index(candidate, "?"); query >= 0 {
++			candidate = candidate[:query]
++		}
++		candidate = strings.TrimRight(candidate, "/")
++		if separator := strings.LastIndexAny(candidate, "/:"); separator >= 0 {
++			candidate = candidate[separator+1:]
++		}
++	}
++	switch strings.NewReplacer("-", "_", " ", "_").Replace(candidate) {
++	case "model_not_found", "model_not_found_error", "unknown_model", "model_does_not_exist", "model_not_exist":
++		return true
++	}
++	return false
++}
++
++// isModelNotFoundMessage mirrors the conductor's explicit model-not-found
++// message rule without a requested model (the form every classification
++// call of the conductor uses).
++func isModelNotFoundMessage(message string) bool {
++	lower := strings.Trim(strings.ToLower(strings.TrimSpace(message)), " .!;\t\r\n")
++	if lower == "" || strings.Contains(lower, "in request") || strings.Contains(lower, "in body") || strings.Contains(lower, "request body") {
++		return false
++	}
++	normalized := strings.NewReplacer("-", "_").Replace(lower)
++	if strings.Contains(normalized, "model_not_found") || strings.Contains(normalized, "unknown_model") {
++		return true
++	}
++	for _, prefix := range []string{"no such model", "unknown model"} {
++		if lower != prefix && !strings.HasPrefix(lower, prefix+" ") && !strings.HasPrefix(lower, prefix+":") {
++			continue
++		}
++		remainder := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(lower, prefix)), ":"))
++		return remainder == ""
++	}
++	for _, prefix := range []string{"the requested model", "requested model", "the model", "model"} {
++		if lower != prefix && !strings.HasPrefix(lower, prefix+" ") && !strings.HasPrefix(lower, prefix+":") {
++			continue
++		}
++		remainder := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(lower, prefix)), ":"))
++		switch strings.Trim(remainder, " .!;\t\r\n") {
++		case "not found", "was not found", "could not be found", "does not exist", "doesn't exist", "not exist", "is unknown", "does not exist or you do not have access to it":
++			return true
++		}
++		return false
++	}
++	return false
++}
++
++// containsModelNotFound walks a decoded error envelope the way the
++// conductor does: code/type identifiers and error/message/detail/
++// error_description/title strings at any depth.
++func containsModelNotFound(value any) bool {
++	switch typed := value.(type) {
++	case map[string]any:
++		for key, item := range typed {
++			if text, isString := item.(string); isString {
++				switch strings.ToLower(strings.TrimSpace(key)) {
++				case "code", "type":
++					if isModelNotFoundIdentifier(text) {
++						return true
++					}
++				case "error", "message", "detail", "error_description", "title":
++					if isModelNotFoundMessage(text) {
++						return true
++					}
++				}
++			}
++			switch item.(type) {
++			case map[string]any, []any:
++				if containsModelNotFound(item) {
++					return true
++				}
++			}
++		}
++	case []any:
++		for _, item := range typed {
++			if text, isString := item.(string); isString && isModelNotFoundMessage(text) {
++				return true
++			}
++			if containsModelNotFound(item) {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++func (f fieldSet) modelNotFound() bool { return f.modelNotFoundTree }
++
++// errorFields collects the lower-cased code and type strings of the usual
++// error-envelope paths and the conductor's model-not-found verdict. It is
++// used for classification only. A body that does not decode strictly (see
++// Inspect) yields no fields, so the status decides.
++func errorFields(body []byte) fieldSet {
++	root, ok := decodeStrict(body)
++	if !ok {
++		return fieldSet{}
++	}
++	return fieldsOf(root)
++}
++
++func fieldsOf(root any) fieldSet {
++	var f fieldSet
++	for _, prefix := range [][]string{nil, {"error"}, {"response", "error"}, {"body", "error"}} {
++		if value, ok := lookupString(root, append(append([]string{}, prefix...), "code")); ok {
++			f.codes = append(f.codes, value)
++		}
++		if value, ok := lookupString(root, append(append([]string{}, prefix...), "type")); ok {
++			f.types = append(f.types, value)
++		}
++	}
++	f.modelNotFoundTree = containsModelNotFound(root)
++	return f
++}
++
++func lookup(root any, path []string) (any, bool) {
++	current := root
++	for _, key := range path {
++		object, ok := current.(map[string]any)
++		if !ok {
++			return nil, false
++		}
++		current, ok = object[key]
++		if !ok {
++			return nil, false
++		}
++	}
++	return current, true
++}
++
++func lookupString(root any, path []string) (string, bool) {
++	value, ok := lookup(root, path)
++	if !ok {
++		return "", false
++	}
++	switch typed := value.(type) {
++	case string:
++		return strings.ToLower(strings.TrimSpace(typed)), true
++	case json.Number:
++		if n, errInt := typed.Int64(); errInt == nil {
++			return strconv.FormatInt(n, 10), true
++		}
++		if f, errFloat := typed.Float64(); errFloat == nil {
++			return strconv.FormatFloat(f, 'f', -1, 64), true
++		}
++		return "", false
++	}
++	return "", false
++}
++
++func lookupNumber(root any, path []string) (int, bool) {
++	value, ok := lookup(root, path)
++	if !ok {
++		return 0, false
++	}
++	switch typed := value.(type) {
++	case json.Number:
++		if n, errInt := typed.Int64(); errInt == nil {
++			if n < 0 || n > 999 {
++				return 0, false
++			}
++			return int(n), true
++		}
++		f, errFloat := typed.Float64()
++		if errFloat != nil || f < 0 || f > 999 || f != float64(int(f)) {
++			return 0, false
++		}
++		return int(f), true
++	case string:
++		n, errAtoi := strconv.Atoi(strings.TrimSpace(typed))
++		return n, errAtoi == nil
++	}
++	return 0, false
++}
++
++func isModelSupportText(lower string) bool {
++	for _, pattern := range []string{
++		"model_not_supported", "requested model is not supported", "requested model is unsupported",
++		"requested model is unavailable", "model is not supported", "model not supported", "unsupported model",
++		"model unavailable", "not available for your plan", "not available for your account",
++	} {
++		if strings.Contains(lower, pattern) {
++			return true
++		}
++	}
++	return false
++}
++
++func isCloudflareChallenge(lower string) bool {
++	return strings.Contains(lower, "challenge-platform") ||
++		strings.Contains(lower, "cf-mitigated") ||
++		strings.Contains(lower, "cloudflare challenge") ||
++		(strings.Contains(lower, "just a moment") && strings.Contains(lower, "cloudflare"))
++}
++
++// TransportError is the safe form of a transport, read or close failure
++// that has no trusted identity. It carries no status and wraps nothing; its
++// fixed text keeps the conductor's transient-transport classification.
++type TransportError struct {
++	transient bool
++	timeout   bool
++}
++
++// Error returns the fixed text.
++func (e TransportError) Error() string {
++	switch {
++	case e.timeout:
++		return "upstream transport failed: i/o timeout"
++	case e.transient:
++		return "upstream transport failed: connection refused, reset or unreachable"
++	}
++	return "upstream transport failed"
++}
++
++// Transport returns the safe form of a transport, read, scanner or close
++// error. Trusted identities are kept as their standard sentinels
++// (context.Canceled, context.DeadlineExceeded, io.EOF,
++// io.ErrUnexpectedEOF); a sentinel refusal from the redirect policy is kept
++// as is when keep reports it; bufio.ErrTooLong and anything else become a
++// fixed TransportError.
++func Transport(err error, keep func(error) bool) error {
++	switch {
++	case err == nil:
++		return nil
++	case keep != nil && keep(err):
++		return err
++	case errors.Is(err, context.Canceled):
++		return context.Canceled
++	case errors.Is(err, context.DeadlineExceeded):
++		return context.DeadlineExceeded
++	case errors.Is(err, io.ErrUnexpectedEOF):
++		return io.ErrUnexpectedEOF
++	case errors.Is(err, io.EOF):
++		return io.EOF
++	}
++	var dnsErr *net.DNSError
++	if errors.As(err, &dnsErr) && dnsErr != nil && (dnsErr.IsTimeout || dnsErr.Timeout()) {
++		return TransportError{transient: true, timeout: true}
++	}
++	var netErr net.Error
++	if errors.As(err, &netErr) && netErr != nil && netErr.Timeout() {
++		return TransportError{transient: true, timeout: true}
++	}
++	var errno syscall.Errno
++	if errors.As(err, &errno) {
++		switch errno {
++		case syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ECONNABORTED,
++			syscall.ETIMEDOUT, syscall.EHOSTUNREACH, syscall.ENETUNREACH, syscall.EPIPE:
++			return TransportError{transient: true}
++		}
++	}
++	var opErr *net.OpError
++	if (errors.As(err, &opErr) && opErr != nil) || (errors.As(err, &dnsErr) && dnsErr != nil) {
++		return TransportError{transient: true}
++	}
++	lower := strings.ToLower(err.Error())
++	if strings.Contains(lower, "unexpected eof") {
++		return io.ErrUnexpectedEOF
++	}
++	for _, phrase := range []string{
++		"tls handshake timeout", "i/o timeout",
++	} {
++		if strings.Contains(lower, phrase) {
++			return TransportError{transient: true, timeout: true}
++		}
++	}
++	for _, phrase := range []string{
++		"tls: tls handshake", "wsarecv", "wsasend", "a connection attempt failed", "connection refused",
++		"connection reset", "no such host", "server misbehaving", "network is unreachable", "no route to host",
++		"broken pipe", "connection aborted", "use of closed network connection",
++	} {
++		if strings.Contains(lower, phrase) {
++			return TransportError{transient: true}
++		}
++	}
++	return TransportError{}
++}
++
++// safeMediaTypes are the only response Content-Type values kept, each
++// reduced to its bare media type.
++var safeMediaTypes = map[string]struct{}{
++	"application/json":  {},
++	"text/event-stream": {},
++	"text/plain":        {},
++	"text/html":         {},
++}
++
++// ResponseHeaders returns the normalized response metadata of the keyed
++// chat route: at most a Content-Type reduced to one of a fixed set of media
++// types. No other upstream header name or value is kept. The result is
++// never nil.
++func ResponseHeaders(src http.Header) http.Header {
++	out := make(http.Header, 1)
++	if src == nil {
++		return out
++	}
++	values := src.Values("Content-Type")
++	if len(values) != 1 {
++		return out
++	}
++	mediaType, _, errParse := mime.ParseMediaType(values[0])
++	if errParse != nil {
++		return out
++	}
++	if _, ok := safeMediaTypes[strings.ToLower(mediaType)]; ok {
++		out.Set("Content-Type", strings.ToLower(mediaType))
++	}
++	return out
++}
++
++// Redacted is the fixed replacement of a credential-bearing value.
++const Redacted = "[redacted]"
++
++// RequestHeaders returns a copy of h for diagnostics in which every value of
++// a header outside keep is Redacted. Header names are kept.
++func RequestHeaders(h http.Header, keep map[string]struct{}) http.Header {
++	out := make(http.Header, len(h))
++	for name, values := range h {
++		canonical := http.CanonicalHeaderKey(name)
++		if _, ok := keep[canonical]; ok {
++			out[canonical] = append([]string(nil), values...)
++			continue
++		}
++		redacted := make([]string, len(values))
++		for i := range redacted {
++			redacted[i] = Redacted
++		}
++		out[canonical] = redacted
++	}
++	return out
++}
++
++// RequestURL returns rawURL for diagnostics without userinfo or fragment and
++// with any query replaced by Redacted.
++func RequestURL(rawURL string) string {
++	parsed, errParse := url.Parse(rawURL)
++	if errParse != nil {
++		return Redacted
++	}
++	parsed.User = nil
++	parsed.Fragment = ""
++	parsed.RawFragment = ""
++	if parsed.RawQuery != "" || parsed.ForceQuery {
++		parsed.RawQuery = Redacted
++		parsed.ForceQuery = false
++	}
++	return parsed.String()
++}
+diff --git a/internal/compatsafe/compatsafe_cm053_test.go b/internal/compatsafe/compatsafe_cm053_test.go
+new file mode 100644
+index 0000000..f9776bf
+--- /dev/null
++++ b/internal/compatsafe/compatsafe_cm053_test.go
+@@ -0,0 +1,315 @@
++package compatsafe
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"strings"
++	"syscall"
++	"testing"
++	"time"
++)
++
++// Unit gates of the safe failure representation.
++
++func TestCM053CompatSafeKindsFixed(t *testing.T) {
++	names := map[string]Kind{}
++	for _, kind := range Kinds() {
++		if kind.String() == "unknown" || kind.Message() == "" {
++			t.Fatalf("kind %d has no fixed text", kind)
++		}
++		if previous, dup := names[kind.String()]; dup {
++			t.Fatalf("kinds %d and %d share the name %q", previous, kind, kind.String())
++		}
++		names[kind.String()] = kind
++		var envelope struct {
++			Error struct {
++				Message string `json:"message"`
++				Type    string `json:"type"`
++				Code    string `json:"code"`
++			} `json:"error"`
++		}
++		if errUnmarshal := json.Unmarshal([]byte(kind.Body()), &envelope); errUnmarshal != nil {
++			t.Fatalf("kind %s body is not JSON: %v", kind, errUnmarshal)
++		}
++		if envelope.Error.Message != kind.Message() || envelope.Error.Type == "" || envelope.Error.Code == "" {
++			t.Fatalf("kind %s body = %s", kind, kind.Body())
++		}
++		err := NewError(kind, 0, nil)
++		if err.Error() != kind.Body() || err.StatusCode() != http.StatusBadGateway || err.RetryAfter() != nil || err.IsCredentialScoped() {
++			t.Fatalf("NewError(%s) = %+v", kind, err)
++		}
++	}
++	if len(names) != int(kindEnd)-1 {
++		t.Fatalf("%d named kinds, want %d", len(names), int(kindEnd)-1)
++	}
++	retry := 5 * time.Second
++	err := NewError(KindRateLimited, http.StatusTooManyRequests, &retry)
++	retry = time.Hour
++	if got := err.RetryAfter(); got == nil || *got != 5*time.Second {
++		t.Fatalf("retry metadata is shared with the caller: %v", got)
++	}
++	*err.RetryAfter() = time.Hour
++	if got := err.RetryAfter(); *got != 5*time.Second {
++		t.Fatalf("RetryAfter exposes internal state: %v", *got)
++	}
++}
++
++type cm053CountingReader struct {
++	read int
++	err  error
++}
++
++func (r *cm053CountingReader) Read(p []byte) (int, error) {
++	if r.err != nil {
++		return 0, r.err
++	}
++	for i := range p {
++		p[i] = 'k'
++	}
++	r.read += len(p)
++	return len(p), nil
++}
++
++func TestCM053CompatSafeReadErrorBodyBound(t *testing.T) {
++	infinite := &cm053CountingReader{}
++	body, overflow, readable := ReadErrorBody(infinite)
++	if !overflow || !readable || len(body) != MaxErrorBody || infinite.read > MaxErrorBody+1+32<<10 {
++		t.Fatalf("infinite body: len=%d overflow=%t readable=%t read=%d", len(body), overflow, readable, infinite.read)
++	}
++	body, overflow, readable = ReadErrorBody(strings.NewReader(strings.Repeat("a", MaxErrorBody)))
++	if overflow || !readable || len(body) != MaxErrorBody {
++		t.Fatalf("exact body: len=%d overflow=%t readable=%t", len(body), overflow, readable)
++	}
++	body, overflow, readable = ReadErrorBody(strings.NewReader(strings.Repeat("a", MaxErrorBody+1)))
++	if !overflow || !readable || len(body) != MaxErrorBody {
++		t.Fatalf("64 KiB + 1: len=%d overflow=%t readable=%t", len(body), overflow, readable)
++	}
++	_, overflow, readable = ReadErrorBody(&cm053CountingReader{err: errors.New("secret read failure")})
++	if overflow || readable {
++		t.Fatalf("unreadable body: overflow=%t readable=%t", overflow, readable)
++	}
++	if got := HTTPFailure(500, nil, false, false, nil); got.Kind != KindErrorBodyUnreadable {
++		t.Fatalf("unreadable kind = %s", got.Kind)
++	}
++	if got := HTTPFailure(429, nil, true, true, nil); got.Kind != KindRateLimited {
++		t.Fatalf("429 overflow kind = %s, want the authoritative rate-limit kind", got.Kind)
++	}
++	if got := HTTPFailure(500, []byte(`{"error":{"code":"context_length_exceeded"}}`), true, true, nil); got.Kind != KindErrorBodyTooLarge {
++		t.Fatalf("overflow kind = %s, want %s (an overflowing body is not classified)", got.Kind, KindErrorBodyTooLarge)
++	}
++}
++
++func TestCM053CompatSafeResponseHeaders(t *testing.T) {
++	cases := []struct {
++		in   http.Header
++		want string
++	}{
++		{http.Header{"Content-Type": {"application/json; charset=utf-8; secret=abc"}}, "application/json"},
++		{http.Header{"Content-Type": {"TEXT/EVENT-STREAM"}}, "text/event-stream"},
++		{http.Header{"Content-Type": {"application/x-secret"}}, ""},
++		{http.Header{"Content-Type": {"application/json", "text/html"}}, ""},
++		{http.Header{"Content-Type": {"not a media type;;"}}, ""},
++		{nil, ""},
++	}
++	for _, tc := range cases {
++		got := ResponseHeaders(tc.in)
++		if got == nil {
++			t.Fatal("ResponseHeaders returned nil")
++		}
++		if len(got) > 1 || got.Get("Content-Type") != tc.want {
++			t.Fatalf("ResponseHeaders(%v) = %v, want Content-Type %q only", tc.in, got, tc.want)
++		}
++	}
++	all := ResponseHeaders(http.Header{"Content-Type": {"application/json"}, "Set-Cookie": {"a=b"}, "Location": {"https://x"}, "Retry-After": {"5"}, "X-Secret-Name": {"v"}})
++	if len(all) != 1 {
++		t.Fatalf("ResponseHeaders kept more than Content-Type: %v", all)
++	}
++}
++
++type cm053TimeoutErr struct{}
++
++func (cm053TimeoutErr) Error() string   { return "secret timeout text" }
++func (cm053TimeoutErr) Timeout() bool   { return true }
++func (cm053TimeoutErr) Temporary() bool { return true }
++
++func TestCM053CompatSafeTransport(t *testing.T) {
++	const secret = "secret-transport-text"
++	refused := errors.New("fixed refusal sentinel")
++	cases := []struct {
++		name string
++		in   error
++		want error
++		text string
++	}{
++		{"nil", nil, nil, ""},
++		{"canceled", fmt.Errorf("%s: %w", secret, context.Canceled), context.Canceled, "context canceled"},
++		{"deadline", fmt.Errorf("%s: %w", secret, context.DeadlineExceeded), context.DeadlineExceeded, "context deadline exceeded"},
++		{"eof", fmt.Errorf("%s: %w", secret, io.EOF), io.EOF, "EOF"},
++		{"unexpected-eof", fmt.Errorf("%s: %w", secret, io.ErrUnexpectedEOF), io.ErrUnexpectedEOF, "unexpected EOF"},
++		{"unexpected-eof-text", errors.New(secret + " unexpected EOF"), io.ErrUnexpectedEOF, "unexpected EOF"},
++		{"op-error", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New(secret)}, nil, "upstream transport failed: connection refused, reset or unreachable"},
++		{"errno", fmt.Errorf("%s: %w", secret, syscall.ECONNRESET), nil, "upstream transport failed: connection refused, reset or unreachable"},
++		{"timeout", fmt.Errorf("%s: %w", secret, cm053TimeoutErr{}), nil, "upstream transport failed: i/o timeout"},
++		{"dns", &net.DNSError{Err: secret, Name: secret}, nil, "upstream transport failed: connection refused, reset or unreachable"},
++		{"phrase", errors.New(secret + ": connection reset by peer"), nil, "upstream transport failed: connection refused, reset or unreachable"},
++		{"other", errors.New(secret), nil, "upstream transport failed"},
++		{"kept", fmt.Errorf("%s: %w", secret, refused), refused, "fixed refusal sentinel"},
++	}
++	keep := func(err error) bool { return errors.Is(err, refused) && !errors.Is(err, context.Canceled) }
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			got := Transport(tc.in, keep)
++			if tc.in == nil {
++				if got != nil {
++					t.Fatalf("Transport(nil) = %v", got)
++				}
++				return
++			}
++			if tc.name == "kept" {
++				if !errors.Is(got, refused) {
++					t.Fatalf("kept error lost: %v", got)
++				}
++				return
++			}
++			if tc.want != nil && got != tc.want {
++				t.Fatalf("Transport = %T %v, want the sentinel %v itself", got, got, tc.want)
++			}
++			if got.Error() != tc.text || strings.Contains(fmt.Sprintf("%+v %#v", got, got), secret) {
++				t.Fatalf("Transport = %q (%#v), want %q without the source text", got.Error(), got, tc.text)
++			}
++			if errors.Unwrap(got) != nil {
++				t.Fatalf("Transport result wraps %v", errors.Unwrap(got))
++			}
++		})
++	}
++}
++
++func TestCM053CompatSafeRequestRedaction(t *testing.T) {
++	keep := map[string]struct{}{"Content-Type": {}, "User-Agent": {}}
++	h := RequestHeaders(http.Header{"Authorization": {"Bearer ab"}, "Content-Type": {"application/json"}, "x-custom-key": {"ab", "cd"}}, keep)
++	if h.Get("Authorization") != Redacted || h.Get("Content-Type") != "application/json" || strings.Join(h.Values("X-Custom-Key"), ",") != Redacted+","+Redacted {
++		t.Fatalf("RequestHeaders = %v", h)
++	}
++	for in, want := range map[string]string{
++		"https://user:ab@host.example/v1?key=ab#frag": "https://host.example/v1?" + Redacted,
++		"https://host.example/v1":                     "https://host.example/v1",
++		"https://host.example/v1?":                    "https://host.example/v1?" + Redacted,
++		"://bad url ab":                               Redacted,
++	} {
++		if got := RequestURL(in); got != want {
++			t.Fatalf("RequestURL(%q) = %q, want %q", in, got, want)
++		}
++	}
++}
++
++func TestCM053CompatSafeClassify(t *testing.T) {
++	cases := []struct {
++		status int
++		body   string
++		want   Kind
++	}{
++		{429, `{"error":{"type":"invalid_request_error"}}`, KindRateLimited},
++		{402, `{"error":{"code":"context_length_exceeded"}}`, KindQuota},
++		{403, `<html>Just a moment... cloudflare</html>`, KindCloudflareChallenge},
++		{502, `<html>Just a moment... cloudflare</html>`, KindServerError},
++		{401, `{"error":{"type":"authentication_error"}}`, KindAuthentication},
++		{401, `{"type":"invalid_request_error"}`, KindInvalidRequest},
++		{400, `{"error":{"code":"model_not_found"}}`, KindModelNotFound},
++		{400, `{"error":{"code":"model-not-found"}}`, KindModelNotFound},
++		{404, `{"detail":"Unknown model"}`, KindModelNotFound},
++		{404, `{"detail":"Unknown model: foo"}`, KindUpstreamStatus}, // the conductor needs the requested model for this form
++		{404, `{"error":{"message":"The model does not exist."}}`, KindModelNotFound},
++		{404, `{"error":{"message":"model_not_found in request body"}}`, KindUpstreamStatus},
++		{404, `{"errors":[{"code":"models/model-not-found"}]}`, KindModelNotFound},
++		{422, `requested model is unavailable`, KindModelNotSupported},
++		{500, `requested model is unavailable`, KindServerError},
++		{400, `{"response":{"error":{"code":"context_length_exceeded"}}}`, KindContextLength},
++		{400, `{"body":{"error":{"type":"bad_request_error"}}}`, KindInvalidRequest},
++		{409, `x`, KindUpstreamStatus},
++		{403, `x`, KindPermission},
++		{503, `x`, KindServerError},
++	}
++	for _, tc := range cases {
++		if got := Classify(tc.status, []byte(tc.body)); got != tc.want {
++			t.Fatalf("Classify(%d, %s) = %s, want %s", tc.status, tc.body, got, tc.want)
++		}
++	}
++	for payload, want := range map[string]int{
++		`{"error":{"status":429}}`:                   429,
++		`{"status_code":"503","error":{}}`:           503,
++		`{"response":{"error":{"status":418}}}`:      418,
++		`{"error":{"status":200}}`:                   502,
++		`{"error":{"status":4.5e2}}`:                 450,
++		`{"error":{"status":450.5}}`:                 502,
++		`not json`:                                   502,
++		`{"status":601,"error":{"status_code":404}}`: 404,
++	} {
++		if got := PayloadStatus([]byte(payload)); got != want {
++			t.Fatalf("PayloadStatus(%s) = %d, want %d", payload, got, want)
++		}
++	}
++	// Inspect: 0 = validated success; otherwise the fixed kind.
++	for payload, want := range map[string]Kind{
++		`{"error":null}`: 0,
++		`{"choices":[]}`: 0,
++		`{"code":1}`:     0,
++		`{"created":1e1000,"choices":[{"delta":{"content":"x"}}]}`: 0,
++		`{"error":{}}`:               KindErrorPayload,
++		`{"response":{"error":"x"}}`: KindErrorPayload,
++		`{"type":"response.failed"}`: KindErrorPayload,
++		`{"code":1,"message":"x"}`:   KindErrorPayload,
++		// A huge number does not make an error envelope undecodable.
++		`{"model":"m","error":{"message":"x"},"extra":1e1000}`: KindErrorPayload,
++		`{"error":{"status":429,"message":"x"},"n":-1e999999}`: KindRateLimited,
++		`{"error":{"code":"model_not_found"},"n":1e400}`:       KindModelNotFound,
++		// Duplicate members are ambiguous at any depth: fail closed.
++		`{"model":"m","error":{"message":"x"},"error":null}`:    KindMalformedResponse,
++		`{"error":null,"error":{"message":"x"}}`:                KindMalformedResponse,
++		`{"e\u0072ror":{"message":"x"},"error":null}`:           KindMalformedResponse,
++		`{"response":{"error":{"message":"x"},"error":null}}`:   KindMalformedResponse,
++		`{"error":{"message":"x","message":"y"}}`:               KindMalformedResponse,
++		`{"choices":[{"delta":{"content":"a","content":"b"}}]}`: KindMalformedResponse,
++		// Anything but one JSON object is malformed.
++		`"invalid key x"`:              KindMalformedResponse,
++		`[{"error":{"message":"x"}}]`:  KindMalformedResponse,
++		`[1,2]`:                        KindMalformedResponse,
++		`42`:                           KindMalformedResponse,
++		`null`:                         KindMalformedResponse,
++		`true`:                         KindMalformedResponse,
++		`{"choices":[]} {"error":"x"}`: KindMalformedResponse,
++		`{"choices":[]`:                KindMalformedResponse,
++		``:                             KindMalformedResponse,
++		`{"a":` + strings.Repeat("[", 20000) + strings.Repeat("]", 20000) + `}`: KindMalformedResponse,
++	} {
++		failure, failed := Inspect([]byte(payload), false)
++		if want == 0 {
++			if failed {
++				t.Fatalf("Inspect(%.80s) failed with %s, want a validated success", payload, failure.Kind)
++			}
++			continue
++		}
++		if !failed || failure.Kind != want {
++			t.Fatalf("Inspect(%.80s) = %s/%t, want %s", payload, failure.Kind, failed, want)
++		}
++		if failure.Error() != want.Body() {
++			t.Fatalf("Inspect(%.80s) error text is not the fixed body", payload)
++		}
++		if got := PayloadFailure([]byte(payload)).Kind; got != want {
++			t.Fatalf("PayloadFailure(%.80s) = %s, want %s", payload, got, want)
++		}
++	}
++	if failure, failed := Inspect([]byte(`{"choices":[]}`), true); !failed || failure.Kind != KindErrorPayload {
++		t.Fatal("an error-named event is an error payload")
++	}
++	if failure, failed := Inspect([]byte(`"x"`), true); !failed || failure.Kind != KindMalformedResponse {
++		t.Fatal("an error-named event with non-object data is malformed")
++	}
++	if got := PayloadStatus([]byte(`{"error":{"status":429},"error":{"status":503}}`)); got != 502 {
++		t.Fatalf("PayloadStatus of a duplicate-member payload = %d, want 502", got)
++	}
++}
+diff --git a/internal/runtime/executor/helps/usage_helpers.go b/internal/runtime/executor/helps/usage_helpers.go
+index 77b66d2..724bd2a 100644
+--- a/internal/runtime/executor/helps/usage_helpers.go
++++ b/internal/runtime/executor/helps/usage_helpers.go
+@@ -15,6 +15,7 @@ import (
+ 
+ 	"github.com/gin-gonic/gin"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
+ 	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+ 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+@@ -105,6 +106,11 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
+ 				baseURL = strings.TrimSpace(v)
+ 			}
+ 		}
++		// claude-multi: an OpenAI-compatible base URL can carry a
++		// credential in its userinfo or query; usage sinks get it without them.
++		if auth.Attributes != nil && strings.TrimSpace(auth.Attributes["compat_name"]) != "" && strings.ContainsAny(baseURL, "@?#") {
++			baseURL = compatsafe.RequestURL(baseURL)
++		}
+ 	}
+ 	reporter := &UsageReporter{
+ 		provider:        provider,
+@@ -763,6 +769,14 @@ func APIKeyFromContext(ctx context.Context) string {
+ 
+ func resolveUsageSource(auth *cliproxyauth.Auth, ctxAPIKey string) string {
+ 	if auth != nil {
++		// claude-multi: an OpenAI-compatible provider is named by
++		// its configured name, never by its credential (AccountInfo would
++		// return the upstream api_key, which then reaches every usage sink).
++		if auth.Attributes != nil {
++			if compatName := strings.TrimSpace(auth.Attributes["compat_name"]); compatName != "" {
++				return "openai-compatibility:" + compatName
++			}
++		}
+ 		provider := strings.TrimSpace(auth.Provider)
+ 		if strings.EqualFold(provider, "vertex") {
+ 			if auth.Metadata != nil {
+diff --git a/internal/runtime/executor/openai_compat_executor.go b/internal/runtime/executor/openai_compat_executor.go
+index 3ef8d34..89ec8f4 100644
+--- a/internal/runtime/executor/openai_compat_executor.go
++++ b/internal/runtime/executor/openai_compat_executor.go
+@@ -16,6 +16,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/google/uuid"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+ 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+@@ -176,7 +177,11 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
+ 		authLabel = auth.Label
+ 		authType, authValue = auth.AccountInfo()
+ 	}
+-	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
++	// A keyed chat request (every chat request outside the
++	// genuine non-stream compact branch, whatever the source format) takes
++	// the safe failure boundary; see openai_compat_keyed_safety.go.
++	keyed := opts.Alt != "responses/compact" && openAICompatKeyedRoute(auth, httpReq)
++	requestLog := helps.UpstreamRequestLog{
+ 		URL:       url,
+ 		Method:    http.MethodPost,
+ 		Headers:   httpReq.Header.Clone(),
+@@ -186,22 +191,33 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
+ 		AuthLabel: authLabel,
+ 		AuthType:  authType,
+ 		AuthValue: authValue,
+-	})
++	}
++	if keyed {
++		requestLog = openAICompatKeyedRequestLog(requestLog)
++	}
++	helps.RecordAPIRequest(ctx, e.cfg, requestLog)
+ 
+ 	httpClient, redirectMode := e.newHTTPClient(ctx, auth, httpReq)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := redirectMode.Result(httpClient.Do(httpReq))
+ 	if err != nil {
++		if keyed {
++			err = openAICompatKeyedTransportError(err)
++		}
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, err
+ 	}
+-	defer func() {
+-		if errClose := httpResp.Body.Close(); errClose != nil {
+-			log.Errorf("openai compat executor: close response body error: %v", errClose)
+-		}
+-	}()
+-	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
++	defer closeOpenAICompatBody(httpResp.Body, keyed)
++	responseHeaders := httpResp.Header
++	if keyed {
++		responseHeaders = compatsafe.ResponseHeaders(httpResp.Header)
++	}
++	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, responseHeaders.Clone())
+ 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
++		if keyed {
++			err = openAICompatKeyedHTTPFailure(ctx, e.cfg, httpResp)
++			return resp, err
++		}
+ 		b, _ := io.ReadAll(httpResp.Body)
+ 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
+ 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+@@ -210,9 +226,19 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
+ 	}
+ 	body, err := io.ReadAll(httpResp.Body)
+ 	if err != nil {
++		if keyed {
++			err = openAICompatKeyedTransportError(err)
++		}
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return resp, err
+ 	}
++	if keyed {
++		if failure, failed := openAICompatKeyedBodyFailure(body); failed {
++			helps.RecordAPIResponseError(ctx, e.cfg, failure)
++			err = failure
++			return resp, err
++		}
++	}
+ 	helps.AppendAPIResponseChunk(ctx, e.cfg, body)
+ 	reporter.ObserveResponseModel(body)
+ 	reporter.Publish(ctx, helps.ParseOpenAIUsage(body))
+@@ -224,7 +250,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
+ 	if responseFormat == sdktranslator.FormatOpenAIResponse {
+ 		out = helps.EnsureResponsesUsageDetails(out)
+ 	}
+-	resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
++	resp = cliproxyexecutor.Response{Payload: out, Headers: responseHeaders.Clone()}
+ 	return resp, nil
+ }
+ 
+@@ -403,7 +429,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
+ 		authLabel = auth.Label
+ 		authType, authValue = auth.AccountInfo()
+ 	}
+-	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
++	// The stream always targets /chat/completions, so a keyed
++	// stream is on the safe failure boundary whatever its Alt or source
++	// format; see openai_compat_keyed_safety.go.
++	keyed := openAICompatKeyedRoute(auth, httpReq)
++	requestLog := helps.UpstreamRequestLog{
+ 		URL:       url,
+ 		Method:    http.MethodPost,
+ 		Headers:   httpReq.Header.Clone(),
+@@ -413,15 +443,38 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
+ 		AuthLabel: authLabel,
+ 		AuthType:  authType,
+ 		AuthValue: authValue,
+-	})
++	}
++	if keyed {
++		requestLog = openAICompatKeyedRequestLog(requestLog)
++	}
++	helps.RecordAPIRequest(ctx, e.cfg, requestLog)
+ 
+ 	httpClient, redirectMode := e.newHTTPClient(ctx, auth, httpReq)
+ 	httpClient = reporter.TrackHTTPClient(httpClient)
+ 	httpResp, err := redirectMode.Result(httpClient.Do(httpReq))
+ 	if err != nil {
++		if keyed {
++			err = openAICompatKeyedTransportError(err)
++		}
+ 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+ 		return nil, err
+ 	}
++	if keyed {
++		responseHeaders := compatsafe.ResponseHeaders(httpResp.Header)
++		helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, responseHeaders.Clone())
++		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
++			err = openAICompatKeyedHTTPFailure(ctx, e.cfg, httpResp)
++			closeOpenAICompatBody(httpResp.Body, true)
++			return nil, err
++		}
++		claudeInputTokens := helps.NewClaudeInputTokenState(from, to, responseFormat, originalPayload)
++		var param any
++		translate := func(line []byte) [][]byte {
++			return helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, line, &param, claudeInputTokens)
++		}
++		chunks := e.openAICompatKeyedStream(ctx, httpResp.Body, reporter, responseFormat, translate)
++		return &cliproxyexecutor.StreamResult{Headers: responseHeaders.Clone(), Chunks: chunks}, nil
++	}
+ 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+ 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+ 		b, _ := io.ReadAll(httpResp.Body)
+diff --git a/internal/runtime/executor/openai_compat_executor_compact_test.go b/internal/runtime/executor/openai_compat_executor_compact_test.go
+index 287f7af..04eddae 100644
+--- a/internal/runtime/executor/openai_compat_executor_compact_test.go
++++ b/internal/runtime/executor/openai_compat_executor_compact_test.go
+@@ -826,45 +826,79 @@ func TestRewriteOpenAICompatImagesMultipartPayloadPreservesStreamAndFileContentT
+ 	}
+ }
+ 
+-func TestOpenAICompatExecutorStreamRejectsPlainJSONAfterBlankLines(t *testing.T) {
+-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		w.Header().Set("Content-Type", "text/event-stream")
+-		_, _ = w.Write([]byte("\n\n: openrouter processing\n\nevent: error\n"))
+-		_, _ = w.Write([]byte(`{"error":{"message":"upstream failed","type":"server_error"}}` + "\n"))
+-	}))
+-	defer server.Close()
++// cm053CompatStreamAuth is the auth of the upstream compat stream tests:
++// keyed (the safe failure boundary: fixed local failure text,
++// provider wording never returned) or keyless (upstream behaviour: the
++// provider's wording is preserved).
++func cm053CompatStreamAuth(baseURL string, keyed bool) *cliproxyauth.Auth {
++	attrs := map[string]string{"base_url": baseURL}
++	if keyed {
++		attrs["api_key"] = "test"
++	}
++	return &cliproxyauth.Auth{Attributes: attrs}
++}
+ 
+-	executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
+-	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+-		"base_url": server.URL + "/v1",
+-		"api_key":  "test",
+-	}}
+-	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+-		Model:   "openrouter-model",
+-		Payload: []byte(`{"model":"openrouter-model","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+-	}, cliproxyexecutor.Options{
+-		SourceFormat: sdktranslator.FromString("openai"),
+-		Stream:       true,
+-	})
+-	if err != nil {
+-		t.Fatalf("ExecuteStream error: %v", err)
++// cm053CheckCompatStreamError asserts the keyed/keyless expectation of an
++// upstream compat stream error: keyless keeps the provider's wording
++// (wantRaw); keyed returns only the fixed local text (wantKeyed) and never
++// the provider's wording.
++func cm053CheckCompatStreamError(t *testing.T, keyed bool, streamErr error, wantRaw, wantKeyed string) {
++	t.Helper()
++	if streamErr == nil {
++		t.Fatal("expected a terminal stream error")
+ 	}
+-
+-	var gotErr error
+-	for chunk := range result.Chunks {
+-		if chunk.Err != nil {
+-			gotErr = chunk.Err
+-			break
++	if !keyed {
++		if !strings.Contains(streamErr.Error(), wantRaw) {
++			t.Fatalf("keyless stream error = %v, want upstream wording %q", streamErr, wantRaw)
+ 		}
++		return
+ 	}
+-	if gotErr == nil {
+-		t.Fatalf("expected plain JSON stream error")
++	if !strings.Contains(streamErr.Error(), wantKeyed) {
++		t.Fatalf("keyed stream error = %v, want fixed text %q", streamErr, wantKeyed)
+ 	}
+-	if status, ok := gotErr.(interface{ StatusCode() int }); !ok || status.StatusCode() != http.StatusBadGateway {
+-		t.Fatalf("stream error status = %v, want %d", gotErr, http.StatusBadGateway)
++	if wantRaw != wantKeyed && strings.Contains(streamErr.Error(), wantRaw) {
++		t.Fatalf("keyed stream error = %v, carries the provider wording %q", streamErr, wantRaw)
+ 	}
+-	if !strings.Contains(gotErr.Error(), "upstream failed") {
+-		t.Fatalf("stream error = %v", gotErr)
++}
++
++func TestOpenAICompatExecutorStreamRejectsPlainJSONAfterBlankLines(t *testing.T) {
++	for _, keyed := range []bool{true, false} {
++		t.Run(fmt.Sprintf("keyed=%t", keyed), func(t *testing.T) {
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				w.Header().Set("Content-Type", "text/event-stream")
++				_, _ = w.Write([]byte("\n\n: openrouter processing\n\nevent: error\n"))
++				_, _ = w.Write([]byte(`{"error":{"message":"upstream failed","type":"server_error"}}` + "\n"))
++			}))
++			defer server.Close()
++
++			executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
++			auth := cm053CompatStreamAuth(server.URL+"/v1", keyed)
++			result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
++				Model:   "openrouter-model",
++				Payload: []byte(`{"model":"openrouter-model","messages":[{"role":"user","content":"hi"}],"stream":true}`),
++			}, cliproxyexecutor.Options{
++				SourceFormat: sdktranslator.FromString("openai"),
++				Stream:       true,
++			})
++			if err != nil {
++				t.Fatalf("ExecuteStream error: %v", err)
++			}
++
++			var gotErr error
++			for chunk := range result.Chunks {
++				if chunk.Err != nil {
++					gotErr = chunk.Err
++					break
++				}
++			}
++			if gotErr == nil {
++				t.Fatalf("expected plain JSON stream error")
++			}
++			if status, ok := gotErr.(interface{ StatusCode() int }); !ok || status.StatusCode() != http.StatusBadGateway {
++				t.Fatalf("stream error status = %v, want %d", gotErr, http.StatusBadGateway)
++			}
++			cm053CheckCompatStreamError(t, keyed, gotErr, "upstream failed", "upstream returned an error payload")
++		})
+ 	}
+ }
+ 
+@@ -957,8 +991,16 @@ func TestOpenAICompatExecutorResponsesStreamFailsOnEOFWithoutDone(t *testing.T)
+ }
+ 
+ func TestOpenAICompatExecutorResponsesStreamPreservesUpstreamDataError(t *testing.T) {
+-	for _, withDone := range []bool{false, true} {
+-		t.Run(fmt.Sprintf("with_done=%t", withDone), func(t *testing.T) {
++	for _, keyed := range []bool{true, false} {
++		for _, withDone := range []bool{false, true} {
++			cm053ResponsesStreamPreservesUpstreamDataError(t, keyed, withDone)
++		}
++	}
++}
++
++func cm053ResponsesStreamPreservesUpstreamDataError(t *testing.T, keyed, withDone bool) {
++	{ // the block keeps the upstream body's indentation (minimal diff)
++		t.Run(fmt.Sprintf("keyed=%t/with_done=%t", keyed, withDone), func(t *testing.T) {
+ 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 				w.Header().Set("Content-Type", "text/event-stream")
+ 				_, _ = w.Write([]byte(`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1773896263,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"))
+@@ -970,10 +1012,7 @@ func TestOpenAICompatExecutorResponsesStreamPreservesUpstreamDataError(t *testin
+ 			defer server.Close()
+ 
+ 			executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
+-			auth := &cliproxyauth.Auth{Attributes: map[string]string{
+-				"base_url": server.URL + "/v1",
+-				"api_key":  "test",
+-			}}
++			auth := cm053CompatStreamAuth(server.URL+"/v1", keyed)
+ 			request := []byte(`{"model":"deepseek-v4-flash","input":"hi","stream":true}`)
+ 			result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+ 				Model:   "deepseek-v4-flash",
+@@ -999,14 +1038,20 @@ func TestOpenAICompatExecutorResponsesStreamPreservesUpstreamDataError(t *testin
+ 			if strings.Contains(streamed.String(), "response.completed") {
+ 				t.Fatalf("upstream data error was finalized as response.completed: %q", streamed.String())
+ 			}
+-			if streamErr == nil || !strings.Contains(streamErr.Error(), "upstream failed") {
+-				t.Fatalf("terminal stream error = %v, want original upstream failure", streamErr)
+-			}
++			cm053CheckCompatStreamError(t, keyed, streamErr, "upstream failed", "upstream returned an error payload")
+ 		})
+ 	}
+ }
+ 
+ func TestOpenAICompatExecutorResponsesStreamPreservesNamedErrorEvent(t *testing.T) {
++	for _, keyed := range []bool{true, false} {
++		t.Run(fmt.Sprintf("keyed=%t", keyed), func(t *testing.T) {
++			cm053ResponsesStreamPreservesNamedErrorEvent(t, keyed)
++		})
++	}
++}
++
++func cm053ResponsesStreamPreservesNamedErrorEvent(t *testing.T, keyed bool) {
+ 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		w.Header().Set("Content-Type", "text/event-stream")
+ 		_, _ = w.Write([]byte(`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1773896263,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"))
+@@ -1018,10 +1063,7 @@ func TestOpenAICompatExecutorResponsesStreamPreservesNamedErrorEvent(t *testing.
+ 	defer server.Close()
+ 
+ 	executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
+-	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+-		"base_url": server.URL + "/v1",
+-		"api_key":  "test",
+-	}}
++	auth := cm053CompatStreamAuth(server.URL+"/v1", keyed)
+ 	request := []byte(`{"model":"deepseek-v4-flash","input":"hi","stream":true}`)
+ 	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+ 		Model:   "deepseek-v4-flash",
+@@ -1047,16 +1089,18 @@ func TestOpenAICompatExecutorResponsesStreamPreservesNamedErrorEvent(t *testing.
+ 	if strings.Contains(streamed.String(), "response.completed") {
+ 		t.Fatalf("named upstream error event was finalized as response.completed: %q", streamed.String())
+ 	}
+-	if streamErr == nil || !strings.Contains(streamErr.Error(), "upstream failed") {
+-		t.Fatalf("terminal stream error = %v, want named upstream failure", streamErr)
+-	}
++	cm053CheckCompatStreamError(t, keyed, streamErr, "upstream failed", "upstream returned an error payload")
+ }
+ 
+ func TestOpenAICompatExecutorResponsesStreamHandlesAdditionalErrorShapes(t *testing.T) {
++	// wantErr is the keyless (upstream) wording; wantKeyed the fixed local
++	// text of the keyed route (equal to wantErr where upstream's own text is
++	// already a fixed local message).
+ 	tests := []struct {
+-		name    string
+-		lines   []string
+-		wantErr string
++		name      string
++		lines     []string
++		wantErr   string
++		wantKeyed string
+ 	}{
+ 		{
+ 			name: "response failed payload",
+@@ -1064,7 +1108,8 @@ func TestOpenAICompatExecutorResponsesStreamHandlesAdditionalErrorShapes(t *test
+ 				`data: {"type":"response.failed","response":{"error":{"type":"server_error","code":"upstream_failed","message":"response failed upstream"}}}` + "\n\n",
+ 				"data: [DONE]\n\n",
+ 			},
+-			wantErr: "response failed upstream",
++			wantErr:   "response failed upstream",
++			wantKeyed: "upstream returned an error payload",
+ 		},
+ 		{
+ 			name: "data before named error",
+@@ -1073,7 +1118,8 @@ func TestOpenAICompatExecutorResponsesStreamHandlesAdditionalErrorShapes(t *test
+ 				"event: error\n\n",
+ 				"data: [DONE]\n\n",
+ 			},
+-			wantErr: "data before event failure",
++			wantErr:   "data before event failure",
++			wantKeyed: "upstream returned an error payload",
+ 		},
+ 		{
+ 			name: "done after incomplete error data",
+@@ -1082,7 +1128,8 @@ func TestOpenAICompatExecutorResponsesStreamHandlesAdditionalErrorShapes(t *test
+ 				`data: {"message":"incomplete upstream failure"` + "\n",
+ 				"data: [DONE]\n\n",
+ 			},
+-			wantErr: "incomplete data before [DONE]",
++			wantErr:   "incomplete data before [DONE]",
++			wantKeyed: "incomplete data before [DONE]",
+ 		},
+ 		{
+ 			name: "done immediately after error event",
+@@ -1090,7 +1137,8 @@ func TestOpenAICompatExecutorResponsesStreamHandlesAdditionalErrorShapes(t *test
+ 				"event: error\n",
+ 				"data: [DONE]\n\n",
+ 			},
+-			wantErr: "error event ended before [DONE]",
++			wantErr:   "error event ended before [DONE]",
++			wantKeyed: "error event ended before [DONE]",
+ 		},
+ 		{
+ 			name: "incomplete data cannot cross frame boundary",
+@@ -1099,46 +1147,47 @@ func TestOpenAICompatExecutorResponsesStreamHandlesAdditionalErrorShapes(t *test
+ 				`data: "id":"chatcmpl_2","object":"chat.completion.chunk","choices":[]}` + "\n\n",
+ 				"data: [DONE]\n\n",
+ 			},
+-			wantErr: "incomplete SSE data frame",
++			wantErr:   "incomplete SSE data frame",
++			wantKeyed: "incomplete SSE data frame",
+ 		},
+ 	}
+ 
+-	for _, tc := range tests {
+-		t.Run(tc.name, func(t *testing.T) {
+-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-				w.Header().Set("Content-Type", "text/event-stream")
+-				_, _ = w.Write([]byte(`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1773896263,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"))
+-				for _, line := range tc.lines {
+-					_, _ = w.Write([]byte(line))
+-				}
+-			}))
+-			defer server.Close()
++	for _, keyed := range []bool{true, false} {
++		for _, tc := range tests {
++			t.Run(fmt.Sprintf("keyed=%t/%s", keyed, tc.name), func(t *testing.T) {
++				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++					w.Header().Set("Content-Type", "text/event-stream")
++					_, _ = w.Write([]byte(`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1773896263,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"))
++					for _, line := range tc.lines {
++						_, _ = w.Write([]byte(line))
++					}
++				}))
++				defer server.Close()
+ 
+-			executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
+-			auth := &cliproxyauth.Auth{Attributes: map[string]string{"base_url": server.URL + "/v1", "api_key": "test"}}
+-			request := []byte(`{"model":"deepseek-v4-flash","input":"hi","stream":true}`)
+-			result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{Model: "deepseek-v4-flash", Payload: request}, cliproxyexecutor.Options{
+-				SourceFormat: sdktranslator.FormatOpenAIResponse, ResponseFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: request, Stream: true,
+-			})
+-			if err != nil {
+-				t.Fatalf("ExecuteStream error: %v", err)
+-			}
++				executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
++				auth := cm053CompatStreamAuth(server.URL+"/v1", keyed)
++				request := []byte(`{"model":"deepseek-v4-flash","input":"hi","stream":true}`)
++				result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{Model: "deepseek-v4-flash", Payload: request}, cliproxyexecutor.Options{
++					SourceFormat: sdktranslator.FormatOpenAIResponse, ResponseFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: request, Stream: true,
++				})
++				if err != nil {
++					t.Fatalf("ExecuteStream error: %v", err)
++				}
+ 
+-			var streamed strings.Builder
+-			var streamErr error
+-			for chunk := range result.Chunks {
+-				streamed.Write(chunk.Payload)
+-				if chunk.Err != nil {
+-					streamErr = chunk.Err
++				var streamed strings.Builder
++				var streamErr error
++				for chunk := range result.Chunks {
++					streamed.Write(chunk.Payload)
++					if chunk.Err != nil {
++						streamErr = chunk.Err
++					}
+ 				}
+-			}
+-			if strings.Contains(streamed.String(), "response.completed") {
+-				t.Fatalf("upstream error was finalized as response.completed: %q", streamed.String())
+-			}
+-			if streamErr == nil || !strings.Contains(streamErr.Error(), tc.wantErr) {
+-				t.Fatalf("terminal stream error = %v, want %q", streamErr, tc.wantErr)
+-			}
+-		})
++				if strings.Contains(streamed.String(), "response.completed") {
++					t.Fatalf("upstream error was finalized as response.completed: %q", streamed.String())
++				}
++				cm053CheckCompatStreamError(t, keyed, streamErr, tc.wantErr, tc.wantKeyed)
++			})
++		}
+ 	}
+ }
+ 
+diff --git a/internal/runtime/executor/openai_compat_keyed_safety.go b/internal/runtime/executor/openai_compat_keyed_safety.go
+new file mode 100644
+index 0000000..1803768
+--- /dev/null
++++ b/internal/runtime/executor/openai_compat_keyed_safety.go
+@@ -0,0 +1,291 @@
++package executor
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"strings"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/upstreamredirect"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++	log "github.com/sirupsen/logrus"
++)
++
++// Keyed OpenAI-compatible chat safety.
++//
++// The keyed chat route is a chat-completions request (non-stream Execute
++// outside the genuine responses/compact branch, and every ExecuteStream,
++// which always targets /chat/completions) whose prepared request carries a
++// credential: exactly the requests the credentialed-redirect policy puts in
++// RefuseAll mode (an api_key, a configured custom header, URL userinfo or a
++// query, or any header outside the credentialless set). The inbound source
++// format does not matter. On that route every failure is rebuilt by
++// package compatsafe from local data only, and nothing an upstream sends
++// reaches diagnostics, response capture, usage records or the returned error
++// before it is classified:
++//
++//   - response metadata is normalized (compatsafe.ResponseHeaders) before it
++//     is recorded, and the same normalized headers are returned with a
++//     success or an initial stream;
++//   - a failure body is read through a 64 KiB + 1 byte overflow detector and
++//     becomes a fixed compatsafe.Error; the existing Retry-After / TPM
++//     parsing runs on the raw input first and only its typed duration is
++//     kept;
++//   - a 2xx body is validated and classified (compatsafe.Inspect: exactly
++//     one duplicate-free JSON object that is not an error envelope, or a
++//     fixed failure) before capture, model/usage observation and
++//     translation;
++//   - an SSE frame is validated and classified the same way when it is
++//     complete, before capture and observation; comment, id, retry and event
++//     fields are never captured; an error event still pending at EOF is a
++//     fixed failure, never a synthesized completion;
++//     one frame holds at most compatsafe.MaxStreamFrameBytes in
++//     compatsafe.MaxStreamFrameLines lines of any field;
++//   - transport, read, scanner and close errors keep only their trusted
++//     identity (context cancellation/deadline, EOF, the redirect refusal);
++//   - request diagnostics redact the credential by name, never by
++//     prefix/suffix masking.
++//
++// Keyless chat, images, the genuine non-stream compact request and the
++// generic HttpRequest API keep upstream behaviour: they are outside the
++// route-scoped promise.
++
++// openAICompatKeyedStreamLimits are the keyed stream bounds (a variable
++// only so the gates can lower them).
++var openAICompatKeyedStreamLimits = struct{ line, frameBytes, frameLines int }{
++	line:       compatsafe.MaxStreamLine,
++	frameBytes: compatsafe.MaxStreamFrameBytes,
++	frameLines: compatsafe.MaxStreamFrameLines,
++}
++
++// openAICompatKeyedRoute reports whether the prepared chat request req is on
++// the keyed route.
++func openAICompatKeyedRoute(auth *cliproxyauth.Auth, req *http.Request) bool {
++	return openAICompatRequestRedirectMode(auth, req) == upstreamredirect.RefuseAll
++}
++
++// openAICompatKeyedRequestLog redacts the credential of a keyed request for
++// the request log: no auth value and no auth ID (a compat auth ID is a short
++// hash over the key), a URL without userinfo or query, and every header
++// outside the credentialless set replaced by a fixed marker. Names (the
++// provider label, header names) stay.
++func openAICompatKeyedRequestLog(info helps.UpstreamRequestLog) helps.UpstreamRequestLog {
++	info.URL = compatsafe.RequestURL(info.URL)
++	info.Headers = compatsafe.RequestHeaders(info.Headers, openAICompatCredentiallessHeaders)
++	info.AuthID = ""
++	info.AuthValue = ""
++	return info
++}
++
++// openAICompatKeyedTransportError keeps only the trusted identity of a
++// transport, read or scanner error of the keyed route.
++func openAICompatKeyedTransportError(err error) error {
++	return compatsafe.Transport(err, upstreamredirect.IsRefused)
++}
++
++// closeOpenAICompatBody closes an upstream body; on the keyed route a close
++// error is logged in its safe form only.
++func closeOpenAICompatBody(body io.Closer, keyed bool) {
++	errClose := body.Close()
++	if errClose == nil {
++		return
++	}
++	if keyed {
++		errClose = openAICompatKeyedTransportError(errClose)
++	}
++	log.Errorf("openai compat executor: close response body error: %v", errClose)
++}
++
++// openAICompatKeyedHTTPFailure turns a non-2xx keyed response into its safe
++// failure. The typed retry metadata is parsed from the raw headers and body
++// before they are dropped; only the fixed representation is captured.
++func openAICompatKeyedHTTPFailure(ctx context.Context, cfg *config.Config, resp *http.Response) error {
++	body, overflow, readable := compatsafe.ReadErrorBody(resp.Body)
++	retryBody := body
++	if overflow || !readable {
++		retryBody = nil
++	}
++	retry := openAICompatRetryAfter(resp.StatusCode, resp.Header, retryBody, time.Now())
++	failure := compatsafe.HTTPFailure(resp.StatusCode, body, overflow, readable, retry)
++	helps.AppendAPIResponseChunk(ctx, cfg, []byte(failure.Error()))
++	helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, failure kind: %s", failure.StatusCode(), failure.Kind)
++	return failure
++}
++
++// openAICompatKeyedBodyFailure validates and classifies a keyed 2xx body
++// before it is captured, observed or translated: only a strictly decoded,
++// non-error JSON object passes (see compatsafe.Inspect).
++func openAICompatKeyedBodyFailure(body []byte) (compatsafe.Error, bool) {
++	return compatsafe.Inspect(body, false)
++}
++
++// openAICompatKeyedStream runs the keyed chat stream: it classifies every
++// complete SSE frame before any capture or observation and returns only
++// safe failures. translate converts one "data: <payload>" line.
++func (e *OpenAICompatExecutor) openAICompatKeyedStream(ctx context.Context, body io.ReadCloser, reporter *helps.UsageReporter, responseFormat sdktranslator.Format, translate func(line []byte) [][]byte) <-chan cliproxyexecutor.StreamChunk {
++	out := make(chan cliproxyexecutor.StreamChunk)
++	limits := openAICompatKeyedStreamLimits
++	go func() {
++		defer close(out)
++		defer closeOpenAICompatBody(body, true)
++		scanner := bufio.NewScanner(body)
++		scanner.Buffer(nil, limits.line)
++		var streamUsage helps.StreamUsageBuffer
++		var seenDone, streamFailed, streamAborted bool
++		var upstreamEvent string
++		var frameData [][]byte
++		var frameBytes, frameLines int
++		defer streamUsage.Publish(ctx, reporter)
++
++		fail := func(streamErr error) {
++			helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
++			reporter.PublishFailure(ctx, streamErr)
++			select {
++			case out <- cliproxyexecutor.StreamChunk{Err: streamErr}:
++			case <-ctx.Done():
++			}
++			streamFailed = true
++		}
++		failKind := func(kind compatsafe.Kind) {
++			fail(compatsafe.NewError(kind, http.StatusBadGateway, nil))
++		}
++
++		processFrame := func() bool {
++			errorEvent := openAICompatErrorEvent(upstreamEvent)
++			upstreamEvent = ""
++			dataLines := frameData
++			frameData = nil
++			frameBytes, frameLines = 0, 0
++			if len(dataLines) == 0 {
++				if errorEvent {
++					failKind(compatsafe.KindStreamErrorEventNoData)
++					return true
++				}
++				return false
++			}
++			if len(dataLines) > 1 {
++				for _, dataLine := range dataLines {
++					if bytes.Equal(dataLine, []byte("[DONE]")) {
++						failKind(compatsafe.KindStreamIncompleteBeforeDone)
++						return true
++					}
++				}
++			}
++			dataPayload := bytes.TrimSpace(bytes.Join(dataLines, []byte("\n")))
++			isDone := bytes.Equal(dataPayload, []byte("[DONE]"))
++			switch {
++			case isDone && errorEvent:
++				failKind(compatsafe.KindStreamErrorEventBeforeDone)
++				return true
++			case !isDone && !json.Valid(dataPayload):
++				failKind(compatsafe.KindStreamIncompleteFrame)
++				return true
++			case !isDone:
++				if failure, failed := compatsafe.Inspect(dataPayload, errorEvent); failed {
++					fail(failure)
++					return true
++				}
++			}
++
++			// The frame is classified: only now is it captured and observed.
++			streamLine := append([]byte("data: "), dataPayload...)
++			helps.AppendAPIResponseChunk(ctx, e.cfg, streamLine)
++			if !isDone {
++				reporter.ObserveResponseModel(streamLine)
++				streamUsage.ObserveOpenAIStream(streamLine)
++			}
++			for _, chunk := range translate(streamLine) {
++				select {
++				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
++				case <-ctx.Done():
++					streamAborted = true
++					return true
++				}
++			}
++			if isDone {
++				seenDone = true
++				return true
++			}
++			return false
++		}
++
++	scanLoop:
++		for scanner.Scan() {
++			trimmedLine := bytes.TrimSpace(scanner.Bytes())
++			if len(trimmedLine) > 0 {
++				// Every line of a frame counts toward its bounds, whatever the
++				// field (data, event, id, retry, comments, unknown lines), and
++				// the bound is enforced before anything of the line is retained.
++				frameLines++
++				frameBytes += len(trimmedLine)
++				if frameLines > limits.frameLines || frameBytes > limits.frameBytes {
++					failKind(compatsafe.KindStreamFrameTooLarge)
++					break scanLoop
++				}
++			}
++			switch {
++			case len(trimmedLine) == 0:
++				if processFrame() {
++					break scanLoop
++				}
++			case bytes.HasPrefix(trimmedLine, []byte("data:")):
++				data := bytes.TrimSpace(trimmedLine[len("data:"):])
++				frameData = append(frameData, bytes.Clone(data))
++			case bytes.HasPrefix(trimmedLine, []byte("event:")):
++				upstreamEvent = strings.TrimSpace(string(trimmedLine[len("event:"):]))
++			case bytes.HasPrefix(trimmedLine, []byte("{")) || bytes.HasPrefix(trimmedLine, []byte("[")):
++				failKind(compatsafe.PayloadFailure(trimmedLine).Kind)
++				break scanLoop
++			default:
++				// Comments, id:, retry: and unknown lines are neither
++				// captured nor observed.
++			}
++		}
++		errScan := scanner.Err()
++		// A frame still pending at EOF is classified: its data lines, or an
++		// error event without data (which must not become a synthesized
++		// completion).
++		if errScan == nil && !seenDone && !streamFailed && !streamAborted && (len(frameData) > 0 || upstreamEvent != "") {
++			_ = processFrame()
++		}
++		if streamFailed || streamAborted {
++			return
++		}
++		if errScan != nil {
++			if errors.Is(errScan, bufio.ErrTooLong) {
++				failKind(compatsafe.KindStreamFrameTooLarge)
++			} else {
++				fail(openAICompatKeyedTransportError(errScan))
++			}
++			return
++		}
++		if !seenDone {
++			// Responses clients require an explicit terminal event; other
++			// protocols keep the compatibility [DONE] for providers that omit it.
++			if responseFormat == sdktranslator.FormatOpenAIResponse {
++				failKind(compatsafe.KindStreamClosedBeforeDone)
++				return
++			}
++			for _, chunk := range translate([]byte("data: [DONE]")) {
++				select {
++				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
++				case <-ctx.Done():
++					return
++				}
++			}
++		}
++		streamUsage.Publish(ctx, reporter)
++		reporter.EnsurePublished(ctx)
++	}()
++	return out
++}
+diff --git a/internal/runtime/executor/openai_compat_keyed_safety_cm053_test.go b/internal/runtime/executor/openai_compat_keyed_safety_cm053_test.go
+new file mode 100644
+index 0000000..a87da20
+--- /dev/null
++++ b/internal/runtime/executor/openai_compat_keyed_safety_cm053_test.go
+@@ -0,0 +1,1257 @@
++package executor
++
++// Keyed OpenAI-compatible chat safety gates.
++//
++// Every upstream is an injected RoundTripper ("cliproxy.roundtripper"); no
++// socket is opened. Each scenario runs with every sink the gateway has:
++// the returned error and stream chunks, the returned headers, the
++// request-log capture (gin context keys, request logging on, commercial mode
++// off, the disposable debug configuration) or the production configuration
++// (commercial mode on, request logging off), the response-header metadata
++// holder, logrus output at debug level, and the usage records. A synthetic
++// credential (short and long) and a provider canary are echoed by the
++// upstream in every shape the gate names; neither may reach any sink.
++
++import (
++	"bytes"
++	"context"
++	"encoding/base64"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++	log "github.com/sirupsen/logrus"
++)
++
++const (
++	cm053KeyedCanary  = "cm053-provider-canary"
++	cm053KeyedBaseURL = "https://compat.cm053.invalid/v1"
++)
++
++// cm053KeyedKeys are synthetic credentials: two short keys (HideAPIKey keeps
++// a 2-character key unchanged and shows the ends of a 3-character one) and a
++// long one.
++var cm053KeyedKeys = []string{"Zq", "Zq9", "sk-cm053-LongSyntheticSecret-0123456789abcdef"}
++
++// cm053Needles are the strings that must never reach a sink for key: the key
++// itself, its JSON-escaped, base64 and URL-encoded echoes, and the canary.
++func cm053Needles(key string) []string {
++	var escaped strings.Builder
++	for _, r := range key {
++		fmt.Fprintf(&escaped, `\u%04x`, r)
++	}
++	return []string{key, escaped.String(), base64.StdEncoding.EncodeToString([]byte(key)), url.QueryEscape(key), cm053KeyedCanary}
++}
++
++type cm053KeyedUpstream func(*http.Request) (*http.Response, error)
++
++func (f cm053KeyedUpstream) RoundTrip(req *http.Request) (*http.Response, error) {
++	if req.Body != nil {
++		_, _ = io.Copy(io.Discard, req.Body)
++		_ = req.Body.Close()
++	}
++	return f(req)
++}
++
++func cm053KeyedResponse(req *http.Request, status int, header http.Header, body io.ReadCloser) *http.Response {
++	if header == nil {
++		header = http.Header{}
++	}
++	return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: header, Body: body, Request: req, ProtoMajor: 1, ProtoMinor: 1}
++}
++
++func cm053KeyedStatic(status int, header http.Header, body string) cm053KeyedUpstream {
++	return func(req *http.Request) (*http.Response, error) {
++		return cm053KeyedResponse(req, status, header.Clone(), io.NopCloser(strings.NewReader(body))), nil
++	}
++}
++
++// cm053FaultBody yields its data, then fails the next read with readErr
++// (nil: io.EOF), and fails Close with closeErr.
++type cm053FaultBody struct {
++	data     *strings.Reader
++	readErr  error
++	closeErr error
++}
++
++func (b *cm053FaultBody) Read(p []byte) (int, error) {
++	if b.data.Len() > 0 {
++		return b.data.Read(p)
++	}
++	if b.readErr != nil {
++		return 0, b.readErr
++	}
++	return 0, io.EOF
++}
++
++func (b *cm053FaultBody) Close() error { return b.closeErr }
++
++type cm053UsageSink struct {
++	alias   string
++	mu      sync.Mutex
++	records []coreusage.Record
++}
++
++func (s *cm053UsageSink) HandleUsage(_ context.Context, record coreusage.Record) {
++	if record.Alias != s.alias {
++		return
++	}
++	s.mu.Lock()
++	s.records = append(s.records, record)
++	s.mu.Unlock()
++}
++
++type cm053NoopUsage struct{}
++
++func (cm053NoopUsage) HandleUsage(context.Context, coreusage.Record) {}
++
++// cm053Sinks is every place an upstream failure could surface.
++type cm053Sinks struct {
++	ctx   context.Context
++	cfg   *config.Config
++	gin   *gin.Context
++	logs  *cm053LogBuffer
++	usage *cm053UsageSink
++}
++
++type cm053LogBuffer struct {
++	mu  sync.Mutex
++	buf bytes.Buffer
++}
++
++func (b *cm053LogBuffer) Write(p []byte) (int, error) {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.buf.Write(p)
++}
++
++func (b *cm053LogBuffer) String() string {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.buf.String()
++}
++
++var cm053SinkSeq struct {
++	mu sync.Mutex
++	n  int
++}
++
++// cm053NewSinks wires the sinks for one scenario. production selects commercial
++// mode with request logging off; otherwise request logging is on and commercial
++// mode off (the disposable debug configuration). logrus runs at debug level
++// either way.
++func cm053NewSinks(t *testing.T, upstream http.RoundTripper, production bool) *cm053Sinks {
++	t.Helper()
++	gin.SetMode(gin.TestMode)
++	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
++	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
++	cm053SinkSeq.mu.Lock()
++	cm053SinkSeq.n++
++	alias := fmt.Sprintf("cm053-keyed-alias-%d", cm053SinkSeq.n)
++	cm053SinkSeq.mu.Unlock()
++	usage := &cm053UsageSink{alias: alias}
++	coreusage.RegisterNamedPlugin("cm053-keyed-usage", usage)
++	t.Cleanup(func() { coreusage.RegisterNamedPlugin("cm053-keyed-usage", cm053NoopUsage{}) })
++
++	ctx := context.WithValue(context.Background(), "gin", ginCtx)
++	ctx = logging.WithResponseHeadersHolder(ctx)
++	ctx = coreusage.WithRequestedModelAlias(ctx, alias)
++	ctx = context.WithValue(ctx, "cliproxy.roundtripper", upstream)
++
++	cfg := &config.Config{}
++	if production {
++		cfg.CommercialMode = true
++	} else {
++		cfg.RequestLog = true
++	}
++
++	logs := &cm053LogBuffer{}
++	previousOut, previousLevel := log.StandardLogger().Out, log.GetLevel()
++	log.SetOutput(logs)
++	log.SetLevel(log.DebugLevel)
++	t.Cleanup(func() {
++		log.SetOutput(previousOut)
++		log.SetLevel(previousLevel)
++	})
++	return &cm053Sinks{ctx: ctx, cfg: cfg, gin: ginCtx, logs: logs, usage: usage}
++}
++
++// awaitUsage waits for the scenario's usage record.
++func (s *cm053Sinks) awaitUsage(t *testing.T) []coreusage.Record {
++	t.Helper()
++	deadline := time.Now().Add(5 * time.Second)
++	for {
++		s.usage.mu.Lock()
++		records := append([]coreusage.Record(nil), s.usage.records...)
++		s.usage.mu.Unlock()
++		if len(records) > 0 {
++			return records
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("timed out waiting for the usage record")
++		}
++		time.Sleep(time.Millisecond)
++	}
++}
++
++// text renders every sink (plus the client-visible text) for absence checks.
++func (s *cm053Sinks) text(t *testing.T, client string) map[string]string {
++	t.Helper()
++	out := map[string]string{"client": client, "logs": s.logs.String()}
++	for key, value := range s.gin.Keys {
++		switch v := value.(type) {
++		case []byte:
++			out["gin:"+key] = string(v)
++		default:
++			out["gin:"+key] = fmt.Sprintf("%+v", v)
++		}
++	}
++	out["response-header-metadata"] = fmt.Sprintf("%v", logging.GetResponseHeaders(s.ctx))
++	out["usage"] = fmt.Sprintf("%+v", s.awaitUsage(t))
++	return out
++}
++
++func (s *cm053Sinks) assertAbsent(t *testing.T, client string, needles ...string) {
++	t.Helper()
++	for sink, text := range s.text(t, client) {
++		for _, needle := range needles {
++			if needle != "" && strings.Contains(text, needle) {
++				t.Fatalf("sink %s contains %q:\n%s", sink, needle, text)
++			}
++		}
++	}
++}
++
++func (s *cm053Sinks) captured() string {
++	value, _ := s.gin.Get("API_RESPONSE")
++	raw, _ := value.([]byte)
++	return string(raw)
++}
++
++func cm053KeyedAuth(key string) *cliproxyauth.Auth {
++	return &cliproxyauth.Auth{
++		ID:       "cm053-keyed-auth",
++		Provider: "openai-compatibility",
++		Attributes: map[string]string{
++			"base_url":    cm053KeyedBaseURL,
++			"api_key":     key,
++			"compat_name": "cm053-compat",
++		},
++	}
++}
++
++func cm053KeylessAuth() *cliproxyauth.Auth {
++	return &cliproxyauth.Auth{
++		ID:         "cm053-keyless-auth",
++		Provider:   "openai-compatibility",
++		Attributes: map[string]string{"base_url": cm053KeyedBaseURL, "compat_name": "cm053-compat"},
++	}
++}
++
++func cm053KeyedRequest(format sdktranslator.Format, stream bool) (cliproxyexecutor.Request, cliproxyexecutor.Options) {
++	var payload string
++	switch format {
++	case sdktranslator.FormatClaude:
++		payload = `{"model":"cm053-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]`
++	case sdktranslator.FormatOpenAIResponse:
++		payload = `{"model":"cm053-model","input":"hi"`
++	default:
++		payload = `{"model":"cm053-model","messages":[{"role":"user","content":"hi"}]`
++	}
++	payload += fmt.Sprintf(`,"stream":%t}`, stream)
++	return cliproxyexecutor.Request{Model: "cm053-model", Payload: []byte(payload)},
++		cliproxyexecutor.Options{SourceFormat: format, OriginalRequest: []byte(payload), Stream: stream}
++}
++
++type cm053StreamOutcome struct {
++	bootErr   error
++	headers   http.Header
++	payload   string
++	streamErr error
++	afterErr  int
++}
++
++func (o cm053StreamOutcome) client() string {
++	return fmt.Sprintf("%v|%+v|%v|%s|%v", o.bootErr, o.bootErr, o.headers, o.payload, o.streamErr)
++}
++
++func cm053RunStream(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth, format sdktranslator.Format, alt string) cm053StreamOutcome {
++	t.Helper()
++	executor := NewOpenAICompatExecutor("openai-compatibility", s.cfg)
++	req, opts := cm053KeyedRequest(format, true)
++	opts.Alt = alt
++	result, err := executor.ExecuteStream(s.ctx, auth, req, opts)
++	if err != nil {
++		return cm053StreamOutcome{bootErr: err}
++	}
++	outcome := cm053StreamOutcome{headers: result.Headers}
++	var payload strings.Builder
++	for chunk := range result.Chunks {
++		if outcome.streamErr != nil {
++			outcome.afterErr++
++		}
++		if chunk.Err != nil {
++			outcome.streamErr = chunk.Err
++			continue
++		}
++		payload.Write(chunk.Payload)
++	}
++	outcome.payload = payload.String()
++	return outcome
++}
++
++func cm053RunExecute(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth, format sdktranslator.Format, alt string) (cliproxyexecutor.Response, error) {
++	t.Helper()
++	executor := NewOpenAICompatExecutor("openai-compatibility", s.cfg)
++	req, opts := cm053KeyedRequest(format, false)
++	opts.Alt = alt
++	return executor.Execute(s.ctx, auth, req, opts)
++}
++
++func cm053AsSafe(t *testing.T, err error) compatsafe.Error {
++	t.Helper()
++	safe, ok := err.(compatsafe.Error)
++	if !ok {
++		t.Fatalf("error = %T %v, want the fixed compatsafe.Error", err, err)
++	}
++	if safe.Error() != safe.Kind.Body() {
++		t.Fatalf("error text %q is not the fixed body of %s", safe.Error(), safe.Kind)
++	}
++	return safe
++}
++
++// cm053ErrorBodies are the echo shapes of an upstream failure body.
++func cm053ErrorBodies(key string) map[string]struct {
++	contentType string
++	body        string
++} {
++	escaped := cm053Needles(key)[1]
++	huge := strings.Repeat("x", compatsafe.MaxErrorBody)
++	return map[string]struct {
++		contentType string
++		body        string
++	}{
++		"json":            {"application/json", fmt.Sprintf(`{"error":{"message":"invalid key %s %s","type":"%s","code":"%s","param":"%s"}}`, key, cm053KeyedCanary, key, key, key)},
++		"text":            {"text/plain", fmt.Sprintf("bad key %s %s", key, cm053KeyedCanary)},
++		"html":            {"text/html", fmt.Sprintf("<html><body><h1>%s</h1><p>%s</p></body></html>", key, cm053KeyedCanary)},
++		"escaped-json":    {"application/json", fmt.Sprintf(`{"error":{"message":"key %s %s"}}`, escaped, cm053KeyedCanary)},
++		"base64-and-url":  {"application/json", fmt.Sprintf(`{"error":{"message":"b64 %s url %s %s"}}`, base64.StdEncoding.EncodeToString([]byte(key)), url.QueryEscape(key), cm053KeyedCanary)},
++		"model-field":     {"application/json", fmt.Sprintf(`{"model":"%s","error":{"message":"%s"}}`, key, cm053KeyedCanary)},
++		"overflow-prefix": {"application/json", fmt.Sprintf(`{"error":{"message":"%s %s %s"}}`, key, cm053KeyedCanary, huge)},
++		"overflow-suffix": {"text/plain", huge + key + cm053KeyedCanary},
++	}
++}
++
++func TestCM053KeyedCompatHTTPErrorSafe(t *testing.T) {
++	for _, key := range cm053KeyedKeys {
++		for name, shape := range cm053ErrorBodies(key) {
++			for _, status := range []int{400, 401, 404, 429, 500, 503} {
++				for _, stream := range []bool{false, true} {
++					t.Run(fmt.Sprintf("key%d/%s/%d/stream=%t", len(key), name, status, stream), func(t *testing.T) {
++						header := http.Header{"Content-Type": {shape.contentType}, "X-Echo": {key + " " + cm053KeyedCanary}}
++						s := cm053NewSinks(t, cm053KeyedStatic(status, header, shape.body), false)
++						var err error
++						var client string
++						if stream {
++							outcome := cm053RunStream(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++							err, client = outcome.bootErr, outcome.client()
++						} else {
++							var resp cliproxyexecutor.Response
++							resp, err = cm053RunExecute(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++							client = fmt.Sprintf("%v|%+v|%s|%v", err, err, resp.Payload, resp.Headers)
++						}
++						safe := cm053AsSafe(t, err)
++						if safe.StatusCode() != status {
++							t.Fatalf("status = %d, want %d", safe.StatusCode(), status)
++						}
++						if strings.HasPrefix(name, "overflow") && safe.Kind != compatsafe.KindErrorBodyTooLarge && safe.Kind != compatsafe.KindRateLimited {
++							t.Fatalf("overflowing body kind = %s, want %s", safe.Kind, compatsafe.KindErrorBodyTooLarge)
++						}
++						if got := s.captured(); !strings.Contains(got, safe.Kind.Message()) {
++							t.Fatalf("captured response %q lacks the fixed representation %q", got, safe.Kind.Message())
++						}
++						s.assertAbsent(t, client, cm053Needles(key)...)
++					})
++				}
++			}
++		}
++	}
++}
++
++func TestCM053KeyedCompatHTTP200ErrorEnvelopeSafe(t *testing.T) {
++	for _, key := range cm053KeyedKeys {
++		cases := []struct {
++			name       string
++			body       string
++			wantKind   compatsafe.Kind
++			wantStatus int
++		}{
++			{"error-envelope", fmt.Sprintf(`{"error":{"message":"%s %s","code":"%s"}}`, key, cm053KeyedCanary, key), compatsafe.KindErrorPayload, 502},
++			{"status-envelope", fmt.Sprintf(`{"error":{"status":429,"type":"rate_limit_error","message":"%s %s"}}`, key, cm053KeyedCanary), compatsafe.KindRateLimited, 429},
++			{"response-failed", fmt.Sprintf(`{"type":"response.failed","model":"%s","response":{"error":{"message":"%s"}}}`, key, cm053KeyedCanary), compatsafe.KindErrorPayload, 502},
++			{"code-message", fmt.Sprintf(`{"code":"model_not_found","message":"%s %s"}`, key, cm053KeyedCanary), compatsafe.KindModelNotFound, 502},
++			{"malformed", fmt.Sprintf(`<html>%s %s</html>`, key, cm053KeyedCanary), compatsafe.KindMalformedResponse, 502},
++			{"empty", "", compatsafe.KindMalformedResponse, 502},
++		}
++		for _, tc := range cases {
++			for _, format := range []sdktranslator.Format{sdktranslator.FormatOpenAI, sdktranslator.FormatClaude} {
++				t.Run(fmt.Sprintf("key%d/%s/%s", len(key), tc.name, format), func(t *testing.T) {
++					s := cm053NewSinks(t, cm053KeyedStatic(http.StatusOK, http.Header{"Content-Type": {"application/json"}}, tc.body), false)
++					resp, err := cm053RunExecute(t, s, cm053KeyedAuth(key), format, "")
++					safe := cm053AsSafe(t, err)
++					if safe.Kind != tc.wantKind || safe.StatusCode() != tc.wantStatus {
++						t.Fatalf("failure = %s/%d, want %s/%d", safe.Kind, safe.StatusCode(), tc.wantKind, tc.wantStatus)
++					}
++					if len(resp.Payload) != 0 {
++						t.Fatalf("an error envelope was translated into a response: %s", resp.Payload)
++					}
++					if strings.Contains(s.logs.String(), "upstream served model") {
++						t.Fatalf("an unclassified body reached model observation: %s", s.logs.String())
++					}
++					s.assertAbsent(t, fmt.Sprintf("%v|%+v|%s|%v", err, err, resp.Payload, resp.Headers), cm053Needles(key)...)
++				})
++			}
++		}
++	}
++}
++
++// cm053SSEScenario is one keyed stream: the upstream SSE bytes, whether the
++// stream must fail, and a string a valid earlier frame must leave captured.
++type cm053SSEScenario struct {
++	body         string
++	wantKind     compatsafe.Kind
++	wantCaptured string
++}
++
++func cm053SSEScenarios(key string) map[string]cm053SSEScenario {
++	escaped := cm053Needles(key)[1]
++	partial := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"cm053-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"
++	return map[string]cm053SSEScenario{
++		"early-error-frame": {
++			body:     fmt.Sprintf(`data: {"error":{"message":"bad key %s %s","code":"%s","type":"%s"}}`+"\n\n", key, cm053KeyedCanary, key, key),
++			wantKind: compatsafe.KindErrorPayload,
++		},
++		"midstream-error-frame": {
++			body:         partial + fmt.Sprintf(`data: {"error":{"message":"%s %s"}}`+"\n\ndata: [DONE]\n\n", key, cm053KeyedCanary),
++			wantKind:     compatsafe.KindErrorPayload,
++			wantCaptured: "partial",
++		},
++		"midstream-rate-limit-frame": {
++			body:         partial + fmt.Sprintf(`data: {"error":{"status":429,"message":"%s %s","type":"rate_limit_error"}}`+"\n\n", key, cm053KeyedCanary),
++			wantKind:     compatsafe.KindRateLimited,
++			wantCaptured: "partial",
++		},
++		"split-multiline-error-event": {
++			body:         partial + "event: error\n" + `data: {"message":` + "\n" + fmt.Sprintf(`data: "%s %s"}`, escaped, cm053KeyedCanary) + "\n\n",
++			wantKind:     compatsafe.KindErrorPayload,
++			wantCaptured: "partial",
++		},
++		"malicious-fields-on-valid-frame": {
++			body:         fmt.Sprintf(": %s %s\nid: %s\nretry: %s\nevent: %s-%s\n", key, cm053KeyedCanary, key, key, key, cm053KeyedCanary) + partial + "data: [DONE]\n\n",
++			wantCaptured: "partial",
++		},
++		"malformed-frame": {
++			body:         partial + fmt.Sprintf(`data: {"x":"%s %s"`, key, cm053KeyedCanary) + "\n\n",
++			wantKind:     compatsafe.KindStreamIncompleteFrame,
++			wantCaptured: "partial",
++		},
++		"plain-json-line": {
++			body:     "\n\n: keepalive\n\n" + fmt.Sprintf(`{"error":{"message":"%s %s"}}`, key, cm053KeyedCanary) + "\n",
++			wantKind: compatsafe.KindErrorPayload,
++		},
++		"plain-malformed-line": {
++			body:     fmt.Sprintf(`{"error":"%s %s"`, key, cm053KeyedCanary) + "\n",
++			wantKind: compatsafe.KindMalformedResponse,
++		},
++		"error-frame-model-field": {
++			body:     fmt.Sprintf(`data: {"type":"response.failed","model":"%s","response":{"model":"%s","error":{"message":"%s"}}}`, key, key, cm053KeyedCanary) + "\n\n",
++			wantKind: compatsafe.KindErrorPayload,
++		},
++		"error-event-then-done": {
++			body:     partial + fmt.Sprintf("event: error\nid: %s\ndata: [DONE]\n\n", key),
++			wantKind: compatsafe.KindStreamErrorEventBeforeDone,
++		},
++		"done-inside-error-frame": {
++			body:     partial + fmt.Sprintf("event: error\ndata: {\"message\":\"%s\"\ndata: [DONE]\n\n", key),
++			wantKind: compatsafe.KindStreamIncompleteBeforeDone,
++		},
++		"trailing-error-frame-without-blank": {
++			body:     partial + fmt.Sprintf(`data: {"error":{"message":"%s %s"}}`, key, cm053KeyedCanary),
++			wantKind: compatsafe.KindErrorPayload,
++		},
++		// An error event still pending at EOF, without data, is a terminal
++		// failure: never a synthesized [DONE]/end_turn completion.
++		"error-event-at-eof-unterminated": {
++			body:         partial + "event: error",
++			wantKind:     compatsafe.KindStreamErrorEventNoData,
++			wantCaptured: "partial",
++		},
++		"error-event-at-eof-newline": {
++			body:         partial + "event: error\n",
++			wantKind:     compatsafe.KindStreamErrorEventNoData,
++			wantCaptured: "partial",
++		},
++		"error-event-at-eof-after-comment": {
++			body:         partial + fmt.Sprintf("event: error\nid: %s\n: %s\n", key, cm053KeyedCanary),
++			wantKind:     compatsafe.KindStreamErrorEventNoData,
++			wantCaptured: "partial",
++		},
++		// Ambiguous or non-object frames fail closed before capture.
++		"duplicate-error-member-frame": {
++			body:         partial + fmt.Sprintf(`data: {"model":"%s","error":{"message":"invalid key %s %s"},"error":null}`, key, key, cm053KeyedCanary) + "\n\ndata: [DONE]\n\n",
++			wantKind:     compatsafe.KindMalformedResponse,
++			wantCaptured: "partial",
++		},
++		"non-object-frame": {
++			body:         partial + fmt.Sprintf(`data: "invalid key %s %s"`, key, cm053KeyedCanary) + "\n\ndata: [DONE]\n\n",
++			wantKind:     compatsafe.KindMalformedResponse,
++			wantCaptured: "partial",
++		},
++	}
++}
++
++func TestCM053KeyedCompatSSEClassifiedBeforeCapture(t *testing.T) {
++	for _, key := range cm053KeyedKeys {
++		for name, scenario := range cm053SSEScenarios(key) {
++			for _, format := range []sdktranslator.Format{sdktranslator.FormatOpenAI, sdktranslator.FormatClaude} {
++				t.Run(fmt.Sprintf("key%d/%s/%s", len(key), name, format), func(t *testing.T) {
++					upstream := cm053KeyedStatic(http.StatusOK, http.Header{"Content-Type": {"text/event-stream"}}, scenario.body)
++					s := cm053NewSinks(t, upstream, false)
++					outcome := cm053RunStream(t, s, cm053KeyedAuth(key), format, "")
++					if outcome.bootErr != nil {
++						t.Fatalf("bootstrap error: %v", outcome.bootErr)
++					}
++					if scenario.wantKind == 0 {
++						if outcome.streamErr != nil {
++							t.Fatalf("valid stream failed: %v", outcome.streamErr)
++						}
++						if !strings.Contains(outcome.payload, "partial") {
++							t.Fatalf("valid frame not delivered: %q", outcome.payload)
++						}
++					} else {
++						safe := cm053AsSafe(t, outcome.streamErr)
++						if safe.Kind != scenario.wantKind {
++							t.Fatalf("kind = %s, want %s", safe.Kind, scenario.wantKind)
++						}
++						if outcome.afterErr != 0 {
++							t.Fatalf("%d chunks followed the terminal error", outcome.afterErr)
++						}
++						for _, completion := range []string{"[DONE]", "message_stop", `"finish_reason":"stop"`, "response.completed"} {
++							if strings.Contains(outcome.payload, completion) {
++								t.Fatalf("a completion (%s) was emitted around a terminal error: %q", completion, outcome.payload)
++							}
++						}
++					}
++					if scenario.wantCaptured != "" && !strings.Contains(s.captured(), scenario.wantCaptured) {
++						t.Fatalf("classified valid frame was not captured: %q", s.captured())
++					}
++					if strings.Contains(s.logs.String(), "upstream served model") {
++						t.Fatalf("an unclassified frame reached model observation: %s", s.logs.String())
++					}
++					s.assertAbsent(t, outcome.client(), cm053Needles(key)...)
++				})
++			}
++		}
++	}
++}
++
++// TestCM053KeyedCompatAmbiguousPayloadSafe: a keyed HTTP-200 body or SSE
++// frame that downstream parsers could read differently from the classifier
++// (duplicate members at any depth, a number that overflows float64 beside an
++// error envelope, a JSON string, array or number) fails closed with a fixed
++// failure before capture, model/usage observation and translation, in the
++// production configuration and in the disposable debug configuration.
++func TestCM053KeyedCompatAmbiguousPayloadSafe(t *testing.T) {
++	partial := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"cm053-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"
++	for _, key := range cm053KeyedKeys {
++		echo := fmt.Sprintf("invalid key %s %s", key, cm053KeyedCanary)
++		cases := []struct {
++			name    string
++			payload string
++			want    compatsafe.Kind
++		}{
++			{"duplicate-error-then-null", fmt.Sprintf(`{"model":"%s","error":{"message":"%s"},"error":null}`, key, echo), compatsafe.KindMalformedResponse},
++			{"duplicate-null-then-error", fmt.Sprintf(`{"error":null,"model":"%s","error":{"message":"%s"}}`, key, echo), compatsafe.KindMalformedResponse},
++			{"duplicate-escaped-name", fmt.Sprintf(`{"model":"%s","e\u0072ror":{"message":"%s"},"error":null}`, key, echo), compatsafe.KindMalformedResponse},
++			{"duplicate-inside-response", fmt.Sprintf(`{"model":"%s","response":{"error":{"message":"%s"},"error":null}}`, key, echo), compatsafe.KindMalformedResponse},
++			{"duplicate-inside-error", fmt.Sprintf(`{"model":"%s","error":{"message":"%s","message":"ok"}}`, key, echo), compatsafe.KindMalformedResponse},
++			{"duplicate-inside-success", fmt.Sprintf(`{"id":"c1","object":"chat.completion","created":1,"model":"%s","choices":[{"index":0,"message":{"role":"assistant","content":"%s","content":"ok"},"finish_reason":"stop"}]}`, key, echo), compatsafe.KindMalformedResponse},
++			{"overflow-number-error-envelope", fmt.Sprintf(`{"model":"%s","error":{"message":"%s"},"extra":1e1000}`, key, echo), compatsafe.KindErrorPayload},
++			{"json-string", fmt.Sprintf(`"%s"`, echo), compatsafe.KindMalformedResponse},
++			{"json-array-error", fmt.Sprintf(`[{"model":"%s","error":{"message":"%s"}}]`, key, echo), compatsafe.KindMalformedResponse},
++			{"json-number", `1e1000`, compatsafe.KindMalformedResponse},
++		}
++		for _, tc := range cases {
++			for _, production := range []bool{true, false} {
++				for _, format := range []sdktranslator.Format{sdktranslator.FormatOpenAI, sdktranslator.FormatClaude} {
++					name := fmt.Sprintf("key%d/%s/production=%t/%s", len(key), tc.name, production, format)
++					t.Run(name+"/execute", func(t *testing.T) {
++						s := cm053NewSinks(t, cm053KeyedStatic(http.StatusOK, http.Header{"Content-Type": {"application/json"}}, tc.payload), production)
++						resp, err := cm053RunExecute(t, s, cm053KeyedAuth(key), format, "")
++						safe := cm053AsSafe(t, err)
++						if safe.Kind != tc.want {
++							t.Fatalf("kind = %s, want %s", safe.Kind, tc.want)
++						}
++						if len(resp.Payload) != 0 {
++							t.Fatalf("an ambiguous body was translated into a response: %s", resp.Payload)
++						}
++						if strings.Contains(s.logs.String(), "upstream served model") {
++							t.Fatalf("an unvalidated body reached model observation: %s", s.logs.String())
++						}
++						s.assertAbsent(t, fmt.Sprintf("%v|%+v|%s|%v", err, err, resp.Payload, resp.Headers), cm053Needles(key)...)
++					})
++					t.Run(name+"/stream", func(t *testing.T) {
++						body := partial + "data: " + tc.payload + "\n\ndata: [DONE]\n\n"
++						s := cm053NewSinks(t, cm053KeyedStatic(http.StatusOK, http.Header{"Content-Type": {"text/event-stream"}}, body), production)
++						outcome := cm053RunStream(t, s, cm053KeyedAuth(key), format, "")
++						if outcome.bootErr != nil {
++							t.Fatalf("bootstrap error: %v", outcome.bootErr)
++						}
++						safe := cm053AsSafe(t, outcome.streamErr)
++						if safe.Kind != tc.want {
++							t.Fatalf("kind = %s, want %s", safe.Kind, tc.want)
++						}
++						if outcome.afterErr != 0 {
++							t.Fatalf("%d chunks followed the terminal error", outcome.afterErr)
++						}
++						for _, completion := range []string{"[DONE]", "message_stop", `"finish_reason":"stop"`, "end_turn"} {
++							if strings.Contains(outcome.payload, completion) {
++								t.Fatalf("a completion (%s) was emitted around a terminal error: %q", completion, outcome.payload)
++							}
++						}
++						if !production && !strings.Contains(s.captured(), "partial") {
++							t.Fatalf("the validated earlier frame was not captured: %q", s.captured())
++						}
++						if strings.Contains(s.logs.String(), "upstream served model") {
++							t.Fatalf("an unvalidated frame reached model observation: %s", s.logs.String())
++						}
++						s.assertAbsent(t, outcome.client(), cm053Needles(key)...)
++					})
++				}
++			}
++		}
++	}
++}
++
++func TestCM053KeyedCompatStreamFrameBounds(t *testing.T) {
++	key := cm053KeyedKeys[len(cm053KeyedKeys)-1]
++	run := func(t *testing.T, body string) cm053StreamOutcome {
++		t.Helper()
++		s := cm053NewSinks(t, cm053KeyedStatic(http.StatusOK, http.Header{"Content-Type": {"text/event-stream"}}, body), false)
++		outcome := cm053RunStream(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++		s.assertAbsent(t, outcome.client(), cm053Needles(key)...)
++		return outcome
++	}
++	lower := func(t *testing.T, line, frameBytes int) {
++		t.Helper()
++		previous := openAICompatKeyedStreamLimits
++		openAICompatKeyedStreamLimits.line = line
++		openAICompatKeyedStreamLimits.frameBytes = frameBytes
++		t.Cleanup(func() { openAICompatKeyedStreamLimits = previous })
++	}
++	valid := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"cm053-model","choices":[{"index":0,"delta":{"content":"%s"},"finish_reason":null}]}` + "\n\n"
++
++	t.Run("line-ceiling-default", func(t *testing.T) {
++		body := strings.Repeat("data: 1\n", compatsafe.MaxStreamFrameLines+1) + fmt.Sprintf("data: %s %s\n\n", key, cm053KeyedCanary)
++		if got := cm053AsSafe(t, run(t, body).streamErr).Kind; got != compatsafe.KindStreamFrameTooLarge {
++			t.Fatalf("kind = %s, want %s", got, compatsafe.KindStreamFrameTooLarge)
++		}
++	})
++	t.Run("aggregate-bytes", func(t *testing.T) {
++		lower(t, 4096, 1024)
++		line := "data: " + strings.Repeat("a", 600) + "\n"
++		body := line + line + fmt.Sprintf("data: %s %s\n\n", key, cm053KeyedCanary)
++		if got := cm053AsSafe(t, run(t, body).streamErr).Kind; got != compatsafe.KindStreamFrameTooLarge {
++			t.Fatalf("kind = %s, want %s", got, compatsafe.KindStreamFrameTooLarge)
++		}
++	})
++	t.Run("aggregate-bytes-at-bound-passes", func(t *testing.T) {
++		lower(t, 4096, 1024)
++		outcome := run(t, fmt.Sprintf(valid, strings.Repeat("b", 800))+"data: [DONE]\n\n")
++		if outcome.streamErr != nil || !strings.Contains(outcome.payload, "bbbb") {
++			t.Fatalf("frame within the bound failed: err=%v payload=%q", outcome.streamErr, outcome.payload)
++		}
++	})
++	t.Run("per-line-ceiling", func(t *testing.T) {
++		lower(t, 1024, 4096)
++		body := "data: " + strings.Repeat("c", 2000) + key + cm053KeyedCanary + "\n\n"
++		if got := cm053AsSafe(t, run(t, body).streamErr).Kind; got != compatsafe.KindStreamFrameTooLarge {
++			t.Fatalf("kind = %s, want %s", got, compatsafe.KindStreamFrameTooLarge)
++		}
++	})
++	// Every field line of a frame counts toward both frame bounds, not only
++	// its data lines: comment-only and mixed-field frames overflow too.
++	chunk := fmt.Sprintf(valid, "ok")
++	t.Run("line-ceiling-comment-lines", func(t *testing.T) {
++		body := strings.Repeat(": keepalive\n", compatsafe.MaxStreamFrameLines) + chunk
++		if got := cm053AsSafe(t, run(t, body).streamErr).Kind; got != compatsafe.KindStreamFrameTooLarge {
++			t.Fatalf("kind = %s, want %s", got, compatsafe.KindStreamFrameTooLarge)
++		}
++	})
++	t.Run("line-ceiling-mixed-fields", func(t *testing.T) {
++		body := strings.Repeat("id: 1\nretry: 5\nevent: message\ndata: 1\n", compatsafe.MaxStreamFrameLines/4) + chunk
++		if got := cm053AsSafe(t, run(t, body).streamErr).Kind; got != compatsafe.KindStreamFrameTooLarge {
++			t.Fatalf("kind = %s, want %s", got, compatsafe.KindStreamFrameTooLarge)
++		}
++	})
++	t.Run("line-ceiling-comment-lines-reset-per-frame", func(t *testing.T) {
++		frame := strings.Repeat(": keepalive\n", compatsafe.MaxStreamFrameLines/2) + "\n"
++		outcome := run(t, frame+frame+frame+chunk+"data: [DONE]\n\n")
++		if outcome.streamErr != nil || !strings.Contains(outcome.payload, `"ok"`) {
++			t.Fatalf("frames within the line bound failed: err=%v payload=%q", outcome.streamErr, outcome.payload)
++		}
++	})
++	t.Run("aggregate-bytes-event-name", func(t *testing.T) {
++		lower(t, 4096, 1024)
++		body := "event: " + strings.Repeat("e", 600) + "\n" + "data: " + strings.Repeat("a", 600) + "\n\n"
++		if got := cm053AsSafe(t, run(t, body).streamErr).Kind; got != compatsafe.KindStreamFrameTooLarge {
++			t.Fatalf("kind = %s, want %s", got, compatsafe.KindStreamFrameTooLarge)
++		}
++	})
++	t.Run("aggregate-bytes-comment-only", func(t *testing.T) {
++		lower(t, 4096, 1024)
++		body := ": " + strings.Repeat("c", 600) + "\nid: " + strings.Repeat("i", 600) + "\n" + chunk
++		if got := cm053AsSafe(t, run(t, body).streamErr).Kind; got != compatsafe.KindStreamFrameTooLarge {
++			t.Fatalf("kind = %s, want %s", got, compatsafe.KindStreamFrameTooLarge)
++		}
++	})
++}
++
++func TestCM053KeyedCompatHeadersSafe(t *testing.T) {
++	for _, key := range cm053KeyedKeys {
++		malicious := func(contentType string) http.Header {
++			return http.Header{
++				"Content-Type":              {contentType},
++				"X-" + key + "-Echo":        {key},
++				"X-Echo":                    {key + " " + cm053KeyedCanary},
++				"Set-Cookie":                {"session=" + key},
++				"Location":                  {"https://evil.cm053.invalid/" + key},
++				"Retry-After":               {"7"},
++				"Anthropic-Ratelimit-Probe": {key},
++			}
++		}
++		cases := []struct {
++			name   string
++			status int
++			ct     string
++			body   string
++			stream bool
++			wantCT string
++		}{
++			{"success", http.StatusOK, "application/json; charset=utf-8; x=" + key, `{"id":"c1","object":"chat.completion","created":1,"model":"cm053-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`, false, "application/json"},
++			{"success-odd-content-type", http.StatusOK, "application/x-" + key, `{"id":"c1","object":"chat.completion","created":1,"model":"cm053-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`, false, ""},
++			{"stream", http.StatusOK, "text/event-stream", `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"cm053-model","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}` + "\n\ndata: [DONE]\n\n", true, "text/event-stream"},
++			{"failure", http.StatusInternalServerError, "application/json", `{"error":{"message":"` + cm053KeyedCanary + `"}}`, false, "application/json"},
++			{"stream-failure", http.StatusServiceUnavailable, "application/json", `{"error":{"message":"` + cm053KeyedCanary + `"}}`, true, "application/json"},
++		}
++		for _, tc := range cases {
++			t.Run(fmt.Sprintf("key%d/%s", len(key), tc.name), func(t *testing.T) {
++				upstream := cm053KeyedUpstream(func(req *http.Request) (*http.Response, error) {
++					resp := cm053KeyedResponse(req, tc.status, malicious(tc.ct), io.NopCloser(strings.NewReader(tc.body)))
++					resp.Trailer = http.Header{"X-Trailer": {key + " " + cm053KeyedCanary}}
++					return resp, nil
++				})
++				s := cm053NewSinks(t, upstream, false)
++				var headers http.Header
++				var client string
++				if tc.stream {
++					outcome := cm053RunStream(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++					headers, client = outcome.headers, outcome.client()
++				} else {
++					resp, err := cm053RunExecute(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++					headers, client = resp.Headers, fmt.Sprintf("%v|%s|%v", err, resp.Payload, resp.Headers)
++				}
++				if tc.status == http.StatusOK {
++					want := http.Header{}
++					if tc.wantCT != "" {
++						want.Set("Content-Type", tc.wantCT)
++					}
++					if fmt.Sprint(headers) != fmt.Sprint(want) {
++						t.Fatalf("returned headers = %v, want %v", headers, want)
++					}
++				}
++				recorded := logging.GetResponseHeaders(s.ctx)
++				for name := range recorded {
++					if name != "Content-Type" {
++						t.Fatalf("recorded response metadata keeps %q: %v", name, recorded)
++					}
++				}
++				if got := recorded.Get("Content-Type"); got != tc.wantCT {
++					t.Fatalf("recorded Content-Type = %q, want %q", got, tc.wantCT)
++				}
++				s.assertAbsent(t, client, append(cm053Needles(key), "evil.cm053.invalid", "Set-Cookie", "Location", "Anthropic-Ratelimit")...)
++			})
++		}
++	}
++}
++
++// cm053OpError is a transport failure whose text carries the key.
++func cm053OpError(key string) error {
++	return &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect " + key + " " + cm053KeyedCanary)}
++}
++
++func TestCM053KeyedCompatIOErrorsSafe(t *testing.T) {
++	for _, key := range cm053KeyedKeys {
++		prefix := fmt.Sprintf("key%d/", len(key))
++		transport := []struct {
++			name  string
++			err   error
++			check func(t *testing.T, err error)
++		}{
++			{"op-error", cm053OpError(key), func(t *testing.T, err error) {
++				var te compatsafe.TransportError
++				if !errors.As(err, &te) || err.Error() != "upstream transport failed: connection refused, reset or unreachable" {
++					t.Fatalf("err = %T %v, want the fixed transient transport error", err, err)
++				}
++				if clienterror.HTTPStatusFromError(err) != 0 {
++					t.Fatalf("transport error gained a status: %v", err)
++				}
++			}},
++			{"text-error", errors.New("proxy said " + key + " " + cm053KeyedCanary), func(t *testing.T, err error) {
++				if err.Error() != "upstream transport failed" {
++					t.Fatalf("err = %v, want the fixed transport error", err)
++				}
++			}},
++			{"canceled", fmt.Errorf("%s %s: %w", key, cm053KeyedCanary, context.Canceled), func(t *testing.T, err error) {
++				if err != context.Canceled {
++					t.Fatalf("err = %T %v, want context.Canceled itself", err, err)
++				}
++			}},
++			{"deadline", fmt.Errorf("%s %s: %w", key, cm053KeyedCanary, context.DeadlineExceeded), func(t *testing.T, err error) {
++				if err != context.DeadlineExceeded {
++					t.Fatalf("err = %T %v, want context.DeadlineExceeded itself", err, err)
++				}
++			}},
++			{"unexpected-eof", fmt.Errorf("%s %s: %w", key, cm053KeyedCanary, io.ErrUnexpectedEOF), func(t *testing.T, err error) {
++				if err != io.ErrUnexpectedEOF {
++					t.Fatalf("err = %T %v, want io.ErrUnexpectedEOF itself", err, err)
++				}
++			}},
++		}
++		for _, tc := range transport {
++			for _, stream := range []bool{false, true} {
++				t.Run(prefix+"do/"+tc.name+fmt.Sprintf("/stream=%t", stream), func(t *testing.T) {
++					upstream := cm053KeyedUpstream(func(*http.Request) (*http.Response, error) { return nil, tc.err })
++					s := cm053NewSinks(t, upstream, false)
++					var err error
++					var client string
++					if stream {
++						outcome := cm053RunStream(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++						err, client = outcome.bootErr, outcome.client()
++					} else {
++						_, err = cm053RunExecute(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++						client = fmt.Sprintf("%v|%+v", err, err)
++					}
++					tc.check(t, err)
++					s.assertAbsent(t, client, cm053Needles(key)...)
++				})
++			}
++		}
++
++		t.Run(prefix+"query-credential-transport-error", func(t *testing.T) {
++			auth := cm053KeylessAuth()
++			auth.Attributes["base_url"] = cm053KeyedBaseURL + "?key=" + url.QueryEscape(key) + cm053KeyedCanary
++			upstream := cm053KeyedUpstream(func(*http.Request) (*http.Response, error) { return nil, errors.New("refused") })
++			s := cm053NewSinks(t, upstream, false)
++			_, err := cm053RunExecute(t, s, auth, sdktranslator.FormatOpenAI, "")
++			if err == nil || err.Error() != "upstream transport failed" {
++				t.Fatalf("err = %v, want the fixed transport error (a URL credential makes the request keyed)", err)
++			}
++			s.assertAbsent(t, fmt.Sprintf("%v|%+v", err, err), cm053Needles(key)...)
++		})
++
++		bodyFaults := []struct {
++			name     string
++			data     string
++			readErr  error
++			closeErr error
++			want     func(t *testing.T, err error)
++		}{
++			{"read-error", "", errors.New("read " + key + " " + cm053KeyedCanary), nil, func(t *testing.T, err error) {
++				if _, ok := err.(compatsafe.TransportError); !ok {
++					t.Fatalf("err = %T %v, want compatsafe.TransportError", err, err)
++				}
++			}},
++			{"read-unexpected-eof", "", fmt.Errorf("%s: %w", key, io.ErrUnexpectedEOF), nil, func(t *testing.T, err error) {
++				if err != io.ErrUnexpectedEOF {
++					t.Fatalf("err = %T %v, want io.ErrUnexpectedEOF itself", err, err)
++				}
++			}},
++			{"close-error", "", nil, errors.New("close " + key + " " + cm053KeyedCanary), nil},
++		}
++		for _, tc := range bodyFaults {
++			t.Run(prefix+"body/"+tc.name+"/execute", func(t *testing.T) {
++				data := tc.data
++				if tc.want == nil {
++					data = `{"id":"c1","object":"chat.completion","created":1,"model":"cm053-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
++				}
++				upstream := cm053KeyedUpstream(func(req *http.Request) (*http.Response, error) {
++					return cm053KeyedResponse(req, http.StatusOK, http.Header{"Content-Type": {"application/json"}}, &cm053FaultBody{data: strings.NewReader(data), readErr: tc.readErr, closeErr: tc.closeErr}), nil
++				})
++				s := cm053NewSinks(t, upstream, false)
++				resp, err := cm053RunExecute(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++				if tc.want != nil {
++					tc.want(t, err)
++				} else if err != nil {
++					t.Fatalf("close error failed the request: %v", err)
++				} else if !strings.Contains(s.logs.String(), "close response body error: upstream transport failed") {
++					t.Fatalf("close error not logged in its safe form: %s", s.logs.String())
++				}
++				s.assertAbsent(t, fmt.Sprintf("%v|%+v|%s", err, err, resp.Payload), cm053Needles(key)...)
++			})
++			t.Run(prefix+"body/"+tc.name+"/stream", func(t *testing.T) {
++				partial := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"cm053-model","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}` + "\n\n"
++				upstream := cm053KeyedUpstream(func(req *http.Request) (*http.Response, error) {
++					data := partial
++					if tc.want == nil {
++						data += "data: [DONE]\n\n"
++					}
++					return cm053KeyedResponse(req, http.StatusOK, http.Header{"Content-Type": {"text/event-stream"}}, &cm053FaultBody{data: strings.NewReader(data), readErr: tc.readErr, closeErr: tc.closeErr}), nil
++				})
++				s := cm053NewSinks(t, upstream, false)
++				outcome := cm053RunStream(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAI, "")
++				if outcome.bootErr != nil {
++					t.Fatalf("bootstrap error: %v", outcome.bootErr)
++				}
++				if tc.want != nil {
++					tc.want(t, outcome.streamErr)
++				} else if outcome.streamErr != nil {
++					t.Fatalf("close error failed the stream: %v", outcome.streamErr)
++				}
++				if !strings.Contains(outcome.payload, "partial") {
++					t.Fatalf("frame before the fault not delivered: %q", outcome.payload)
++				}
++				s.assertAbsent(t, outcome.client(), cm053Needles(key)...)
++				if tc.want == nil && !strings.Contains(s.logs.String(), "close response body error: upstream transport failed") {
++					t.Fatalf("close error not logged in its safe form: %s", s.logs.String())
++				}
++			})
++		}
++	}
++}
++
++// cm053RawStatusErr is the error upstream code builds for a failure body
++// (newOpenAICompatStatusError), used as the classification baseline.
++func cm053RawStatusErr(status int, header http.Header, body string) error {
++	return newOpenAICompatStatusError(status, header, []byte(body))
++}
++
++func TestCM053KeyedCompatRetryClassificationPreserved(t *testing.T) {
++	now := time.Now()
++	date := now.Add(90 * time.Second).UTC().Format(http.TimeFormat)
++	cases := []struct {
++		name      string
++		status    int
++		header    http.Header
++		body      string
++		wantKind  compatsafe.Kind
++		wantRetry time.Duration // 0: nil; -1: any positive value up to 90s
++	}{
++		{"429-retry-after-seconds", 429, http.Header{"Retry-After": {"7"}}, `{"error":{"code":"rate_limit","message":"try later"}}`, compatsafe.KindRateLimited, 7 * time.Second},
++		{"429-retry-after-date", 429, http.Header{"Retry-After": {date}}, `{"error":{"message":"later"}}`, compatsafe.KindRateLimited, -1},
++		{"429-tpm-fallback", 429, nil, `{"error":{"code":"TPMRateLimitExceeded","message":"x"}}`, compatsafe.KindRateLimited, time.Minute},
++		{"429-tpm-message-fallback", 429, nil, `{"error":{"message":"Tokens per minute limit exceeded"}}`, compatsafe.KindRateLimited, time.Minute},
++		{"429-overflow-keeps-header", 429, http.Header{"Retry-After": {"3"}}, `{"error":{"code":"TPMRateLimitExceeded","message":"` + strings.Repeat("x", compatsafe.MaxErrorBody) + `"}}`, compatsafe.KindRateLimited, 3 * time.Second},
++		{"401-authentication", 401, nil, `{"error":{"type":"authentication_error","code":"invalid_request_error","message":"bad key"}}`, compatsafe.KindAuthentication, 0},
++		{"401-request-fault-body", 401, nil, `{"error":{"type":"invalid_request_error","message":"x"}}`, compatsafe.KindInvalidRequest, 0},
++		{"401-plain", 401, nil, `unauthorized`, compatsafe.KindAuthentication, 0},
++		{"400-context-length", 400, nil, `{"error":{"code":"context_length_exceeded","message":"too long"}}`, compatsafe.KindContextLength, 0},
++		{"400-invalid-request", 400, nil, `{"error":{"type":"invalid_request_error","message":"bad"}}`, compatsafe.KindInvalidRequest, 0},
++		{"400-generic", 400, nil, `oops`, compatsafe.KindUpstreamStatus, 0},
++		{"404-model-not-found-code", 404, nil, `{"error":{"code":"model_not_found","message":"x"}}`, compatsafe.KindModelNotFound, 0},
++		{"404-model-does-not-exist", 404, nil, `{"error":{"message":"The model does not exist"}}`, compatsafe.KindModelNotFound, 0},
++		{"404-model-named-does-not-exist", 404, nil, `{"error":{"message":"The model cm053-model does not exist"}}`, compatsafe.KindUpstreamStatus, 0},
++		{"400-model-not-supported", 400, nil, `{"error":{"message":"The requested model is not supported"}}`, compatsafe.KindModelNotSupported, 0},
++		{"403-cloudflare", 403, nil, `<html><title>Just a moment...</title>cloudflare</html>`, compatsafe.KindCloudflareChallenge, 0},
++		{"403-permission", 403, nil, `{"error":{"message":"no"}}`, compatsafe.KindPermission, 0},
++		{"402-quota", 402, nil, `{"error":{"type":"invalid_request_error","message":"pay"}}`, compatsafe.KindQuota, 0},
++		{"500-server", 500, nil, `{"error":{"message":"boom"}}`, compatsafe.KindServerError, 0},
++		{"503-no-retry-parsing", 503, http.Header{"Retry-After": {"30"}}, `busy`, compatsafe.KindServerError, 0},
++	}
++	for _, tc := range cases {
++		for _, stream := range []bool{false, true} {
++			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
++				header := tc.header.Clone()
++				if header == nil {
++					header = http.Header{}
++				}
++				s := cm053NewSinks(t, cm053KeyedStatic(tc.status, header, tc.body), true)
++				var err error
++				if stream {
++					err = cm053RunStream(t, s, cm053KeyedAuth("sk-cm053-classify"), sdktranslator.FormatOpenAI, "").bootErr
++				} else {
++					_, err = cm053RunExecute(t, s, cm053KeyedAuth("sk-cm053-classify"), sdktranslator.FormatOpenAI, "")
++				}
++				safe := cm053AsSafe(t, err)
++				if safe.Kind != tc.wantKind {
++					t.Fatalf("kind = %s, want %s", safe.Kind, tc.wantKind)
++				}
++				raw := cm053RawStatusErr(tc.status, header, tc.body)
++				if got, want := clienterror.HTTPStatusFromError(err), clienterror.HTTPStatusFromError(raw); got != want {
++					t.Fatalf("status = %d, upstream %d", got, want)
++				}
++				if !strings.HasPrefix(tc.name, "429-overflow") {
++					if got, want := clienterror.IsRequestFault(0, err), clienterror.IsRequestFault(0, raw); got != want {
++						t.Fatalf("request-fault verdict = %t, upstream %t", got, want)
++					}
++				}
++				if safe.IsCredentialScoped() {
++					t.Fatal("safe failure is credential-scoped")
++				}
++				retry := safe.RetryAfter()
++				switch {
++				case tc.wantRetry == 0:
++					if retry != nil {
++						t.Fatalf("retry = %v, want none", *retry)
++					}
++				case tc.wantRetry < 0:
++					if retry == nil || *retry <= 0 || *retry > 90*time.Second {
++						t.Fatalf("retry = %v, want the HTTP-date delay", retry)
++					}
++				default:
++					if retry == nil || *retry != tc.wantRetry {
++						t.Fatalf("retry = %v, want %s", retry, tc.wantRetry)
++					}
++				}
++				if !strings.HasPrefix(tc.name, "429-overflow") && !strings.HasPrefix(tc.name, "429-retry-after-date") {
++					rawRetry := raw.(interface{ RetryAfter() *time.Duration }).RetryAfter()
++					if (rawRetry == nil) != (retry == nil) || (rawRetry != nil && *rawRetry != *retry) {
++						t.Fatalf("retry = %v, upstream parsing %v", retry, rawRetry)
++					}
++				}
++			})
++		}
++	}
++}
++
++func TestCM053KeyedCompatLoggingMatrix(t *testing.T) {
++	partial := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"cm053-model","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}` + "\n\n"
++	for _, production := range []bool{true, false} {
++		for _, key := range cm053KeyedKeys {
++			scenarios := map[string]func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) string{
++				"http-error": func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) string {
++					_, err := cm053RunExecute(t, s, auth, sdktranslator.FormatClaude, "")
++					cm053AsSafe(t, err)
++					return fmt.Sprintf("%v", err)
++				},
++				"sse-error": func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) string {
++					outcome := cm053RunStream(t, s, auth, sdktranslator.FormatClaude, "")
++					cm053AsSafe(t, outcome.streamErr)
++					return outcome.client()
++				},
++				"transport-error": func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) string {
++					_, err := cm053RunExecute(t, s, auth, sdktranslator.FormatClaude, "")
++					return fmt.Sprintf("%v", err)
++				},
++			}
++			for name, run := range scenarios {
++				t.Run(fmt.Sprintf("production=%t/key%d/%s", production, len(key), name), func(t *testing.T) {
++					upstream := cm053KeyedUpstream(func(req *http.Request) (*http.Response, error) {
++						switch name {
++						case "http-error":
++							return cm053KeyedResponse(req, 401, http.Header{"Content-Type": {"application/json"}, "X-Key": {key}}, io.NopCloser(strings.NewReader(`{"error":{"type":"authentication_error","message":"key `+key+` `+cm053KeyedCanary+`"}}`))), nil
++						case "sse-error":
++							return cm053KeyedResponse(req, 200, http.Header{"Content-Type": {"text/event-stream"}}, io.NopCloser(strings.NewReader(partial+`data: {"error":{"message":"`+key+` `+cm053KeyedCanary+`"}}`+"\n\n"))), nil
++						}
++						return nil, cm053OpError(key)
++					})
++					s := cm053NewSinks(t, upstream, production)
++					auth := cm053KeyedAuth(key)
++					auth.Attributes["header:X-Custom-Credential"] = key
++					client := run(t, s, auth)
++					s.assertAbsent(t, client, cm053Needles(key)...)
++					requestLog, _ := s.gin.Get("API_REQUEST")
++					requestText, _ := requestLog.([]byte)
++					if production {
++						if len(requestText) != 0 {
++							t.Fatalf("production configuration captured the request: %s", requestText)
++						}
++						return
++					}
++					for _, want := range []string{"type=api_key", "X-Custom-Credential", "[redacted]"} {
++						if !strings.Contains(string(requestText), want) {
++							t.Fatalf("request log lacks %q: %s", want, requestText)
++						}
++					}
++					for _, unwanted := range []string{"value=", "auth_id=", "Bearer " + key} {
++						if strings.Contains(string(requestText), unwanted) {
++							t.Fatalf("request log contains %q: %s", unwanted, requestText)
++						}
++					}
++				})
++			}
++		}
++	}
++}
++
++func TestCM053KeylessCompatErrorBehaviorPreserved(t *testing.T) {
++	const providerText = "keyless provider wording"
++	t.Run("http-error", func(t *testing.T) {
++		body := `{"error":{"message":"` + providerText + `"}}`
++		s := cm053NewSinks(t, cm053KeyedStatic(500, http.Header{"Content-Type": {"application/json"}, "X-Upstream": {"kept"}}, body), false)
++		_, err := cm053RunExecute(t, s, cm053KeylessAuth(), sdktranslator.FormatOpenAI, "")
++		if _, ok := err.(statusErr); !ok || err.Error() != body {
++			t.Fatalf("keyless error = %T %v, want the upstream statusErr with the provider body", err, err)
++		}
++		if !strings.Contains(s.captured(), providerText) {
++			t.Fatalf("keyless capture lost the provider body: %q", s.captured())
++		}
++		if logging.GetResponseHeaders(s.ctx).Get("X-Upstream") != "kept" {
++			t.Fatalf("keyless response metadata was normalized: %v", logging.GetResponseHeaders(s.ctx))
++		}
++	})
++	t.Run("success-headers", func(t *testing.T) {
++		body := `{"id":"c1","object":"chat.completion","created":1,"model":"cm053-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
++		s := cm053NewSinks(t, cm053KeyedStatic(200, http.Header{"Content-Type": {"application/json"}, "X-Upstream": {"kept"}}, body), false)
++		resp, err := cm053RunExecute(t, s, cm053KeylessAuth(), sdktranslator.FormatOpenAI, "")
++		if err != nil || resp.Headers.Get("X-Upstream") != "kept" {
++			t.Fatalf("keyless success: err=%v headers=%v", err, resp.Headers)
++		}
++	})
++	t.Run("http-200-error-envelope-not-classified", func(t *testing.T) {
++		body := `{"error":{"message":"` + providerText + `"}}`
++		s := cm053NewSinks(t, cm053KeyedStatic(200, http.Header{"Content-Type": {"application/json"}}, body), false)
++		if _, err := cm053RunExecute(t, s, cm053KeylessAuth(), sdktranslator.FormatOpenAI, ""); err != nil {
++			t.Fatalf("keyless 200 envelope became an error: %v", err)
++		}
++	})
++	t.Run("sse-error", func(t *testing.T) {
++		body := `data: {"error":{"message":"` + providerText + `"}}` + "\n\n"
++		s := cm053NewSinks(t, cm053KeyedStatic(200, http.Header{"Content-Type": {"text/event-stream"}}, body), false)
++		outcome := cm053RunStream(t, s, cm053KeylessAuth(), sdktranslator.FormatOpenAI, "")
++		if outcome.streamErr == nil || !strings.Contains(outcome.streamErr.Error(), providerText) {
++			t.Fatalf("keyless stream error = %v, want the provider wording", outcome.streamErr)
++		}
++	})
++	t.Run("transport-error", func(t *testing.T) {
++		upstream := cm053KeyedUpstream(func(*http.Request) (*http.Response, error) { return nil, errors.New(providerText) })
++		s := cm053NewSinks(t, upstream, false)
++		_, err := cm053RunExecute(t, s, cm053KeylessAuth(), sdktranslator.FormatOpenAI, "")
++		if err == nil || !strings.Contains(err.Error(), providerText) {
++			t.Fatalf("keyless transport error = %v, want the raw error", err)
++		}
++	})
++}
++
++func TestCM053KeyedCompatAuditScope(t *testing.T) {
++	key := cm053KeyedKeys[len(cm053KeyedKeys)-1]
++	errorBody := `{"error":{"message":"` + key + " " + cm053KeyedCanary + `"}}`
++	// Inside the promise: keyed chat whatever the source format, the stream
++	// under a responses/compact Alt, and credentials from a configured header
++	// or the URL instead of api_key.
++	inside := []struct {
++		name string
++		auth func() *cliproxyauth.Auth
++		run  func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error
++	}{}
++	for _, format := range []sdktranslator.Format{sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.FormatOpenAIResponse} {
++		format := format
++		inside = append(inside, struct {
++			name string
++			auth func() *cliproxyauth.Auth
++			run  func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error
++		}{"execute/" + format.String(), func() *cliproxyauth.Auth { return cm053KeyedAuth(key) }, func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error {
++			_, err := cm053RunExecute(t, s, auth, format, "")
++			return err
++		}}, struct {
++			name string
++			auth func() *cliproxyauth.Auth
++			run  func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error
++		}{"stream/" + format.String(), func() *cliproxyauth.Auth { return cm053KeyedAuth(key) }, func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error {
++			return cm053RunStream(t, s, auth, format, "").bootErr
++		}})
++	}
++	inside = append(inside,
++		struct {
++			name string
++			auth func() *cliproxyauth.Auth
++			run  func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error
++		}{"stream-under-compact-alt", func() *cliproxyauth.Auth { return cm053KeyedAuth(key) }, func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error {
++			return cm053RunStream(t, s, auth, sdktranslator.FormatOpenAIResponse, "responses/compact").bootErr
++		}},
++		struct {
++			name string
++			auth func() *cliproxyauth.Auth
++			run  func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error
++		}{"custom-header-credential", func() *cliproxyauth.Auth {
++			auth := cm053KeylessAuth()
++			auth.Attributes["header:X-Api-Token"] = key
++			return auth
++		}, func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error {
++			_, err := cm053RunExecute(t, s, auth, sdktranslator.FormatOpenAI, "")
++			return err
++		}},
++		struct {
++			name string
++			auth func() *cliproxyauth.Auth
++			run  func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error
++		}{"url-credential", func() *cliproxyauth.Auth {
++			auth := cm053KeylessAuth()
++			auth.Attributes["base_url"] = cm053KeyedBaseURL + "?api-key=" + key
++			return auth
++		}, func(t *testing.T, s *cm053Sinks, auth *cliproxyauth.Auth) error {
++			_, err := cm053RunExecute(t, s, auth, sdktranslator.FormatOpenAI, "")
++			return err
++		}},
++	)
++	for _, tc := range inside {
++		t.Run("inside/"+tc.name, func(t *testing.T) {
++			s := cm053NewSinks(t, cm053KeyedStatic(400, http.Header{"Content-Type": {"application/json"}}, errorBody), false)
++			err := tc.run(t, s, tc.auth())
++			cm053AsSafe(t, err)
++			s.assertAbsent(t, fmt.Sprintf("%v", err), key, cm053KeyedCanary)
++		})
++	}
++
++	// Outside the route-scoped promise (upstream behaviour, documented as
++	// such): images, the genuine non-stream compact request and the generic
++	// HttpRequest API.
++	t.Run("outside/genuine-compact", func(t *testing.T) {
++		s := cm053NewSinks(t, cm053KeyedStatic(400, http.Header{"Content-Type": {"application/json"}}, errorBody), false)
++		_, err := cm053RunExecute(t, s, cm053KeyedAuth(key), sdktranslator.FormatOpenAIResponse, "responses/compact")
++		if _, ok := err.(statusErr); !ok || !strings.Contains(err.Error(), cm053KeyedCanary) {
++			t.Fatalf("genuine compact error = %T %v, want the unchanged upstream statusErr", err, err)
++		}
++	})
++	t.Run("outside/images", func(t *testing.T) {
++		s := cm053NewSinks(t, cm053KeyedStatic(400, http.Header{"Content-Type": {"application/json"}}, errorBody), false)
++		executor := NewOpenAICompatExecutor("openai-compatibility", s.cfg)
++		_, err := executor.Execute(s.ctx, cm053KeyedAuth(key), cliproxyexecutor.Request{Model: "cm053-image", Payload: []byte(`{"model":"cm053-image","prompt":"x"}`)}, cliproxyexecutor.Options{
++			SourceFormat: sdktranslator.FromString(openAICompatImageHandlerType),
++		})
++		if _, ok := err.(statusErr); !ok || !strings.Contains(err.Error(), cm053KeyedCanary) {
++			t.Fatalf("images error = %T %v, want the unchanged upstream statusErr", err, err)
++		}
++	})
++	t.Run("outside/http-request", func(t *testing.T) {
++		s := cm053NewSinks(t, cm053KeyedStatic(400, http.Header{"Content-Type": {"application/json"}}, errorBody), false)
++		executor := NewOpenAICompatExecutor("openai-compatibility", s.cfg)
++		req, _ := http.NewRequestWithContext(s.ctx, http.MethodGet, cm053KeyedBaseURL+"/models", nil)
++		resp, err := executor.HttpRequest(s.ctx, cm053KeyedAuth(key), req)
++		if err != nil {
++			t.Fatalf("HttpRequest: %v", err)
++		}
++		defer resp.Body.Close()
++		raw, _ := io.ReadAll(resp.Body)
++		if !strings.Contains(string(raw), cm053KeyedCanary) {
++			t.Fatalf("generic HttpRequest response changed: %s", raw)
++		}
++	})
++}
+diff --git a/sdk/cliproxy/auth/conductor_execution.go b/sdk/cliproxy/auth/conductor_execution.go
+index b365f5d..7ded5fa 100644
+--- a/sdk/cliproxy/auth/conductor_execution.go
++++ b/sdk/cliproxy/auth/conductor_execution.go
+@@ -1833,6 +1833,10 @@ func debugLogAuthSelection(entry *log.Entry, auth *Auth, provider string, model
+ 	}
+ 	switch accountType {
+ 	case "api_key":
++		if isOpenAICompatAuthForLog(auth) {
++			entry.Debugf("Use API key %s for model %s%s", openAICompatAuthLogIdentity(auth), model, suffix)
++			return
++		}
+ 		entry.Debugf("Use API key %s for model %s%s", util.HideAPIKey(accountInfo), model, suffix)
+ 	case "oauth":
+ 		ident := formatOauthIdentity(auth, provider, accountInfo)
+@@ -1871,6 +1875,27 @@ func formatOauthIdentity(auth *Auth, provider string, accountInfo string) string
+ 	return strings.Join(parts, " ")
+ }
+ 
++// isOpenAICompatAuthForLog reports an OpenAI-compatible provider auth
++// (keyed chat safety). Its credential is never shown in logs, not even
++// prefix/suffix-masked: a short key would survive HideAPIKey unchanged.
++func isOpenAICompatAuthForLog(auth *Auth) bool {
++	return auth != nil && auth.Attributes != nil && strings.TrimSpace(auth.Attributes["compat_name"]) != ""
++}
++
++// openAICompatAuthLogIdentity names an OpenAI-compatible auth by fixed
++// redaction plus its configured name and config position. It never uses any
++// part of the credential, nor the auth ID or auth index: both are short
++// hashes over the key, which a short key would not survive.
++func openAICompatAuthLogIdentity(auth *Auth) string {
++	identity := "[redacted] compat=" + strconv.Quote(strings.TrimSpace(auth.Attributes["compat_name"]))
++	if index := strings.TrimSpace(auth.Attributes["config_index"]); index != "" {
++		if _, errAtoi := strconv.Atoi(index); errAtoi == nil {
++			identity += " config_index=" + index
++		}
++	}
++	return identity
++}
++
+ func formatAuthIdentity(auth *Auth, provider string) string {
+ 	if auth == nil {
+ 		return "auth=nil"
+@@ -1878,6 +1903,9 @@ func formatAuthIdentity(auth *Auth, provider string) string {
+ 	accountType, accountInfo := auth.AccountInfo()
+ 	switch accountType {
+ 	case "api_key":
++		if isOpenAICompatAuthForLog(auth) {
++			return "api_key=" + openAICompatAuthLogIdentity(auth)
++		}
+ 		return fmt.Sprintf("api_key=%s", util.HideAPIKey(accountInfo))
+ 	case "oauth":
+ 		return formatOauthIdentity(auth, provider, accountInfo)
+diff --git a/sdk/cliproxy/auth/openai_compat_keyed_cm053_test.go b/sdk/cliproxy/auth/openai_compat_keyed_cm053_test.go
+new file mode 100644
+index 0000000..84e6d9f
+--- /dev/null
++++ b/sdk/cliproxy/auth/openai_compat_keyed_cm053_test.go
+@@ -0,0 +1,190 @@
++package auth
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"strings"
++	"syscall"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
++	log "github.com/sirupsen/logrus"
++)
++
++// The keyed OpenAI-compatible chat route replaces a provider
++// failure with a fixed compatsafe representation. These gates prove that the
++// conductor reaches the same semantic verdict on the fixed representation as
++// on the raw provider failure for every category the route supports, name
++// the one documented divergence, and prove that conductor logs never show a
++// compat credential (not even prefix/suffix-masked).
++
++// cm053RawCompatErr is the shape of the upstream compat executor error: the
++// raw body as the message and the HTTP status.
++type cm053RawCompatErr struct {
++	status int
++	body   string
++}
++
++func (e cm053RawCompatErr) Error() string   { return e.body }
++func (e cm053RawCompatErr) StatusCode() int { return e.status }
++
++type cm053Verdict struct {
++	status           int
++	requestInvalid   bool
++	modelSupport     bool
++	modelNotFound    bool
++	cloudflare       bool
++	invalidGrant     bool
++	lifecycle        bool
++	transient        bool
++	credentialScoped bool
++	resultCode       string
++}
++
++func cm053VerdictOf(err error) cm053Verdict {
++	result := resultErrorFromError(err)
++	return cm053Verdict{
++		status:           statusCodeFromError(err),
++		requestInvalid:   isRequestInvalidError(err),
++		modelSupport:     isModelSupportError(err),
++		modelNotFound:    isExplicitModelNotFoundError(err, ""),
++		cloudflare:       isCloudflareChallengeError(err),
++		invalidGrant:     isInvalidGrantError(err),
++		lifecycle:        isConnectionLifecycleError(err),
++		transient:        isTransientTransportError(err),
++		credentialScoped: isCredentialScopedError(err),
++		resultCode:       result.Code,
++	}
++}
++
++func TestCM053KeyedCompatConductorClassificationPreserved(t *testing.T) {
++	cases := []struct {
++		status int
++		body   string
++	}{
++		{400, `{"error":{"type":"invalid_request_error","message":"bad"}}`},
++		{400, `{"error":{"code":"context_length_exceeded","message":"too long"}}`},
++		{400, `{"error":{"code":"unsupported_value","message":"x"}}`},
++		{400, `plain bad request`},
++		{400, `{"error":{"message":"The requested model is not supported"}}`},
++		{422, `model unavailable`},
++		{404, `{"error":{"code":"model_not_found","message":"x"}}`},
++		{404, `{"error":{"type":"not_found_error","message":"The model foo does not exist"}}`},
++		{404, `{"detail":"Unknown model: foo"}`},
++		{404, `{"detail":"Unknown model"}`},
++		{404, `{"error":{"message":"The model does not exist."}}`},
++		{404, `{"errors":[{"code":"models/model-not-found"}]}`},
++		{404, `{"error":{"message":"model_not_found in request body"}}`},
++		{404, `not here`},
++		{401, `{"error":{"type":"authentication_error","code":"invalid_request_error"}}`},
++		{401, `{"error":{"type":"invalid_request_error"}}`},
++		{401, `unauthorized`},
++		{402, `{"error":{"type":"invalid_request_error","message":"pay"}}`},
++		{403, `<html><title>Just a moment...</title>cloudflare</html>`},
++		{403, `forbidden`},
++		{409, `conflict`},
++		{413, `too large`},
++		{429, `{"error":{"type":"invalid_request_error","message":"slow down"}}`},
++		{500, `<html>cloudflare challenge-platform</html>`},
++		{500, `{"error":{"message":"boom"}}`},
++		{502, `bad gateway`},
++		{503, `{"error":{"code":"overloaded"}}`},
++	}
++	for _, tc := range cases {
++		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.body), func(t *testing.T) {
++			raw := cm053RawCompatErr{status: tc.status, body: tc.body}
++			safe := compatsafe.HTTPFailure(tc.status, []byte(tc.body), false, true, nil)
++			if got, want := cm053VerdictOf(safe), cm053VerdictOf(raw); got != want {
++				t.Fatalf("fixed %s verdict %+v, raw provider verdict %+v", safe.Kind, got, want)
++			}
++		})
++	}
++
++	// Documented divergence: free-text categories the route does not
++	// support. invalid_grant is an OAuth refresh failure; an API-key compat
++	// provider never produces it, and the fixed representation cannot carry
++	// arbitrary provider text.
++	raw := cm053RawCompatErr{status: 400, body: `{"error":"invalid_grant"}`}
++	safe := compatsafe.HTTPFailure(400, []byte(raw.body), false, true, nil)
++	if !isInvalidGrantError(raw) || isInvalidGrantError(safe) {
++		t.Fatalf("invalid_grant divergence changed: raw=%t safe=%t", isInvalidGrantError(raw), isInvalidGrantError(safe))
++	}
++
++	transport := []error{
++		fmt.Errorf("secret: %w", context.Canceled),
++		fmt.Errorf("secret: %w", context.DeadlineExceeded),
++		fmt.Errorf("secret: %w", io.EOF),
++		fmt.Errorf("secret: %w", io.ErrUnexpectedEOF),
++		&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("secret")},
++		fmt.Errorf("secret: %w", syscall.ECONNREFUSED),
++		errors.New("secret: tls handshake timeout"),
++		errors.New("secret: no such host"),
++		errors.New("secret: x509 certificate signed by unknown authority"),
++	}
++	for _, rawErr := range transport {
++		safeErr := compatsafe.Transport(rawErr, nil)
++		if got, want := cm053VerdictOf(safeErr), cm053VerdictOf(rawErr); got != want {
++			t.Fatalf("transport %q: fixed %q verdict %+v, raw verdict %+v", rawErr, safeErr, got, want)
++		}
++	}
++
++	retry := 7 * time.Second
++	rateLimited := compatsafe.HTTPFailure(http.StatusTooManyRequests, nil, false, true, &retry)
++	if got := retryAfterFromError(rateLimited); got == nil || *got != retry {
++		t.Fatalf("retryAfterFromError = %v, want %s", got, retry)
++	}
++}
++
++func TestCM053KeyedCompatAuthIdentityRedacted(t *testing.T) {
++	var logs bytes.Buffer
++	previousOut, previousLevel := log.StandardLogger().Out, log.GetLevel()
++	log.SetOutput(&logs)
++	log.SetLevel(log.DebugLevel)
++	t.Cleanup(func() {
++		log.SetOutput(previousOut)
++		log.SetLevel(previousLevel)
++	})
++	for _, key := range []string{"Zq", "Zq9", "Zq9x", "sk-cm053-LongSyntheticSecret-0123456789abcdef"} {
++		logs.Reset()
++		compat := &Auth{
++			ID:       "openai-compatibility:cm053:0123456789ab",
++			Index:    "0123456789abcdef",
++			Provider: "cm053",
++			Attributes: map[string]string{
++				AttributeAPIKey: key,
++				"base_url":      "https://compat.cm053.invalid/v1",
++				"compat_name":   "cm053",
++				"config_index":  "2",
++			},
++		}
++		identity := formatAuthIdentity(compat, "cm053")
++		if identity != `api_key=[redacted] compat="cm053" config_index=2` {
++			t.Fatalf("compat identity = %q", identity)
++		}
++		entry := log.NewEntry(log.StandardLogger())
++		debugLogAuthSelection(entry, compat, "cm053", "cm053-model")
++		warnLogUpstreamFailure(context.Background(), entry, "cm053", "cm053-model", compat, time.Second, compatsafe.NewError(compatsafe.KindServerError, 500, nil))
++		text := logs.String()
++		for _, leak := range []string{key, util.HideAPIKey(key), compat.ID, compat.Index} {
++			if strings.Contains(text, leak) || strings.Contains(identity, leak) {
++				t.Fatalf("compat auth log shows %q:\n%s", leak, text)
++			}
++		}
++		if !strings.Contains(text, "[redacted]") || !strings.Contains(text, "upstream server error") {
++			t.Fatalf("compat auth logs = %s", text)
++		}
++	}
++
++	// Control: a non-compat API-key auth keeps upstream's masked identity.
++	other := &Auth{Provider: "gemini", Attributes: map[string]string{AttributeAPIKey: "gemini-key-0123456789"}}
++	if got := formatAuthIdentity(other, "gemini"); got != "api_key="+util.HideAPIKey("gemini-key-0123456789") {
++		t.Fatalf("non-compat identity = %q", got)
++	}
++}

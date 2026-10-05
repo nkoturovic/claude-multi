@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": ["format", "upstream", "source", "vendor", "toolchain", "series", "candidates", "build", "targets", "gates", "source_pins", "markers"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": 1 },
+    "upstream": {
+      "type": "object",
+      "required": ["name", "repository", "tag", "version", "commit", "license", "module", "main_package", "binary"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9-]+$" },
+        "repository": { "type": "string", "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+        "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "license": { "type": "string", "minLength": 1 },
+        "module": { "type": "string", "pattern": "^[a-z0-9.-]+(/[A-Za-z0-9_.-]+)+$" },
+        "main_package": { "type": "string", "pattern": "^\\./[a-z0-9_/-]+$" },
+        "binary": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["archive_url", "archive_file", "archive_sha256", "tree_sha256", "nix_hash"],
+      "additionalProperties": false,
+      "properties": {
+        "archive_url": { "type": "string", "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/archive/[0-9a-f]{40}\\.tar\\.gz$" },
+        "archive_file": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.tar\\.gz$" },
+        "archive_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "tree_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "nix_hash": { "type": "string", "pattern": "^sha256-[A-Za-z0-9+/]{43}=$" }
+      }
+    },
+    "vendor": {
+      "type": "object",
+      "required": ["tree_sha256", "nix_hash"],
+      "additionalProperties": false,
+      "properties": {
+        "tree_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "nix_hash": { "type": "string", "pattern": "^sha256-[A-Za-z0-9+/]{43}=$" }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "required": ["version", "source", "url_prefix", "archives"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "source": { "const": "https://go.dev/dl/?mode=json&include=all" },
+        "url_prefix": { "const": "https://go.dev/dl/" },
+        "archives": {
+          "type": "object",
+          "required": ["linux-amd64", "linux-arm64", "darwin-arm64", "darwin-amd64"],
+          "additionalProperties": false,
+          "properties": {
+            "linux-amd64": { "type": "object", "required": ["file", "sha256"], "additionalProperties": false, "properties": { "file": { "type": "string", "pattern": "^go[0-9.]+\\.linux-amd64\\.tar\\.gz$" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } },
+            "linux-arm64": { "type": "object", "required": ["file", "sha256"], "additionalProperties": false, "properties": { "file": { "type": "string", "pattern": "^go[0-9.]+\\.linux-arm64\\.tar\\.gz$" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } },
+            "darwin-arm64": { "type": "object", "required": ["file", "sha256"], "additionalProperties": false, "properties": { "file": { "type": "string", "pattern": "^go[0-9.]+\\.darwin-arm64\\.tar\\.gz$" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } },
+            "darwin-amd64": { "type": "object", "required": ["file", "sha256"], "additionalProperties": false, "properties": { "file": { "type": "string", "pattern": "^go[0-9.]+\\.darwin-amd64\\.tar\\.gz$" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } }
+          }
+        }
+      }
+    },
+    "series": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["basename", "sha256", "admitted"],
+        "additionalProperties": false,
+        "properties": {
+          "basename": { "type": "string", "pattern": "^cli-proxy-api-[a-z0-9-]+\\.patch$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "admitted": { "const": true }
+        }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["basename", "sha256", "admitted"],
+        "additionalProperties": false,
+        "properties": {
+          "basename": { "type": "string", "pattern": "^cli-proxy-api-[a-z0-9-]+\\.patch$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "admitted": { "const": false }
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": ["env", "flags", "ldflags"],
+      "additionalProperties": false,
+      "properties": {
+        "env": {
+          "type": "object",
+          "required": ["CGO_ENABLED"],
+          "additionalProperties": false,
+          "properties": { "CGO_ENABLED": { "const": "0" } }
+        },
+        "flags": { "const": ["-trimpath", "-buildvcs=false", "-mod=vendor"] },
+        "ldflags": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[^\\s]+$" }
+        }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["name", "goos", "goarch", "shipped"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^(linux|darwin|windows)-(amd64|arm64)$" },
+          "goos": { "enum": ["linux", "darwin", "windows"] },
+          "goarch": { "enum": ["amd64", "arm64"] },
+          "shipped": { "type": "boolean" }
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["name", "packages", "platforms", "race", "count", "expected_tests"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+          "packages": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^\\./[a-z0-9_/-]+(/\\.\\.\\.)?$" }
+          },
+          "run": { "type": "string", "minLength": 1, "pattern": "^[^/\\s]+$" },
+          "skip": { "type": "string", "minLength": 1, "pattern": "^[^/\\s]+$" },
+          "platforms": { "enum": ["portable", "linux"] },
+          "race": { "type": "boolean" },
+          "count": { "type": ["integer", "null"], "minimum": 1 },
+          "expected_tests": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^(Test|Example|Fuzz)[A-Za-z0-9_]*$" }
+          }
+        }
+      }
+    },
+    "source_pins": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["name", "path", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+          "path": { "type": "string", "pattern": "^[a-z0-9_]+(/[a-z0-9_.-]+)+$" },
+          "text": { "type": "string", "minLength": 8 }
+        }
+      }
+    },
+    "markers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["patch", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "patch": { "type": "string", "pattern": "^cli-proxy-api-[a-z0-9-]+\\.patch$" },
+          "text": { "type": "string", "minLength": 12 }
+        }
+      }
+    }
+  }
+}

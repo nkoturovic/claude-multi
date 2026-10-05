@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-analyst-strong": {
+      "effort": "xhigh",
+      "model": "astra"
+    },
+    "cm-explorer": {
+      "effort": "xhigh",
+      "model": "luna"
+    },
+    "cm-implementer": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-implementer-light": {
+      "effort": "max",
+      "model": "luna"
+    },
+    "cm-implementer-strong": {
+      "effort": "xhigh",
+      "model": "astra"
+    },
+    "cm-reviewer": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-reviewer-strong": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "description": "Opus lead; Luna xhigh explorer/max light writer; Sol xhigh analyst/writer/reviewer; Astra strong grades; Opus high strong review",
+  "lead": {
+    "effort": "ultracode",
+    "model": "opus"
+  },
+  "name": "economy",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "seed": {
+    "id": "economy",
+    "version": 3
+  },
+  "version": 2,
+  "workflows": "native"
+}

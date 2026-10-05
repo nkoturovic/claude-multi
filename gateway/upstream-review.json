@@ -1,0 +1,286 @@
+{
+  "format": 1,
+  "upstream": {
+    "repository": "https://github.com/router-for-me/CLIProxyAPI",
+    "pinned": {
+      "version": "7.3.15",
+      "commit": "673131f57484517c3a1eae7e36c4cfa7b9bb4efc"
+    },
+    "reviewed_through": {
+      "version": "8.0.10",
+      "commit": "6fecc6e5567912661654a4eaf9b8f5436facd1c2"
+    },
+    "reviewed_on": "2026-10-02",
+    "releases": 16,
+    "commits": 108
+  },
+  "admission": "A fix is backported now, as an admitted patch with its own failing-without-the-fix tests and a gate record, only when it is reachable in the configuration claude-multi renders and it protects stored credentials or the availability of sign-in or API-key routes. Everything else is carried by the rebase onto the 8.x line or needs no action.",
+  "rendered_configuration": [
+    "listener on 127.0.0.1 only, every client authenticated by the gateway API key",
+    "plugins.enabled false, Home off, discovery off, pprof off",
+    "logging-to-file false and no request-log key (request logging off; error logs of failed requests are still forced)",
+    "disable-cooling true for every credential, no request-scoped error rules, no per-credential or per-provider cooling override",
+    "management only through the environment key and the read-only allowlist on the Nix channel, otherwise off",
+    "request-retry 0, max-retry-credentials 1, fill-first routing; one auto-refresh loop per process with 16 workers"
+  ],
+  "dependencies": {
+    "go_mod": "only the module path changes (/v7 to /v8); the go directive stays 1.26.0",
+    "go_sum": "byte-identical between the pinned and the reviewed release"
+  },
+  "vulncheck": {
+    "tool": "govulncheck",
+    "mode": "binary",
+    "status": "not-run",
+    "reason": "neither govulncheck nor a copy of the Go vulnerability database is available on the offline build host",
+    "run": "in CI, once per shipped target: govulncheck -mode=binary dist/gateway/<target>/cli-proxy-api"
+  },
+  "fixes": [
+    {
+      "commits": ["e6fcfa34"],
+      "release": "7.3.16",
+      "subject": "fix(logging): prevent request log collisions and select latest log by ID",
+      "disposition": "rebase",
+      "reason": "Reachable for the forced error logs of failed requests, but it concerns two log files with one name, not stored credentials or route availability; the read-only management allowlist refuses log retrieval."
+    },
+    {
+      "commits": ["aafa4e95"],
+      "release": "7.3.16",
+      "subject": "fix(auth): isolate credential-scoped quota cooldown from model quota state",
+      "disposition": "rebase",
+      "reason": "Not reachable: every change sits behind cooling being enabled, and the rendered disable-cooling true applies to every credential (no request-scoped force-cooldown rule, no cooling override). Upstream's regression tests fail on the pinned tree with cooling enabled; the same model-only plus credential-scoped 429 sequence under the rendered setting leaves no credential or model deadline."
+    },
+    {
+      "commits": ["855a7223"],
+      "release": "7.3.16",
+      "subject": "feat(pluginhost): add host http operation bridge and lifecycle scoping",
+      "disposition": "rebase",
+      "reason": "Not reachable: plugins are disabled, so no plugin stream, callback or instance exists."
+    },
+    {
+      "commits": ["c404af96"],
+      "release": "7.3.16",
+      "subject": "fix(auth): preserve file priority across plugin auth refreshes",
+      "disposition": "rebase",
+      "reason": "Not reachable: the refresh path it fixes runs only through plugin auth adapters (plugins are disabled); its management hunk is refused by the read-only allowlist."
+    },
+    {
+      "commits": ["759c57c2"],
+      "release": "7.3.17",
+      "subject": "fix(api): immediately close connections on stop and guard state access",
+      "disposition": "rebase",
+      "reason": "Not a credential or availability fix here. The stale shutdown deadline only makes the stop at process exit non-graceful, and upstream's change closes connections immediately as well; credential writes are atomic (temporary file, sync, rename), so an exit never leaves a torn credential; the listener race needs a stop during start and ends in process exit either way. Neither version waits for an in-flight refresh at shutdown."
+    },
+    {
+      "commits": ["1dffddf4"],
+      "release": "7.3.17",
+      "subject": "fix(session): avoid rescanning large payloads during session extraction",
+      "disposition": "rebase",
+      "reason": "CPU hardening for large request bodies; requests come only from local clients holding the gateway API key, and no credential or route state is involved."
+    },
+    {
+      "commits": ["c9a06ba6"],
+      "release": "7.3.17",
+      "subject": "fix(interceptors): avoid cloning request body for read-only interceptors",
+      "disposition": "rebase",
+      "reason": "Resource change with shared-buffer semantics that overlap the keyed-safety and interceptor patches; it needs an ownership audit, not a security backport."
+    },
+    {
+      "commits": ["5530cbd2"],
+      "release": "7.3.18",
+      "subject": "fix(auth): preserve attributes and path across plugin refreshes",
+      "disposition": "rebase",
+      "reason": "The plugin refresh part is not reachable (plugins are disabled). The watcher retry matters only when a credential path is missing for more than the 50 ms replace check; every credential writer here (sign-in and refresh saves) replaces the file by an atomic rename, so the path never disappears."
+    },
+    {
+      "commits": ["58461c8f", "960be012"],
+      "release": "7.3.18",
+      "subject": "fix(auth): unschedule disabled invalid_grant credentials and apply exponential backoff for enabled invalid_grant",
+      "disposition": "rebase",
+      "reason": "The disabled-credential part is not reachable: a credential is disabled only by a disabled field in its file or by a management write, claude-multi writes neither and the allowlist refuses management writes. For an enabled credential it changes only how often a refresh that already failed with invalid_grant is retried (every 5 minutes on the pinned release, 1 minute doubling to 30 minutes upstream); it restores no route and protects no stored credential."
+    },
+    {
+      "commits": ["6cd86fb2"],
+      "release": "7.3.19",
+      "subject": "feat(auth): support terminal rejection in plugin scheduler",
+      "disposition": "rebase",
+      "reason": "New plugin scheduler contract; plugins are disabled."
+    },
+    {
+      "commits": ["ef9e7120"],
+      "release": "7.3.20",
+      "subject": "feat(tui): support remote management base URL for client mode",
+      "disposition": "not-applicable",
+      "reason": "A feature that widens where management credentials may be sent, not a fix."
+    },
+    {
+      "commits": ["d9922f05", "9a0502c8"],
+      "release": "8.0.0",
+      "subject": "feat(config): add v8 configuration API; feat(api): use query params for v8 oauth routes",
+      "disposition": "rebase",
+      "reason": "New /v8/management namespace and OAuth routes; the read-only management allowlist scopes only /v0/management and must be extended to the new namespace before these routes are enabled."
+    },
+    {
+      "commits": ["6c385e60", "4a2c8186", "01274e22", "48686ccc"],
+      "release": "8.0.1-8.0.4",
+      "subject": "configuration migration to the v8 format",
+      "disposition": "rebase",
+      "reason": "Migration behaviour absent from the pinned release; the rebase must prove that local security settings are neither lost nor re-enabled by the migration."
+    },
+    {
+      "commits": ["5756d76e"],
+      "release": "8.0.3",
+      "subject": "fix(pluginhost): preserve disabled state in host auth callbacks",
+      "disposition": "rebase",
+      "reason": "Not reachable: the host auth callbacks serve plugins only, and plugins are disabled."
+    },
+    {
+      "commits": ["acdace93"],
+      "release": "8.0.3",
+      "subject": "fix(discovery): support bonded interfaces and deduplicate build warnings",
+      "disposition": "not-applicable",
+      "reason": "LAN discovery is disabled in the rendered configuration, and the change widens advertisement rather than fixing a flaw."
+    },
+    {
+      "commits": ["59baf731"],
+      "release": "8.0.4",
+      "subject": "feat(codex): extract and persist subscription plan type",
+      "disposition": "not-applicable",
+      "covered_by": "cli-proxy-api-auth-snapshot-locking.patch",
+      "reason": "Its Auth.Clone empty-map fix is already covered by the local snapshot patch, which also deep-copies metadata containers; the plan metadata is a feature."
+    },
+    {
+      "commits": ["b9971ee3"],
+      "release": "8.0.4",
+      "subject": "feat(sdk): add Home credential capabilities and quota APIs",
+      "disposition": "rebase",
+      "reason": "New Home and plugin-host SDK surface; Home is off."
+    },
+    {
+      "commits": ["d33f63f8"],
+      "release": "8.0.4",
+      "subject": "feat(logging): switch request ID generation to UUIDv7",
+      "disposition": "not-applicable",
+      "reason": "Request identifiers are not authorization tokens."
+    },
+    {
+      "commits": ["02548d67"],
+      "release": "8.0.5",
+      "subject": "fix(auth): log warnings on auth persistence failures",
+      "disposition": "not-applicable",
+      "covered_by": "cli-proxy-api-credential-save-report.patch",
+      "reason": "Persistence failures are already reported by the local metadata-only save receipts; upstream's warnings carry credential ids and raw error text."
+    },
+    {
+      "commits": ["81756a57"],
+      "release": "8.0.5",
+      "subject": "fix(auth): track auto-refresh job epochs and bound credential acquisition",
+      "disposition": "rebase",
+      "reason": "The bounded acquisition is Antigravity-only, and claude-multi has no Antigravity provider, route or sign-in. The job-epoch part needs refresh jobs that outlive the 1-minute pending window again and again, fill a queue of at least 64 jobs, or a restarted loop: Claude and ChatGPT account refreshes are bounded (30 s per attempt, 3 attempts), the loop starts once per process, and an install holds a handful of sign-ins."
+    },
+    {
+      "commits": ["bfa5aed4"],
+      "release": "8.0.5",
+      "subject": "fix(home): defer plugin load marking and preempt failing config on retry",
+      "disposition": "rebase",
+      "reason": "Home lifecycle only; Home is off."
+    },
+    {
+      "commits": ["b7f321f2"],
+      "release": "8.0.5",
+      "subject": "feat(api): support request path overrides and image protocols in model execution",
+      "disposition": "rebase",
+      "reason": "A new outbound-routing surface, not a fix; the rebase needs destination, path and redirect coverage for it."
+    },
+    {
+      "commits": ["097511b8"],
+      "release": "8.0.5",
+      "subject": "fix(management): remove deprecated credential quota endpoints from v8 API",
+      "disposition": "not-applicable",
+      "reason": "The removed endpoints do not exist in the pinned release."
+    },
+    {
+      "commits": ["df2774ca"],
+      "release": "8.0.5",
+      "subject": "feat(oauth): support per-channel model settings overrides",
+      "disposition": "rebase",
+      "reason": "Configuration feature that overlaps the local OAuth model overlay."
+    },
+    {
+      "commits": ["6004ebdf"],
+      "release": "8.0.5",
+      "subject": "fix(claude): fail open on unmapped oauth mcp tool aliases",
+      "disposition": "not-applicable",
+      "reason": "Forwards an unmapped tool name; it does not bypass authentication."
+    },
+    {
+      "commits": ["82f8e92b"],
+      "release": "8.0.6",
+      "subject": "fix(executor): support negotiated ALPN protocols in uTLS client",
+      "disposition": "rebase",
+      "reason": "Compatibility for endpoints that negotiate HTTP/1.1; the pinned client forces HTTP/2, which current sign-in and refresh endpoints accept; no verification bypass is involved."
+    },
+    {
+      "commits": ["9e71c20d"],
+      "release": "8.0.7",
+      "subject": "fix(codex): handle upstream stream disconnect before first payload as bad gateway",
+      "disposition": "rebase",
+      "reason": "Per-request error classification and failover; with one credential tried per request it changes the reported error, not credential state."
+    },
+    {
+      "commits": ["7d888bf3", "9bdde54b"],
+      "release": "7.3.16-7.3.17",
+      "subject": "Meta subscription metadata, client header and cooldown compatibility",
+      "disposition": "not-applicable",
+      "reason": "Compatibility changes, not security fixes."
+    },
+    {
+      "commits": ["f7c738da", "4332048d"],
+      "release": "7.3.17-7.3.18",
+      "subject": "Claude OAuth fingerprint, cloaking and thinking visibility",
+      "disposition": "rebase",
+      "reason": "Client-compatibility work that overlaps the local retention and compatibility patches; no gateway authorization fix."
+    },
+    {
+      "commits": ["8222e328", "107d7f76", "c7f358d4"],
+      "release": "7.3.17",
+      "subject": "thought-signature replay, Session_id support and stream log volume",
+      "disposition": "not-applicable",
+      "reason": "Model-protocol handling and log volume, not gateway authentication."
+    },
+    {
+      "commits": ["74c1ebd3"],
+      "release": "7.3.17",
+      "subject": "fix(registry): keep request context active until response body is read",
+      "disposition": "not-applicable",
+      "reason": "Updater catalog fetch; no credential or SSRF change."
+    },
+    {
+      "commits": ["ed980be3"],
+      "release": "7.3.18",
+      "subject": "fix(auth): preserve resolved model capabilities and configuration update support",
+      "disposition": "rebase",
+      "reason": "Broad compatibility work, not a security-only change."
+    },
+    {
+      "commits": ["b467a83c"],
+      "release": "8.0.8",
+      "subject": "fix(xai): bump pinned grok client version to 1.0.44 for chat-proxy",
+      "disposition": "not-applicable",
+      "reason": "Client identity compatibility, not a dependency or security fix."
+    },
+    {
+      "commits": ["63c04b4b"],
+      "release": "8.0.9",
+      "subject": "feat(config): introduce client configuration section for codex settings",
+      "disposition": "rebase",
+      "reason": "Configuration restructuring."
+    },
+    {
+      "commits": ["f3fd2f23", "9f35c1dc", "cf3102cc"],
+      "release": "8.0.10",
+      "subject": "signature log aggregation and executor translation refactors",
+      "disposition": "not-applicable",
+      "reason": "No authentication, credential or verification change."
+    }
+  ]
+}

@@ -1,0 +1,281 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "agents": {
+      "additionalProperties": false,
+      "properties": {
+        "cm-analyst": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "cm-analyst-strong": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "cm-designer": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "cm-explorer": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "cm-implementer": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "cm-implementer-light": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "cm-implementer-strong": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "cm-reviewer": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "cm-reviewer-strong": {
+          "additionalProperties": false,
+          "properties": {
+            "effort": {
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "type": "string"
+            },
+            "model": {
+              "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+              "type": "string"
+            },
+            "use": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "description": {
+      "maxLength": 256,
+      "type": "string"
+    },
+    "lead": {
+      "additionalProperties": false,
+      "properties": {
+        "effort": {
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "type": "string"
+        },
+        "model": {
+          "pattern": "^[a-z0-9][a-z0-9-]*(@[0-9A-Za-z][0-9A-Za-z.-]{0,15})?$",
+          "type": "string"
+        },
+        "use": {
+          "pattern": "^[a-z][a-z0-9-]{0,31}$",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "lead_providers": {
+      "items": {
+        "pattern": "^[a-z][a-z0-9-]*$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "name": {
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "type": "string"
+    },
+    "native_agents": {
+      "additionalProperties": false,
+      "properties": {
+        "explore": {
+          "enum": [
+            "replace",
+            "native",
+            "off"
+          ]
+        },
+        "general_purpose": {
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
+        "plan": {
+          "enum": [
+            "native",
+            "off"
+          ]
+        }
+      },
+      "required": [
+        "explore",
+        "plan",
+        "general_purpose"
+      ],
+      "type": "object"
+    },
+    "primary_provider": {
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "type": "string"
+    },
+    "seed": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "settings_overrides": {
+      "type": "object"
+    },
+    "version": {
+      "const": 2
+    },
+    "workflows": {
+      "enum": [
+        "native",
+        "off"
+      ]
+    }
+  },
+  "required": [
+    "version",
+    "name",
+    "lead",
+    "agents",
+    "native_agents"
+  ],
+  "type": "object",
+  "version": 1
+}

@@ -1,0 +1,57 @@
+{
+  "claude": [
+    {
+      "context_length": 1000000,
+      "created": 1779984000,
+      "display_name": "Claude Opus 4.8",
+      "id": "claude-opus-4-8",
+      "max_completion_tokens": 128000
+    },
+    {
+      "context_length": 1000000,
+      "created": 1784038800,
+      "display_name": "Claude Opus 5",
+      "id": "claude-opus-5",
+      "max_completion_tokens": 128000
+    },
+    {
+      "context_length": 1000000,
+      "created": 1781049600,
+      "display_name": "Claude Fable 5",
+      "id": "claude-fable-5",
+      "max_completion_tokens": 128000
+    },
+    {
+      "context_length": 1000000,
+      "created": 1790035200,
+      "display_name": "Claude Opus 5.5",
+      "id": "claude-opus-5-5",
+      "max_completion_tokens": 128000
+    }
+  ],
+  "codex-free": [
+    {
+      "context_length": 272000,
+      "created": 1776902400,
+      "display_name": "GPT 5.5",
+      "id": "gpt-5.5",
+      "max_completion_tokens": 128000
+    }
+  ],
+  "codex-pro": [
+    {
+      "context_length": 272000,
+      "created": 1776902400,
+      "display_name": "GPT 5.5",
+      "id": "gpt-5.5",
+      "max_completion_tokens": 128000
+    },
+    {
+      "context_length": 921000,
+      "created": 1783616400,
+      "display_name": "GPT 5.6 Sol",
+      "id": "gpt-5.6-sol",
+      "max_completion_tokens": 128000
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "type": "object",
+  "required": ["version", "gateway"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "audits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "openai_compat_keyed": { "type": "boolean" }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "required": ["base_url", "health_path", "token_file", "auth_dir", "service", "cliproxyapi_baseline", "patches", "model_discovery", "renderer", "cliproxy_static"],
+      "additionalProperties": false,
+      "properties": {
+        "base_url": { "type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]+$" },
+        "health_path": { "type": "string", "pattern": "^/[a-z]+$" },
+        "token_file": { "type": "string", "pattern": "^\\.[a-z0-9._/-]+$" },
+        "auth_dir": { "type": "string", "pattern": "^\\.[a-z0-9._/-]+$" },
+        "service": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "cliproxyapi_baseline": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "patches": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9-]+\\.patch$" }
+        },
+        "model_discovery": { "const": "disabled" },
+        "renderer": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "cliproxy_static": {
+          "type": "object",
+          "required": ["tls", "remote-management", "debug", "pprof", "plugins", "discovery", "commercial-mode", "logging-to-file", "usage-statistics-enabled", "proxy-url", "passthrough-headers", "request-retry", "max-retry-credentials", "max-retry-interval", "disable-cooling", "save-cooldown-status", "quota-exceeded", "routing", "ws-auth"],
+          "additionalProperties": false,
+          "properties": {
+            "tls": {
+              "type": "object",
+              "required": ["enable", "cert", "key"],
+              "additionalProperties": false,
+              "properties": {
+                "enable": { "type": "boolean" },
+                "cert": { "type": "string" },
+                "key": { "type": "string" }
+              }
+            },
+            "remote-management": {
+              "type": "object",
+              "required": ["allow-remote", "secret-key", "disable-control-panel", "disable-auto-update-panel"],
+              "additionalProperties": false,
+              "properties": {
+                "allow-remote": { "const": false },
+                "secret-key": { "const": "" },
+                "disable-control-panel": { "const": true },
+                "disable-auto-update-panel": { "const": true }
+              }
+            },
+            "debug": { "type": "boolean" },
+            "pprof": {
+              "type": "object",
+              "required": ["enable", "addr"],
+              "additionalProperties": false,
+              "properties": {
+                "enable": { "type": "boolean" },
+                "addr": { "type": "string", "pattern": "^[0-9.]+:[0-9]+$" }
+              }
+            },
+            "plugins": {
+              "type": "object",
+              "required": ["enabled", "dir", "configs"],
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "dir": { "type": "string" },
+                "configs": { "type": "object" }
+              }
+            },
+            "discovery": {
+              "type": "object",
+              "required": ["enabled"],
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "const": false }
+              }
+            },
+            "commercial-mode": { "type": "boolean" },
+            "logging-to-file": { "type": "boolean" },
+            "usage-statistics-enabled": { "const": false },
+            "proxy-url": { "type": "string" },
+            "passthrough-headers": { "type": "boolean" },
+            "request-retry": { "type": "integer", "minimum": 0 },
+            "max-retry-credentials": { "type": "integer", "minimum": 0 },
+            "max-retry-interval": { "type": "integer", "minimum": 0 },
+            "disable-cooling": { "type": "boolean" },
+            "save-cooldown-status": { "type": "boolean" },
+            "quota-exceeded": {
+              "type": "object",
+              "required": ["switch-project", "switch-preview-model", "antigravity-credits"],
+              "additionalProperties": false,
+              "properties": {
+                "switch-project": { "type": "boolean" },
+                "switch-preview-model": { "type": "boolean" },
+                "antigravity-credits": { "type": "boolean" }
+              }
+            },
+            "routing": {
+              "type": "object",
+              "required": ["strategy", "session-affinity", "session-affinity-ttl"],
+              "additionalProperties": false,
+              "properties": {
+                "strategy": { "type": "string", "pattern": "^[a-z-]+$" },
+                "session-affinity": { "type": "boolean" },
+                "session-affinity-ttl": { "type": "string", "pattern": "^[0-9]+[smhd]$" }
+              }
+            },
+            "ws-auth": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "provider": {
+    "display": "LAN box",
+    "kind": "openai-compatible-lan",
+    "base_url": "http://box.lan:8010/v1",
+    "auth": {
+      "kind": "none"
+    },
+    "independence_family": "local"
+  },
+  "lines": {
+    "custom-lan-model": {
+      "wire_model": "lan-model",
+      "display": "LAN model",
+      "efforts": [
+        "high"
+      ],
+      "default_effort": "high",
+      "context": {
+        "declared_tokens": 32768,
+        "source": "operator"
+      }
+    }
+  }
+}

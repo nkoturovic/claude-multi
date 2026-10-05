@@ -1,0 +1,566 @@
+diff --git a/internal/runtime/executor/claude_manager_prepare_cm053_test.go b/internal/runtime/executor/claude_manager_prepare_cm053_test.go
+new file mode 100644
+index 0000000..6cf0e65
+--- /dev/null
++++ b/internal/runtime/executor/claude_manager_prepare_cm053_test.go
+@@ -0,0 +1,154 @@
++package executor
++
++// The manager/HTTP path: concurrent requests on shared Claude
++// credentials prepare through Manager.PrepareRequestAuth while selection and
++// routing read the manager's published credentials. Preparation must work on a
++// manager-owned copy and publish through the manager; no request goroutine may
++// write a map that a published credential (or its scheduler snapshot) still
++// references. Synthetic credentials, an in-process RoundTripper, no network.
++import (
++	"bytes"
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"sync"
++	"sync/atomic"
++	"testing"
++
++	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++)
++
++type cm053OwnUpstream struct{ calls atomic.Int64 }
++
++func (u *cm053OwnUpstream) RoundTrip(req *http.Request) (*http.Response, error) {
++	u.calls.Add(1)
++	if req.Body != nil {
++		_, _ = io.Copy(io.Discard, req.Body)
++		_ = req.Body.Close()
++	}
++	body := `{"id":"msg_cm053","type":"message","role":"assistant","model":"cm053-wire","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
++	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
++		Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader([]byte(body))),
++		ContentLength: int64(len(body)), Request: req}, nil
++}
++
++type cm053OwnUpstreamProvider struct{ rt http.RoundTripper }
++
++func (p cm053OwnUpstreamProvider) RoundTripperFor(*cliproxyauth.Auth) http.RoundTripper { return p.rt }
++
++// A non-built-in selector keeps every pick on the legacy path, which clones the
++// published candidates (availableAuthsForSelector / pickNextMixedLegacy).
++type cm053OwnLegacySelector struct {
++	inner cliproxyauth.RoundRobinSelector
++}
++
++func (s *cm053OwnLegacySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
++	return s.inner.Pick(ctx, provider, model, opts, auths)
++}
++
++func TestCM053ManagerPrepareConcurrentReaders(t *testing.T) {
++	for _, legacy := range []bool{true, false} {
++		name := "scheduler"
++		if legacy {
++			name = "legacy"
++		}
++		t.Run(name, func(t *testing.T) { cm053ManagerPrepareConcurrentReaders(t, legacy) })
++	}
++}
++
++func cm053ManagerPrepareConcurrentReaders(t *testing.T, legacy bool) {
++	const credentials, perCredential = 4, 16
++	upstream := &cm053OwnUpstream{}
++	manager := cliproxyauth.NewManager(nil, nil, nil)
++	manager.SetRetryConfig(0, 0, 0)
++	manager.SetRoundTripperProvider(cm053OwnUpstreamProvider{rt: upstream})
++	if legacy {
++		manager.SetSelector(&cm053OwnLegacySelector{})
++	}
++	manager.RegisterExecutor(NewClaudeExecutor(&config.Config{}))
++	reg := registry.GetGlobalRegistry()
++	ids := make([]string, credentials)
++	models := make([]string, credentials)
++	for i := range ids {
++		ids[i] = fmt.Sprintf("cm053-b108-%s-%d", t.Name(), i)
++		models[i] = fmt.Sprintf("cm053-b108-model-%d", i)
++		reg.RegisterClient(ids[i], "claude", []*registry.ModelInfo{{ID: models[i]}})
++		id := ids[i]
++		t.Cleanup(func() { reg.UnregisterClient(id) })
++		// Config-synthesized OAuth-shaped key: no metadata until preparation.
++		if _, err := manager.Register(context.Background(), &cliproxyauth.Auth{ID: ids[i], Provider: "claude",
++			Status: cliproxyauth.StatusActive, Attributes: map[string]string{
++				"api_key": fmt.Sprintf("sk-ant-oat-cm053-synthetic-%d", i), "auth_kind": "setup_token"}}); err != nil {
++			t.Fatal(err)
++		}
++	}
++
++	start := make(chan struct{})
++	stop := make(chan struct{})
++	var requests, readers sync.WaitGroup
++	var failures atomic.Int64
++	for i := 0; i < credentials; i++ {
++		for j := 0; j < perCredential; j++ {
++			requests.Add(1)
++			go func(model string) {
++				defer requests.Done()
++				<-start
++				payload := []byte(`{"model":"` + model + `","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
++				if _, err := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{
++					Model: model, Payload: payload}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude}); err != nil {
++					failures.Add(1)
++					t.Errorf("execute %s: %v", model, err)
++				}
++			}(models[i])
++		}
++	}
++	// Routing/selection readers of the published credentials.
++	for r := 0; r < 4; r++ {
++		readers.Add(1)
++		go func() {
++			defer readers.Done()
++			<-start
++			for {
++				select {
++				case <-stop:
++					return
++				default:
++				}
++				for _, auth := range manager.List() {
++					_ = auth.AuthKind()
++					_, _ = auth.AccountInfo()
++					_, _ = auth.AccessTokenExpirationTime()
++					_ = cliproxyauth.AccessTokenSHA256(auth)
++				}
++			}
++		}()
++	}
++	close(start)
++	requests.Wait()
++	close(stop)
++	readers.Wait()
++	if failures.Load() != 0 {
++		t.Fatalf("%d requests failed", failures.Load())
++	}
++	if got := upstream.calls.Load(); got != credentials*perCredential {
++		t.Fatalf("upstream calls = %d, want %d", got, credentials*perCredential)
++	}
++	for _, id := range ids {
++		published, ok := manager.GetByID(id)
++		if !ok || published == nil {
++			t.Fatalf("credential %s missing", id)
++		}
++		if claudeauth.ReadMetadataString(&published.Metadata, "account_uuid") == "" {
++			t.Fatalf("credential %s: preparation was not published through the manager", id)
++		}
++		if !claudeauth.HasCanonicalDeviceIDPool(claudeauth.ReadDeviceIDPool(&published.Metadata)) {
++			t.Fatalf("credential %s: device pool was not published through the manager", id)
++		}
++	}
++}
+diff --git a/sdk/cliproxy/auth/auth_snapshot_cm053_test.go b/sdk/cliproxy/auth/auth_snapshot_cm053_test.go
+new file mode 100644
+index 0000000..90c2016
+--- /dev/null
++++ b/sdk/cliproxy/auth/auth_snapshot_cm053_test.go
+@@ -0,0 +1,260 @@
++package auth
++
++// Credential ownership (the published credentials and their writers): a
++// credential published in Manager.auths is read and written only under m.mu.
++// Register/updateInternal detach the scheduler's copy while the lock is held,
++// and Auth.Clone gives the copy its own maps (empty ones included) and its own
++// JSON containers, so no later writer of either object reaches the other.
++// Synthetic credentials, no network.
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"reflect"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++)
++
++const cm053SnapshotRounds = 200
++
++func cm053SnapshotSeed(id, model string) *Auth {
++	return &Auth{ID: id, Provider: "claude", Status: StatusActive,
++		Attributes: map[string]string{"api_key": "cm053-snapshot-synthetic"},
++		ModelStates: map[string]*ModelState{model: {Status: StatusError, Unavailable: true,
++			NextRetryAfter: time.Now().Add(-time.Minute)}}}
++}
++
++// cm053SnapshotPeers runs reconciliation and request results (the other
++// writers of the published credential, both under m.mu) against publish.
++func cm053SnapshotPeers(t *testing.T, manager *Manager, id, model string, publish func(i int) error) {
++	t.Helper()
++	start := make(chan struct{})
++	var wg sync.WaitGroup
++	wg.Add(3)
++	go func() {
++		defer wg.Done()
++		<-start
++		for i := 0; i < cm053SnapshotRounds; i++ {
++			if err := publish(i); err != nil {
++				t.Error(err)
++				return
++			}
++		}
++	}()
++	go func() {
++		defer wg.Done()
++		<-start
++		for i := 0; i < cm053SnapshotRounds; i++ {
++			manager.ReconcileRegistryModelStates(context.Background(), id)
++		}
++	}()
++	go func() {
++		defer wg.Done()
++		<-start
++		for i := 0; i < cm053SnapshotRounds; i++ {
++			manager.MarkResult(context.Background(), Result{AuthID: id, Provider: "claude", Model: model, Success: i%2 == 0})
++		}
++	}()
++	close(start)
++	wg.Wait()
++}
++
++func cm053SchedulerAuth(m *Manager, id string) *Auth {
++	m.scheduler.mu.Lock()
++	defer m.scheduler.mu.Unlock()
++	for _, provider := range m.scheduler.providers {
++		if meta := provider.auths[id]; meta != nil {
++			return meta.auth
++		}
++	}
++	return nil
++}
++
++func TestCM053UpdateSchedulerSnapshotConcurrentReconcile(t *testing.T) {
++	ctx := context.Background()
++	manager := NewManager(nil, nil, nil)
++	id, model := "cm053-update-snapshot", "cm053-update-model"
++	seed := cm053SnapshotSeed(id, model)
++	registry.GetGlobalRegistry().RegisterClient(id, "claude", []*registry.ModelInfo{{ID: model}})
++	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(id) })
++	if _, err := manager.Register(ctx, seed); err != nil {
++		t.Fatal(err)
++	}
++	cm053SnapshotPeers(t, manager, id, model, func(i int) error {
++		next := seed.Clone()
++		next.Label = fmt.Sprintf("cm053-%d", i)
++		_, err := manager.Update(ctx, next)
++		return err
++	})
++	published, ok := manager.GetByID(id)
++	if !ok || published.Label != fmt.Sprintf("cm053-%d", cm053SnapshotRounds-1) {
++		t.Fatalf("last update not published: %+v", published)
++	}
++	if published.Success+published.Failed == 0 {
++		t.Fatal("request results were not recorded on the published credential")
++	}
++}
++
++func TestCM053RegisterSchedulerSnapshotConcurrentReconcile(t *testing.T) {
++	ctx := context.Background()
++	manager := NewManager(nil, nil, nil)
++	id, model := "cm053-register-snapshot", "cm053-register-model"
++	seed := cm053SnapshotSeed(id, model)
++	registry.GetGlobalRegistry().RegisterClient(id, "claude", []*registry.ModelInfo{{ID: model}})
++	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(id) })
++	if _, err := manager.Register(ctx, seed.Clone()); err != nil {
++		t.Fatal(err)
++	}
++	var lastEpoch uint64
++	cm053SnapshotPeers(t, manager, id, model, func(i int) error {
++		next := seed.Clone()
++		next.Label = fmt.Sprintf("cm053-%d", i)
++		registered, err := manager.Register(ctx, next)
++		if err == nil && registered != nil {
++			lastEpoch = registered.RegistrationEpoch
++		}
++		return err
++	})
++	published, ok := manager.GetByID(id)
++	if !ok || published.RegistrationEpoch != lastEpoch || published.Label != fmt.Sprintf("cm053-%d", cm053SnapshotRounds-1) {
++		t.Fatalf("last registration not published: %+v", published)
++	}
++}
++
++func TestCM053AuthSchedulerSnapshotOwnership(t *testing.T) {
++	t.Run("clone owns maps and containers", func(t *testing.T) {
++		source := &Auth{ID: "cm053-own", Attributes: map[string]string{}, Metadata: map[string]any{},
++			ModelStates: map[string]*ModelState{}}
++		clone := source.Clone()
++		clone.Attributes["k"] = "v"
++		clone.Metadata["k"] = "v"
++		clone.ModelStates["m"] = &ModelState{}
++		if len(source.Attributes)+len(source.Metadata)+len(source.ModelStates) != 0 {
++			t.Fatalf("clone wrote through empty maps of its source: %v %v %v", source.Attributes, source.Metadata, source.ModelStates)
++		}
++		if nilClone := (&Auth{ID: "cm053-nil"}).Clone(); nilClone.Attributes != nil || nilClone.Metadata != nil || nilClone.ModelStates != nil {
++			t.Fatal("nil maps must stay nil")
++		}
++		nested := &Auth{ID: "cm053-nested", Metadata: map[string]any{
++			"claude_device_ids": []string{"a"}, "pool": []any{"x", map[string]any{"y": 1}},
++			"obj": map[string]any{"inner": map[string]any{"z": true}}, "hdr": map[string]string{"h": "1"},
++			"flag": "true", "skip_account_profile": nil, "n": 3}}
++		want := nested.Clone()
++		if !reflect.DeepEqual(want.Metadata, nested.Metadata) {
++			t.Fatalf("clone changed values: %#v", want.Metadata)
++		}
++		want.Metadata["claude_device_ids"].([]string)[0] = "b"
++		want.Metadata["pool"].([]any)[1].(map[string]any)["y"] = 2
++		want.Metadata["obj"].(map[string]any)["inner"].(map[string]any)["z"] = false
++		want.Metadata["hdr"].(map[string]string)["h"] = "2"
++		if nested.Metadata["claude_device_ids"].([]string)[0] != "a" ||
++			nested.Metadata["pool"].([]any)[1].(map[string]any)["y"] != 1 ||
++			nested.Metadata["obj"].(map[string]any)["inner"].(map[string]any)["z"] != true ||
++			nested.Metadata["hdr"].(map[string]string)["h"] != "1" {
++			t.Fatalf("clone shares nested containers with its source: %#v", nested.Metadata)
++		}
++		if v, present := want.Metadata["skip_account_profile"]; !present || v != nil {
++			t.Fatal("a present nil value must stay present and nil")
++		}
++		// Clone only detaches ownership: nil, non-nil empty and populated string
++		// slices keep their value and their JSON shape (null, [], [...]).
++		for name, ids := range map[string][]string{"nil": nil, "empty": {}, "populated": {"a", "b"}} {
++			source := &Auth{ID: "cm053-slices", Metadata: map[string]any{"ids": ids}}
++			cloned := source.Clone().Metadata["ids"].([]string)
++			if !reflect.DeepEqual(cloned, ids) || (cloned == nil) != (ids == nil) {
++				t.Fatalf("%s []string clone = %#v, want %#v", name, cloned, ids)
++			}
++			got, errGot := json.Marshal(map[string]any{"ids": cloned})
++			want, errWant := json.Marshal(source.Metadata)
++			if errGot != nil || errWant != nil || string(got) != string(want) {
++				t.Fatalf("%s []string clone serializes %s, source %s (%v %v)", name, got, want, errGot, errWant)
++			}
++			if len(ids) > 0 {
++				cloned[0] = "changed"
++				if ids[0] != "a" {
++					t.Fatalf("%s []string clone shares its backing array", name)
++				}
++			}
++		}
++	})
++
++	t.Run("published, scheduler and returned copies are distinct", func(t *testing.T) {
++		ctx := context.Background()
++		manager := NewManager(nil, nil, nil)
++		id := "cm053-owner"
++		registered, err := manager.Register(ctx, &Auth{ID: id, Provider: "claude", Status: StatusActive,
++			Attributes: map[string]string{}, Metadata: map[string]any{}})
++		if err != nil {
++			t.Fatal(err)
++		}
++		updated, err := manager.Update(ctx, registered.Clone())
++		if err != nil {
++			t.Fatal(err)
++		}
++		manager.mu.RLock()
++		published := manager.auths[id]
++		manager.mu.RUnlock()
++		scheduled := cm053SchedulerAuth(manager, id)
++		if scheduled == nil {
++			t.Fatal("credential missing from the scheduler")
++		}
++		for name, other := range map[string]*Auth{"scheduler": scheduled, "register result": registered, "update result": updated} {
++			if other == published {
++				t.Fatalf("%s aliases the published credential", name)
++			}
++			other.Metadata["cm053"] = name
++			other.Attributes["cm053"] = name
++		}
++		if len(published.Metadata) != 0 || len(published.Attributes) != 0 {
++			t.Fatalf("published credential written through a copy: %v %v", published.Metadata, published.Attributes)
++		}
++	})
++
++	t.Run("preparation on an empty map publishes through the manager", func(t *testing.T) {
++		ctx := context.Background()
++		manager := NewManager(nil, nil, nil)
++		id := "cm053-prepare"
++		if _, err := manager.Register(ctx, &Auth{ID: id, Provider: "claude", Status: StatusActive}); err != nil {
++			t.Fatal(err)
++		}
++		preparer := &cm053OwnPreparer{}
++		prepared, err := manager.PrepareRequestAuth(ctx, preparer, &Auth{ID: id, Provider: "claude"})
++		if err != nil || prepared == nil {
++			t.Fatalf("prepare: %v %v", prepared, err)
++		}
++		published, _ := manager.GetByID(id)
++		if published.Metadata["cm053_prepared"] != "yes" {
++			t.Fatalf("prepared metadata not published: %v", published.Metadata)
++		}
++		prepared.Metadata["cm053_after"] = "request-local"
++		if again, _ := manager.GetByID(id); again.Metadata["cm053_after"] != nil {
++			t.Fatal("the prepared auth handed to the request aliases the published credential")
++		}
++		if preparer.calls != 1 {
++			t.Fatalf("preparer calls = %d, want 1", preparer.calls)
++		}
++		if _, err := manager.PrepareRequestAuth(ctx, preparer, &Auth{ID: id, Provider: "claude"}); err != nil || preparer.calls != 1 {
++			t.Fatalf("a published preparation must not be repeated: calls=%d err=%v", preparer.calls, err)
++		}
++	})
++}
++
++// cm053OwnPreparer mimics the Claude preparer's shape: ShouldPrepare initializes an
++// empty metadata map on the auth it inspects, Prepare fills the copy it is given.
++type cm053OwnPreparer struct{ calls int }
++
++func (p *cm053OwnPreparer) ShouldPrepareRequestAuth(auth *Auth) bool {
++	if auth.Metadata == nil {
++		auth.Metadata = map[string]any{}
++	}
++	return auth.Metadata["cm053_prepared"] == nil
++}
++
++func (p *cm053OwnPreparer) PrepareRequestAuth(_ context.Context, auth *Auth) (*Auth, error) {
++	p.calls++
++	auth.Metadata["cm053_prepared"] = "yes"
++	return auth, nil
++}
+diff --git a/sdk/cliproxy/auth/conductor_lifecycle.go b/sdk/cliproxy/auth/conductor_lifecycle.go
+index 2716fcc..b0cd2a0 100644
+--- a/sdk/cliproxy/auth/conductor_lifecycle.go
++++ b/sdk/cliproxy/auth/conductor_lifecycle.go
+@@ -115,12 +115,15 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
+ 	auth.Generation = 1
+ 	authClone := auth.Clone()
+ 	m.auths[auth.ID] = authClone
++	// The published credential is read and written only under m.mu (reconcile,
++	// MarkResult): detach the scheduler's copy before the lock is released.
++	schedulerSnapshot := m.schedulerSnapshotLocked(authClone)
+ 	m.mu.Unlock()
+ 	if !shouldDeferAPIKeyModelAliasRebuild(ctx) {
+ 		m.rebuildAPIKeyModelAliasFromRuntimeConfig()
+ 	}
+-	if m.scheduler != nil {
+-		m.scheduler.upsertAuth(authClone.Clone())
++	if schedulerSnapshot != nil {
++		m.scheduler.upsertAuth(schedulerSnapshot)
+ 	}
+ 	m.structuralEpoch.Add(1)
+ 	m.queueRefreshReschedule(auth.ID)
+@@ -132,6 +135,15 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
+ 	return auth.Clone(), nil
+ }
+ 
++// schedulerSnapshotLocked returns the scheduler's detached copy of a credential
++// just published in m.auths, or nil without a scheduler. m.mu must be held.
++func (m *Manager) schedulerSnapshotLocked(published *Auth) *Auth {
++	if m.scheduler == nil || published == nil {
++		return nil
++	}
++	return published.Clone()
++}
++
+ type updateAuthMode int
+ 
+ const (
+@@ -269,12 +281,15 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
+ 	}
+ 	authClone := auth.Clone()
+ 	m.auths[auth.ID] = authClone
++	// The published credential is read and written only under m.mu (reconcile,
++	// MarkResult): detach the scheduler's copy before the lock is released.
++	schedulerSnapshot := m.schedulerSnapshotLocked(authClone)
+ 	m.mu.Unlock()
+ 	if !shouldDeferAPIKeyModelAliasRebuild(ctx) {
+ 		m.rebuildAPIKeyModelAliasFromRuntimeConfig()
+ 	}
+-	if m.scheduler != nil {
+-		m.scheduler.upsertAuth(authClone.Clone())
++	if schedulerSnapshot != nil {
++		m.scheduler.upsertAuth(schedulerSnapshot)
+ 	}
+ 	m.structuralEpoch.Add(1)
+ 	m.queueRefreshReschedule(auth.ID)
+diff --git a/sdk/cliproxy/auth/types.go b/sdk/cliproxy/auth/types.go
+index 7791230..51d0bc1 100644
+--- a/sdk/cliproxy/auth/types.go
++++ b/sdk/cliproxy/auth/types.go
+@@ -291,19 +291,22 @@ func (a *Auth) Clone() *Auth {
+ 	}
+ 	copyAuth := *a
+ 	copyAuth.Quota = a.Quota.Clone()
+-	if len(a.Attributes) > 0 {
++	// A clone owns every map it carries, empty ones included: a request path that
++	// fills an empty map of its copy must never write into the manager's published
++	// credential. nil stays nil.
++	if a.Attributes != nil {
+ 		copyAuth.Attributes = make(map[string]string, len(a.Attributes))
+ 		for key, value := range a.Attributes {
+ 			copyAuth.Attributes[key] = value
+ 		}
+ 	}
+-	if len(a.Metadata) > 0 {
++	if a.Metadata != nil {
+ 		copyAuth.Metadata = make(map[string]any, len(a.Metadata))
+ 		for key, value := range a.Metadata {
+-			copyAuth.Metadata[key] = value
++			copyAuth.Metadata[key] = cloneMetadataValue(value)
+ 		}
+ 	}
+-	if len(a.ModelStates) > 0 {
++	if a.ModelStates != nil {
+ 		copyAuth.ModelStates = make(map[string]*ModelState, len(a.ModelStates))
+ 		for key, state := range a.ModelStates {
+ 			copyAuth.ModelStates[key] = state.Clone()
+@@ -313,6 +316,52 @@ func (a *Auth) Clone() *Auth {
+ 	return &copyAuth
+ }
+ 
++// cloneMetadataValue copies the JSON container shapes credential metadata holds
++// (nested objects, arrays and the Claude device-ID pool), so a clone never shares
++// a mutable container with its source. Scalars and other values are returned as is.
++func cloneMetadataValue(value any) any {
++	switch typed := value.(type) {
++	case map[string]any:
++		if typed == nil {
++			return typed
++		}
++		out := make(map[string]any, len(typed))
++		for key, item := range typed {
++			out[key] = cloneMetadataValue(item)
++		}
++		return out
++	case map[string]string:
++		if typed == nil {
++			return typed
++		}
++		out := make(map[string]string, len(typed))
++		for key, item := range typed {
++			out[key] = item
++		}
++		return out
++	case []any:
++		if typed == nil {
++			return typed
++		}
++		out := make([]any, len(typed))
++		for index, item := range typed {
++			out[index] = cloneMetadataValue(item)
++		}
++		return out
++	case []string:
++		if typed == nil {
++			return typed
++		}
++		// make+copy, not append onto nil: a non-nil empty slice stays non-nil
++		// (it serializes as [] and never flips a credentials comparison to null).
++		out := make([]string, len(typed))
++		copy(out, typed)
++		return out
++	default:
++		return value
++	}
++}
++
+ func stableAuthIndex(seed string) string {
+ 	seed = strings.TrimSpace(seed)
+ 	if seed == "" {

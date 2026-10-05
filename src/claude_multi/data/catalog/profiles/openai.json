@@ -1,0 +1,54 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-analyst-strong": {
+      "effort": "max",
+      "model": "astra"
+    },
+    "cm-explorer": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-implementer": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-implementer-light": {
+      "effort": "max",
+      "model": "sol"
+    },
+    "cm-implementer-strong": {
+      "effort": "xhigh",
+      "model": "astra"
+    },
+    "cm-reviewer": {
+      "effort": "max",
+      "model": "sol"
+    },
+    "cm-reviewer-strong": {
+      "effort": "max",
+      "model": "astra"
+    }
+  },
+  "description": "Astra lead and strong grades; Sol high explorer, xhigh analyst/writer, max light writer/reviewer; one OpenAI pool",
+  "lead": {
+    "effort": "ultracode",
+    "model": "astra"
+  },
+  "name": "openai",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "primary_provider": "openai",
+  "seed": {
+    "id": "openai",
+    "version": 3
+  },
+  "version": 2,
+  "workflows": "native"
+}

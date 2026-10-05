@@ -1,0 +1,24 @@
+
+  edit profile — balanced  (seed)
+  ─────────────────────────────────────────────────────────────────────────────
+  General   name balanced · description "Fixture seed balanced: frozen test da…
+  Lead      Opus 5.5 · ultracode                                       [Enter]
+
+  Agents                   binding                          provider
+    explorer               GPT-5.6 Sol · high               openai
+    analyst                GPT-5.6 Sol · high               openai
+    analyst-strong         Opus 5.5 · xhigh                 anthropic
+    implementer-light      GPT-5.6 Sol · high               openai
+    implementer            GPT-5.6 Sol · high               openai
+    implementer-strong     GPT-5.6 Sol · xhigh              openai
+    reviewer               GPT-5.6 Sol · xhigh              openai
+    reviewer-strong        Opus 5.5 · xhigh                 anthropic
+    designer               — unbound —
+
+  Native    Explore→cm-explorer · Plan native · general-purpose off · workflow…
+  Review    routing table ▸ (4 authors, 0 same-family)
+  Checks    ✓ valid   ! explorer+implementers share openai
+
+
+  Enter change · U unbind · N named bindings · R routing · ^S save · ? help
+  Esc back

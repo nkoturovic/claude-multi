@@ -1,0 +1,1 @@
+claude-multi: /cm received 2 arguments; write the request without quotes (balanced apostrophes split it), e.g. /cm set implementer=opus:high

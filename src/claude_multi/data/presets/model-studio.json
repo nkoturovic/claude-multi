@@ -1,0 +1,22 @@
+{
+  "lines": {},
+  "notes": "Model Studio pay-as-you-go (Singapore). Its documentation prefers your workspace host: --base-url https://WORKSPACE.ap-southeast-1.maas.aliyuncs.com/apps/anthropic. It serves several model families and has no model-list endpoint. Declaration only: add models with claude-multi models add model-studio WIRE …, then admit them.",
+  "preset": {
+    "checked": "2026-10-04",
+    "source": "docs",
+    "source_ref": "https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages",
+    "support": "preset"
+  },
+  "provider": {
+    "auth": {
+      "header": "x-api-key",
+      "kind": "header",
+      "secret_ref": "env:DASHSCOPE_API_KEY"
+    },
+    "base_url": "https://dashscope-intl.aliyuncs.com/apps/anthropic",
+    "display": "Alibaba Cloud Model Studio",
+    "independence_family": "unknown",
+    "kind": "anthropic-compatible"
+  },
+  "version": 1
+}

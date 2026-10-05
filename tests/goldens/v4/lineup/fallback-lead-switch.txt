@@ -1,0 +1,12 @@
+Fallback target: openai · profile openai
+  lead: Opus 5.5 · 1M selector · ultracode → GPT-5.6 Sol · ultracode
+  cm-analyst-strong: Opus 5.5 · 1M selector · xhigh → GPT-5.6 Sol · xhigh
+  cm-reviewer: GPT-5.6 Sol · xhigh → GPT-5.6 Sol · high
+  cm-reviewer-strong: Opus 5.5 · 1M selector · xhigh → GPT-5.6 Sol · xhigh
+! review same-family (reduced independence)
+Effect: LIVE
+Existing agents keep their current task and model. Start fresh agents after the change.
+Fallback staged at generation 2.
+Run /reload-plugins before starting fresh agents; reload is not yet confirmed.
+pinned now: the session stops following profile balanced — /cm follow returns to it
+Next: /reload-plugins, then /model (press s) — or resume the session.

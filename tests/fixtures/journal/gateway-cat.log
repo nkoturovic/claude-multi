@@ -1,0 +1,6 @@
+[2026-09-26 11:30:00] [a0000001] [info ] [selector.go:1109] session-affinity: cache miss, new binding | session=fixture-session auth=fixture-auth provider=codex model=fixture-quota-model
+[2026-09-26 11:30:00] [a0000001] [warn ] [gin_logger.go:101] 403 |          12ms |       127.0.0.1 | POST    "/v1/messages"
+[2026-09-26 11:31:00] [a0000002] [info ] [selector.go:1109] session-affinity: cache miss, new binding | session=fixture-session auth=fixture-auth provider=codex model=fixture-healthy-model
+[2026-09-26 11:31:00] [a0000002] [info ] [gin_logger.go:103] 200 |          12ms |       127.0.0.1 | POST    "/v1/messages"
+[2026-09-26 11:32:00] [--------] [debug] [conductor_refresh.go:550] refreshed codex, fixture-auth, token refresh failed with status 400: {"error":"invalid_grant"}
+[2026-09-26 11:33:00] [--------] [debug] [conductor_refresh.go:550] refreshed codex, fixture-auth, <nil>

@@ -1,0 +1,31 @@
+usage: claude-multi-proxy COMMAND [ARGS]
+
+The claude-multi local gateway (CLIProxyAPI, loopback only).
+
+commands:
+  init [--reload-check | --start-check | --prepare-start] [--state-root /abs]
+                                  prepare config/key/directories; verify hot reload (up to 2 s);
+                                  --start-check waits up to 45 s after a (re)start;
+                                  --prepare-start selects management keys only while stopped
+  status                          loopback health and management key state; never initializes
+  rotate-management-key           stage a key; takes effect at the next prepared start
+  disable-management-key          disable quota reads until explicitly re-enabled
+  run [--prepared | --prepare-and-exec [--detach]] [--instance NONCE] [--state-root /abs]
+                                  exec the gateway, holding the single-instance lock across exec;
+                                  --prepared verifies init output read-only; --prepare-and-exec
+                                  prepares like init --prepare-start, then execs in one process
+  claude-login [--state-root /abs]        sign in to a Claude account (use claude-multi providers sign-in anthropic)
+  codex-device-login [--state-root /abs]  sign in to a ChatGPT account (use claude-multi providers sign-in openai)
+  snapshot-auth [--restore NAME]   copy the auth dir aside / restore it (gateway stopped)
+  -v, --version                   print the version
+
+init normally exits 0 after rendering; --reload-check exits 0 reloaded, 3 restart
+required, 4 token mismatch, 5 down, 1 on errors (including rendering failures).
+--start-check retries a refused connection and needs the render sentinel plus one
+rendered OAuth alias served (when the render has any): 0 ready, 6 not ready (the
+message names what is missing), 1 on errors.
+run --prepared exits 1 if preparation is absent/stale; it never writes config.
+run exits 75 while another gateway instance holds the lock.
+Every command exits 130 when it is interrupted (Ctrl-C).
+
+The local gateway: claude-multi gateway status (also start, stop, restart, logs).

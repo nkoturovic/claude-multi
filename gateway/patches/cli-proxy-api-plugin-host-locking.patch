@@ -1,0 +1,517 @@
+diff --git a/internal/api/server_routes.go b/internal/api/server_routes.go
+index 1bf5471..7b2f4fb 100644
+--- a/internal/api/server_routes.go
++++ b/internal/api/server_routes.go
+@@ -217,8 +217,10 @@ func (s *Server) codexAlphaSearchModelRouterHost() handlers.PluginModelRouterHos
+ 	if s.pluginHost != nil {
+ 		return s.pluginHost
+ 	}
+-	if s.handlers != nil && s.handlers.ModelRouterHost != nil {
+-		return s.handlers.ModelRouterHost
++	if s.handlers != nil {
++		if router := s.handlers.CurrentModelRouterHost(); router != nil {
++			return router
++		}
+ 	}
+ 	return nil
+ }
+diff --git a/sdk/api/handlers/handlers.go b/sdk/api/handlers/handlers.go
+index 95e3183..347de32 100644
+--- a/sdk/api/handlers/handlers.go
++++ b/sdk/api/handlers/handlers.go
+@@ -369,6 +369,12 @@ type BaseAPIHandler struct {
+ 	// Cfg holds the current application configuration.
+ 	Cfg *config.SDKConfig
+ 
++	// pluginHostMu guards PluginHost and ModelRouterHost after construction
++	// (claude-multi local patch, plugin-host-locking): SetPluginHost and
++	// SetModelRouterHost publish under it, and every runtime reader takes one
++	// snapshot through pluginHosts and releases it before any plugin callback.
++	pluginHostMu sync.RWMutex
++
+ 	// PluginHost optionally applies plugin interceptors around upstream execution.
+ 	PluginHost PluginInterceptorHost
+ 
+@@ -411,10 +417,11 @@ func (h *BaseAPIHandler) SetPluginHost(host PluginInterceptorHost) {
+ 		return
+ 	}
+ 	if isNilPluginInterceptorHost(host) {
+-		h.PluginHost = nil
+-		return
++		host = nil
+ 	}
++	h.pluginHostMu.Lock()
+ 	h.PluginHost = host
++	h.pluginHostMu.Unlock()
+ }
+ 
+ // SetModelRouterHost configures the optional plugin model router host.
+@@ -423,10 +430,30 @@ func (h *BaseAPIHandler) SetModelRouterHost(host PluginModelRouterHost) {
+ 		return
+ 	}
+ 	if isNilPluginModelRouterHost(host) {
+-		h.ModelRouterHost = nil
+-		return
++		host = nil
+ 	}
++	h.pluginHostMu.Lock()
+ 	h.ModelRouterHost = host
++	h.pluginHostMu.Unlock()
++}
++
++// pluginHosts returns one consistent snapshot of the published plugin hosts.
++// The lock covers only the two interface reads: callers invoke the hosts after
++// it returns, so a plugin callback may re-enter SetPluginHost or a reader.
++func (h *BaseAPIHandler) pluginHosts() (PluginInterceptorHost, PluginModelRouterHost) {
++	h.pluginHostMu.RLock()
++	defer h.pluginHostMu.RUnlock()
++	return h.PluginHost, h.ModelRouterHost
++}
++
++// CurrentModelRouterHost returns the explicitly configured model router host
++// (nil when none is set), read under the handler's plugin-host lock.
++func (h *BaseAPIHandler) CurrentModelRouterHost() PluginModelRouterHost {
++	if h == nil {
++		return nil
++	}
++	_, router := h.pluginHosts()
++	return router
+ }
+ 
+ func isNilPluginInterceptorHost(host PluginInterceptorHost) bool {
+diff --git a/sdk/api/handlers/handlers_execution.go b/sdk/api/handlers/handlers_execution.go
+index c144a1b..2392a95 100644
+--- a/sdk/api/handlers/handlers_execution.go
++++ b/sdk/api/handlers/handlers_execution.go
+@@ -382,10 +382,11 @@ func (h *BaseAPIHandler) pluginExecutorHost() PluginExecutorHost {
+ 	if h == nil {
+ 		return nil
+ 	}
+-	if executorHost, ok := h.ModelRouterHost.(PluginExecutorHost); ok && executorHost != nil {
++	host, router := h.pluginHosts()
++	if executorHost, ok := router.(PluginExecutorHost); ok && executorHost != nil {
+ 		return executorHost
+ 	}
+-	if executorHost, ok := h.PluginHost.(PluginExecutorHost); ok && executorHost != nil {
++	if executorHost, ok := host.(PluginExecutorHost); ok && executorHost != nil {
+ 		return executorHost
+ 	}
+ 	return nil
+diff --git a/sdk/api/handlers/handlers_interceptors.go b/sdk/api/handlers/handlers_interceptors.go
+index 61bbe38..f5a72a0 100644
+--- a/sdk/api/handlers/handlers_interceptors.go
++++ b/sdk/api/handlers/handlers_interceptors.go
+@@ -115,11 +115,17 @@ type requestLifecycleTracker struct {
+ }
+ 
+ func (h *BaseAPIHandler) newRequestLifecycleTracker(ctx context.Context, sourceFormat, model, requestedModel string, stream bool, metadata map[string]any, skipPluginID string) *requestLifecycleTracker {
++	return newRequestLifecycleTrackerForHost(ctx, h.interceptorHost(), sourceFormat, model, requestedModel, stream, metadata, skipPluginID)
++}
++
++// newRequestLifecycleTrackerForHost builds a tracker on a host snapshot the
++// caller already took, so one response uses one published plugin host.
++func newRequestLifecycleTrackerForHost(ctx context.Context, host PluginInterceptorHost, sourceFormat, model, requestedModel string, stream bool, metadata map[string]any, skipPluginID string) *requestLifecycleTracker {
+ 	requestID := uuid.NewString()
+ 	traceID := logging.GetRequestID(ctx)
+ 	return &requestLifecycleTracker{
+ 		ctx:          ctx,
+-		host:         h.interceptorHost(),
++		host:         host,
+ 		skipPluginID: skipPluginID,
+ 		completion: pluginapi.RequestCompletion{
+ 			RequestID:      requestID,
+@@ -338,7 +344,8 @@ func (h *BaseAPIHandler) interceptorHost() PluginInterceptorHost {
+ 	if h == nil {
+ 		return nil
+ 	}
+-	return h.PluginHost
++	host, _ := h.pluginHosts()
++	return host
+ }
+ 
+ func streamInterceptorsEnabled(host PluginInterceptorHost) bool {
+@@ -634,7 +641,7 @@ func (h *BaseAPIHandler) WriteModelListResponse(c *gin.Context, sourceFormat str
+ 				ctx = reqCtx
+ 			}
+ 		}
+-		lifecycle := h.newRequestLifecycleTracker(ctx, sourceFormat, "", "", false, nil, "")
++		lifecycle := newRequestLifecycleTrackerForHost(ctx, host, sourceFormat, "", "", false, nil, "")
+ 		resp := interceptResponse(ctx, host, pluginapi.ResponseInterceptRequest{
+ 			RequestID:       lifecycle.requestID(),
+ 			SourceFormat:    sourceFormat,
+diff --git a/sdk/api/handlers/handlers_routing.go b/sdk/api/handlers/handlers_routing.go
+index b4e7d9f..d2409c1 100644
+--- a/sdk/api/handlers/handlers_routing.go
++++ b/sdk/api/handlers/handlers_routing.go
+@@ -267,10 +267,10 @@ func (h *BaseAPIHandler) modelRouterHost() PluginModelRouterHost {
+ 	if h == nil {
+ 		return nil
+ 	}
+-	if !isNilPluginModelRouterHost(h.ModelRouterHost) {
+-		return h.ModelRouterHost
++	host, explicit := h.pluginHosts()
++	if !isNilPluginModelRouterHost(explicit) {
++		return explicit
+ 	}
+-	host := h.interceptorHost()
+ 	if host == nil {
+ 		return nil
+ 	}
+diff --git a/sdk/api/handlers/plugin_host_cm053_test.go b/sdk/api/handlers/plugin_host_cm053_test.go
+new file mode 100644
+index 0000000..e1526bc
+--- /dev/null
++++ b/sdk/api/handlers/plugin_host_cm053_test.go
+@@ -0,0 +1,352 @@
++package handlers
++
++// claude-multi local patch (plugin-host-locking): plugin-host
++// publication (SetPluginHost / SetModelRouterHost) against its runtime readers
++// (interceptorHost, modelRouterHost, the request lifecycle tracker and the
++// execution-host lookup). In-process only: stub hosts, gin test contexts, no
++// listener and no network. Repeat-safe; runs under -race -count=100.
++
++import (
++	"context"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"runtime"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
++)
++
++const (
++	cm053PluginModel    = "cm053-plugin-host-model"
++	cm053PluginExecutor = "cm053-plugin-host-executor"
++	cm053PluginRounds   = 200
++	cm053PluginReaders  = 4
++	cm053PluginDeadline = 20 * time.Second
++	cm053ModelListBody  = `{"object":"list","data":[]}`
++	cm053ModelsFormat   = "cm053-models"
++)
++
++// cm053PluginHost is a stub plugin host: interceptor, lifecycle observer,
++// model router and executor host. Callbacks may re-enter the handler.
++type cm053PluginHost struct {
++	tag         string
++	rewrite     bool
++	intercepted sync.Map // request ID -> struct{}
++	completed   sync.Map // request ID -> struct{}
++	onIntercept func()
++	onComplete  func()
++	onRoute     func()
++}
++
++func (p *cm053PluginHost) InterceptRequestBeforeAuth(context.Context, pluginapi.RequestInterceptRequest) pluginapi.RequestInterceptResponse {
++	return pluginapi.RequestInterceptResponse{}
++}
++
++func (p *cm053PluginHost) InterceptRequestAfterAuth(context.Context, pluginapi.RequestInterceptRequest) pluginapi.RequestInterceptResponse {
++	return pluginapi.RequestInterceptResponse{}
++}
++
++func (p *cm053PluginHost) InterceptResponse(_ context.Context, req pluginapi.ResponseInterceptRequest) pluginapi.ResponseInterceptResponse {
++	if req.SourceFormat == cm053ModelsFormat {
++		p.intercepted.Store(req.RequestID, struct{}{})
++	}
++	if p.onIntercept != nil {
++		p.onIntercept()
++	}
++	if !p.rewrite {
++		return pluginapi.ResponseInterceptResponse{}
++	}
++	return pluginapi.ResponseInterceptResponse{
++		Body:    []byte(`{"object":"list","data":[],"host":"` + p.tag + `"}`),
++		Headers: http.Header{"X-Cm053-Host": {p.tag}},
++	}
++}
++
++func (p *cm053PluginHost) InterceptStreamChunk(context.Context, pluginapi.StreamChunkInterceptRequest) pluginapi.StreamChunkInterceptResponse {
++	return pluginapi.StreamChunkInterceptResponse{}
++}
++
++func (p *cm053PluginHost) HasRequestInterceptors() bool { return false }
++
++func (p *cm053PluginHost) CompleteRequest(_ context.Context, completion pluginapi.RequestCompletion) {
++	if completion.SourceFormat == cm053ModelsFormat {
++		p.completed.Store(completion.RequestID, struct{}{})
++	}
++	if p.onComplete != nil {
++		p.onComplete()
++	}
++}
++
++func (p *cm053PluginHost) HasModelRouters() bool { return true }
++
++func (p *cm053PluginHost) RouteModel(context.Context, pluginapi.ModelRouteRequest) (pluginapi.ModelRouteResponse, bool) {
++	if p.onRoute != nil {
++		p.onRoute()
++	}
++	return pluginapi.ModelRouteResponse{Handled: true, TargetKind: pluginapi.ModelRouteTargetExecutor, Target: cm053PluginExecutor}, true
++}
++
++func (p *cm053PluginHost) ExecutePluginExecutor(context.Context, string, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
++	return coreexecutor.Response{Payload: []byte(`{"id":"cm053-` + p.tag + `","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)}, nil
++}
++
++func (p *cm053PluginHost) ExecutePluginExecutorStream(context.Context, string, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
++	return nil, errors.New("cm053: stream not used")
++}
++
++func (p *cm053PluginHost) CountPluginExecutor(context.Context, string, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
++	return coreexecutor.Response{}, errors.New("cm053: count not used")
++}
++
++func cm053ModelList(t *testing.T, h *BaseAPIHandler) (string, string) {
++	t.Helper()
++	recorder := httptest.NewRecorder()
++	c, _ := gin.CreateTestContext(recorder)
++	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
++	h.WriteModelListResponse(c, cm053ModelsFormat, []byte(cm053ModelListBody))
++	if recorder.Code != http.StatusOK {
++		t.Errorf("model list status = %d, want 200", recorder.Code)
++	}
++	return recorder.Body.String(), recorder.Header().Get("X-Cm053-Host")
++}
++
++// cm053Within runs work and fails the test if it does not finish in time (a
++// lock held across a plugin callback deadlocks a re-entrant callback).
++func cm053Within(t *testing.T, what string, work func()) {
++	t.Helper()
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		work()
++	}()
++	select {
++	case <-done:
++	case <-time.After(cm053PluginDeadline):
++		t.Fatalf("%s did not finish within %s (lock held across a plugin callback?)", what, cm053PluginDeadline)
++	}
++}
++
++// cm053SameRequests checks that one model-list response used one host
++// snapshot: every model-list request a host intercepted was completed on that
++// same host, and back.
++func cm053SameRequests(t *testing.T, host *cm053PluginHost) int {
++	t.Helper()
++	n := 0
++	host.intercepted.Range(func(id, _ any) bool {
++		n++
++		if _, ok := host.completed.Load(id); !ok {
++			t.Errorf("host %s intercepted request %v but another host completed it", host.tag, id)
++		}
++		return true
++	})
++	host.completed.Range(func(id, _ any) bool {
++		if _, ok := host.intercepted.Load(id); !ok {
++			t.Errorf("host %s completed request %v that another host intercepted", host.tag, id)
++		}
++		return true
++	})
++	return n
++}
++
++func TestCM053PluginHostConcurrentModelInterception(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	h := NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
++	a := &cm053PluginHost{tag: "a", rewrite: true}
++	b := &cm053PluginHost{tag: "b", rewrite: true}
++	var typedNil *cm053PluginHost
++	h.SetPluginHost(a)
++
++	var stop atomic.Bool
++	var responses, plain atomic.Int64
++	var wg sync.WaitGroup
++	for reader := 0; reader < cm053PluginReaders; reader++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for !stop.Load() {
++				body, tag := cm053ModelList(t, h)
++				responses.Add(1)
++				switch {
++				case tag == "" && body == cm053ModelListBody:
++					plain.Add(1)
++				case (tag == "a" || tag == "b") && strings.Contains(body, `"host":"`+tag+`"`):
++				default:
++					t.Errorf("model list response mixed hosts: header %q body %s", tag, body)
++					return
++				}
++			}
++		}()
++	}
++	cm053Within(t, "model-list interception under plugin-host reloads", func() {
++		// Keep publishing until the readers have overlapped the writer for a
++		// full bound (or a reader failed).
++		for i := 0; (i < cm053PluginRounds || responses.Load() < cm053PluginRounds) && !t.Failed(); i++ {
++			switch i % 4 {
++			case 0, 1:
++				h.SetPluginHost(a) // reassigning the same host is still a publication
++			case 2:
++				h.SetPluginHost(b)
++			case 3:
++				h.SetPluginHost(typedNil) // normalized to no host
++			}
++			runtime.Gosched()
++		}
++		stop.Store(true)
++		wg.Wait()
++	})
++	if n := cm053SameRequests(t, a) + cm053SameRequests(t, b); n == 0 {
++		t.Fatal("no model-list response was intercepted: the plugin host path did not run")
++	}
++	if responses.Load() < cm053PluginRounds {
++		t.Fatalf("model-list responses = %d, want >= %d", responses.Load(), cm053PluginRounds)
++	}
++}
++
++func TestCM053PluginHostConcurrentExecutorLookup(t *testing.T) {
++	h := NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
++	a := &cm053PluginHost{tag: "a"}
++	b := &cm053PluginHost{tag: "b"}
++	router := &cm053PluginHost{tag: "router"}
++	var typedNil *cm053PluginHost
++	h.SetPluginHost(a)
++
++	var stop atomic.Bool
++	var executed atomic.Int64
++	var wg sync.WaitGroup
++	for reader := 0; reader < cm053PluginReaders; reader++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for !stop.Load() {
++				if h.pluginExecutorHost() == nil || h.modelRouterHost() == nil {
++					t.Error("a published plugin host was not visible to the execution-host lookup")
++					return
++				}
++				body, _, errMsg := h.ExecuteWithAuthManager(context.Background(), "openai", cm053PluginModel,
++					[]byte(`{"model":"`+cm053PluginModel+`","messages":[{"role":"user","content":"hi"}]}`), "")
++				if errMsg != nil {
++					t.Errorf("plugin executor request failed: %d %v", errMsg.StatusCode, errMsg.Error)
++					return
++				}
++				if !strings.Contains(string(body), `cm053-`) {
++					t.Errorf("plugin executor response not from a published host: %s", body)
++					return
++				}
++				executed.Add(1)
++			}
++		}()
++	}
++	cm053Within(t, "executor lookup under plugin-host reloads", func() {
++		// Keep publishing until the readers have overlapped the writer for a
++		// full bound (or a reader failed).
++		for i := 0; (i < cm053PluginRounds || executed.Load() < cm053PluginRounds) && !t.Failed(); i++ {
++			switch i % 4 {
++			case 0:
++				h.SetPluginHost(a)
++			case 1:
++				h.SetPluginHost(b)
++			case 2:
++				h.SetModelRouterHost(router)
++			case 3:
++				h.SetModelRouterHost(typedNil) // falls back to the interceptor host
++			}
++			runtime.Gosched()
++		}
++		stop.Store(true)
++		wg.Wait()
++	})
++	if executed.Load() < cm053PluginRounds {
++		t.Fatalf("plugin executor requests = %d, want >= %d", executed.Load(), cm053PluginRounds)
++	}
++}
++
++func TestCM053PluginHostTypedNilAndReentrantCallback(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	var typedNil *cm053PluginHost
++
++	// Typed-nil normalization: a typed nil never becomes a callable host.
++	h := NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
++	h.SetPluginHost(typedNil)
++	if h.interceptorHost() != nil || h.modelRouterHost() != nil || h.pluginExecutorHost() != nil {
++		t.Fatal("typed-nil plugin host was published as a host")
++	}
++	if body, tag := cm053ModelList(t, h); body != cm053ModelListBody || tag != "" {
++		t.Fatalf("model list with typed-nil host = %q %q, want untouched", body, tag)
++	}
++	a := &cm053PluginHost{tag: "a", rewrite: true}
++	router := &cm053PluginHost{tag: "router"}
++	h.SetPluginHost(a)
++	h.SetModelRouterHost(typedNil)
++	if h.modelRouterHost() != PluginModelRouterHost(a) || h.pluginExecutorHost() != PluginExecutorHost(a) {
++		t.Fatal("typed-nil model router did not fall back to the plugin host")
++	}
++	h.SetModelRouterHost(router)
++	if h.modelRouterHost() != PluginModelRouterHost(router) || h.pluginExecutorHost() != PluginExecutorHost(router) {
++		t.Fatal("explicit model router host not preferred")
++	}
++	h.SetPluginHost(typedNil)
++	if h.interceptorHost() != nil {
++		t.Fatal("typed-nil plugin host did not clear the published host")
++	}
++	var nilHandler *BaseAPIHandler
++	nilHandler.SetPluginHost(a)
++	nilHandler.SetModelRouterHost(router)
++	if nilHandler.interceptorHost() != nil || nilHandler.modelRouterHost() != nil || nilHandler.pluginExecutorHost() != nil {
++		t.Fatal("nil handler reported a plugin host")
++	}
++
++	// Re-entrant callbacks: each host's callbacks republish the other host and
++	// read the handler while other requests run. No lock may be held across a
++	// callback, and each response still uses one host snapshot.
++	h = NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
++	x := &cm053PluginHost{tag: "x", rewrite: true}
++	y := &cm053PluginHost{tag: "y", rewrite: true}
++	reenter := func(next *cm053PluginHost) func() {
++		return func() {
++			h.SetPluginHost(next)
++			if h.interceptorHost() == nil || h.modelRouterHost() == nil || h.pluginExecutorHost() == nil {
++				t.Error("re-entrant read saw no plugin host")
++			}
++		}
++	}
++	x.onIntercept, x.onComplete, x.onRoute = reenter(y), reenter(x), reenter(y)
++	y.onIntercept, y.onComplete, y.onRoute = reenter(x), reenter(y), reenter(x)
++	h.SetPluginHost(x)
++	cm053Within(t, "re-entrant plugin callbacks", func() {
++		var wg sync.WaitGroup
++		for reader := 0; reader < cm053PluginReaders; reader++ {
++			wg.Add(1)
++			go func(reader int) {
++				defer wg.Done()
++				for i := 0; i < cm053PluginRounds/cm053PluginReaders; i++ {
++					if reader%2 == 0 {
++						body, tag := cm053ModelList(t, h)
++						if (tag != "x" && tag != "y") || !strings.Contains(body, `"host":"`+tag+`"`) {
++							t.Errorf("re-entrant model list response = %q %s", tag, body)
++							return
++						}
++						continue
++					}
++					_, _, errMsg := h.ExecuteWithAuthManager(context.Background(), "openai", cm053PluginModel,
++						[]byte(`{"model":"`+cm053PluginModel+`","messages":[{"role":"user","content":"hi"}]}`), "")
++					if errMsg != nil {
++						t.Errorf("re-entrant plugin executor request failed: %d %v", errMsg.StatusCode, errMsg.Error)
++						return
++					}
++				}
++			}(reader)
++		}
++		wg.Wait()
++	})
++	if n := cm053SameRequests(t, x) + cm053SameRequests(t, y); n == 0 {
++		t.Fatal("no re-entrant callback ran")
++	}
++}

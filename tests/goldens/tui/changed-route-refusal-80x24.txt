@@ -1,0 +1,24 @@
+
+  Action result
+  ─────────────────────────────────────────────────────────────────────────────
+  admit custom-acme-small:
+    ✓ declaration valid (providers.d/acme.json)
+  claude-multi: admit custom-acme-small: provider acme: route changed —
+  claude-multi providers approve acme
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Up/Down scroll · PgUp/PgDn page · Home/End  · Esc back

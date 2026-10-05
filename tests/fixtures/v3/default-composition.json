@@ -1,0 +1,67 @@
+{
+  "availability": {
+    "models": {
+      "fable": "lead+agents",
+      "gpt55": "agents",
+      "kimi-k3": "lead+agents",
+      "opus": "agents",
+      "opus5": "lead+agents",
+      "opus55": "lead+agents",
+      "sol": "lead+agents"
+    },
+    "providers": {
+      "anthropic": "lead+agents",
+      "kimi": "lead+agents",
+      "openai": "lead+agents"
+    }
+  },
+  "description": "Balanced multi-provider composition (Opus 5 lead)",
+  "name": "default",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "seed": {
+    "id": "default",
+    "version": 1
+  },
+  "slots": [
+    {
+      "model": "opus55",
+      "role": "cm-lead"
+    },
+    {
+      "model": "sol",
+      "preferred": true,
+      "role": "cm-analyst"
+    },
+    {
+      "model": "kimi-k3",
+      "preferred": false,
+      "role": "cm-analyst"
+    },
+    {
+      "model": "sol",
+      "preferred": true,
+      "role": "cm-implementer"
+    },
+    {
+      "model": "kimi-k3",
+      "preferred": false,
+      "role": "cm-implementer"
+    },
+    {
+      "lane": "xhigh",
+      "model": "sol",
+      "preferred": true,
+      "role": "cm-reviewer"
+    },
+    {
+      "model": "opus55",
+      "preferred": false,
+      "role": "cm-reviewer"
+    }
+  ],
+  "version": 1
+}

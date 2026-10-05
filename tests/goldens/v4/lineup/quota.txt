@@ -1,0 +1,5 @@
+Quota — local gateway, read unknown (passive: updated only by traffic; nothing stored)
+Quota condition: available — the accounts' quota was read
+Management safety: five failed logins on allowlisted routes can ban loopback for 30 min; refused routes and guard-refused browser/Host requests do not count.
+Quota is passive metadata from gateway traffic; no provider request was made.
+Management authentication failures on allowed paths can trigger the gateway's five-strike lockout; this command does not retry them.

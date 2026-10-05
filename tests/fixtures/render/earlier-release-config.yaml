@@ -1,0 +1,449 @@
+host: "127.0.0.1"
+port: 8317
+tls:
+  enable: false
+  cert: ""
+  key: ""
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: true
+  disable-auto-update-panel: true
+auth-dir: "/home/user/.local/share/claude-multi/auth"
+api-keys:
+  - "dummy-gateway-token"
+debug: false
+pprof:
+  enable: false
+  addr: "127.0.0.1:8316"
+plugins:
+  enabled: false
+  dir: ""
+  configs: {}
+discovery:
+  enabled: false
+commercial-mode: true
+logging-to-file: false
+usage-statistics-enabled: false
+proxy-url: ""
+passthrough-headers: false
+request-retry: 0
+max-retry-credentials: 1
+max-retry-interval: 0
+disable-cooling: true
+save-cooldown-status: false
+quota-exceeded:
+  switch-project: false
+  switch-preview-model: false
+  antigravity-credits: false
+routing:
+  strategy: "fill-first"
+  session-affinity: true
+  session-affinity-ttl: "24h"
+ws-auth: true
+oauth-model-alias:
+  claude:
+    - name: "claude-fable-5"
+      alias: "claude-fable-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-fable-5-1"
+      alias: "claude-fable-5-1"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-5"
+      alias: "claude-opus-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-5-5"
+      alias: "claude-opus-5-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-4-8"
+      alias: "claude-opus-4-8"
+      force-mapping: true
+      fork: true
+    - name: "claude-sonnet-5"
+      alias: "claude-sonnet-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-4-8"
+      alias: "claude-multi-opus-4-8"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-5"
+      alias: "claude-multi-opus-5"
+      force-mapping: true
+      fork: true
+    - name: "claude-opus-5-5"
+      alias: "claude-multi-opus-5-5"
+      force-mapping: true
+      fork: true
+  codex:
+    - name: "gpt-6-astra"
+      alias: "gpt-multi-astra-high"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-astra"
+      alias: "gpt-multi-astra-low"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-astra"
+      alias: "gpt-multi-astra-max"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-astra"
+      alias: "gpt-multi-astra-medium"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-astra"
+      alias: "gpt-multi-astra-xhigh"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-luna"
+      alias: "gpt-multi-luna-high"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-luna"
+      alias: "gpt-multi-luna-low"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-luna"
+      alias: "gpt-multi-luna-max"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-luna"
+      alias: "gpt-multi-luna-medium"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-luna"
+      alias: "gpt-multi-luna-xhigh"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-sol"
+      alias: "gpt-multi-sol-high"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-sol"
+      alias: "gpt-multi-sol-low"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-sol"
+      alias: "gpt-multi-sol-max"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-sol"
+      alias: "gpt-multi-sol-medium"
+      force-mapping: true
+      fork: false
+    - name: "gpt-6-sol"
+      alias: "gpt-multi-sol-xhigh"
+      force-mapping: true
+      fork: false
+    - name: "gpt-5.5"
+      alias: "gpt-multi-gpt55-high"
+      force-mapping: true
+      fork: false
+claude-api-key:
+  - api-key: "dummy-provider-secret"
+    base-url: "https://api.deepseek.com/anthropic"
+    auth-header: "x-api-key"
+    cloak:
+      mode: "never"
+    models:
+      - name: "deepseek-flash"
+        alias: "claude-multi-deepseek-flash-high"
+        display-name: "DeepSeek V4.1 Flash"
+        owned-by: "deepseek"
+        context-length: 1000000
+        force-mapping: true
+      - name: "deepseek-flash"
+        alias: "claude-multi-deepseek-flash-max"
+        display-name: "DeepSeek V4.1 Flash"
+        owned-by: "deepseek"
+        context-length: 1000000
+        force-mapping: true
+      - name: "deepseek-v4-pro"
+        alias: "claude-multi-deepseek-pro-high"
+        display-name: "DeepSeek V4 Pro"
+        owned-by: "deepseek"
+        context-length: 1000000
+        force-mapping: true
+      - name: "deepseek-v4-pro"
+        alias: "claude-multi-deepseek-pro-max"
+        display-name: "DeepSeek V4 Pro"
+        owned-by: "deepseek"
+        context-length: 1000000
+        force-mapping: true
+  - api-key: "dummy-provider-secret"
+    base-url: "https://api.kimi.com/coding"
+    auth-header: "x-api-key"
+    cloak:
+      mode: "never"
+    models:
+      - name: "k3"
+        alias: "claude-multi-kimi-k3"
+        display-name: "Kimi K3 · 1M selector"
+        owned-by: "moonshot"
+        context-length: 1000000
+        force-mapping: true
+  - api-key: "dummy-provider-secret"
+    base-url: "https://api.meta.ai"
+    cloak:
+      mode: "never"
+    models:
+      - name: "muse-spark-1.3"
+        alias: "claude-multi-muse-high"
+        display-name: "Muse Spark 1.3"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3"
+        alias: "claude-multi-muse-low"
+        display-name: "Muse Spark 1.3"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3"
+        alias: "claude-multi-muse-medium"
+        display-name: "Muse Spark 1.3"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3"
+        alias: "claude-multi-muse-xhigh"
+        display-name: "Muse Spark 1.3"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3-contributor"
+        alias: "claude-multi-muse-contributor-high"
+        display-name: "Muse Spark 1.3 Contributor"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3-contributor"
+        alias: "claude-multi-muse-contributor-low"
+        display-name: "Muse Spark 1.3 Contributor"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3-contributor"
+        alias: "claude-multi-muse-contributor-medium"
+        display-name: "Muse Spark 1.3 Contributor"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3-contributor"
+        alias: "claude-multi-muse-contributor-xhigh"
+        display-name: "Muse Spark 1.3 Contributor"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3-contributor"
+        alias: "claude-multi-muse-spark-contributor-high"
+        display-name: "Muse Spark 1.3 Contributor"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3-contributor"
+        alias: "claude-multi-muse-spark-contributor-xhigh"
+        display-name: "Muse Spark 1.3 Contributor"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3"
+        alias: "claude-multi-muse-spark-high"
+        display-name: "Muse Spark 1.3"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+      - name: "muse-spark-1.3"
+        alias: "claude-multi-muse-spark-xhigh"
+        display-name: "Muse Spark 1.3"
+        owned-by: "meta"
+        context-length: 1000000
+        force-mapping: true
+  - api-key: "dummy-provider-secret"
+    base-url: "https://openrouter.ai/api"
+    auth-header: "x-api-key"
+    cloak:
+      mode: "never"
+    models:
+      - name: "x-ai/grok-4.6"
+        alias: "claude-multi-grok46-high"
+        display-name: "Grok 4.6"
+        owned-by: "x-ai"
+        context-length: 500000
+        force-mapping: true
+      - name: "x-ai/grok-4.6"
+        alias: "claude-multi-grok46-xhigh"
+        display-name: "Grok 4.6"
+        owned-by: "x-ai"
+        context-length: 500000
+        force-mapping: true
+  - api-key: "dummy-provider-secret"
+    base-url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic"
+    cloak:
+      mode: "never"
+    models:
+      - name: "glm-5.2"
+        alias: "claude-multi-glm52-max"
+        display-name: "GLM-5.2"
+        owned-by: "alibaba"
+        context-length: 1000000
+        force-mapping: true
+      - name: "qwen3.8-max"
+        alias: "claude-multi-qwen38-max"
+        display-name: "Qwen3.8 Max"
+        owned-by: "alibaba"
+        context-length: 983616
+        force-mapping: true
+openai-compatibility:
+  - name: "llm-local"
+    base-url: "http://llm.example.lan:8010/v1"
+    models:
+      - name: "qwen3.8-flash-next"
+        alias: "claude-multi-qwen-local"
+        display-name: "Qwen3.8 Flash Next (local)"
+        force-mapping: true
+      - name: "qwen3.8-flash-next"
+        alias: "claude-multi-qwen-flash-next"
+        display-name: "Qwen3.8 Flash Next (local)"
+        force-mapping: true
+  - name: "claude-multi-render"
+    base-url: "http://127.0.0.1:9/v1"
+    models:
+      - name: "claude-multi-render"
+        alias: "claude-multi-render-794d51e7"
+        force-mapping: true
+payload:
+  override:
+    - models:
+        - name: "claude-multi-deepseek-flash-high"
+          protocol: "claude"
+        - name: "claude-multi-deepseek-pro-high"
+          protocol: "claude"
+      params:
+        "output_config.effort": "high"
+    - models:
+        - name: "claude-multi-deepseek-flash-max"
+          protocol: "claude"
+        - name: "claude-multi-deepseek-pro-max"
+          protocol: "claude"
+      params:
+        "output_config.effort": "max"
+    - models:
+        - name: "claude-multi-kimi-k3"
+          protocol: "claude"
+      params:
+        "output_config.effort": "max"
+    - models:
+        - name: "claude-multi-muse-contributor-low"
+          protocol: "claude"
+        - name: "claude-multi-muse-low"
+          protocol: "claude"
+      params:
+        "output_config.effort": "low"
+    - models:
+        - name: "claude-multi-muse-contributor-medium"
+          protocol: "claude"
+        - name: "claude-multi-muse-medium"
+          protocol: "claude"
+      params:
+        "output_config.effort": "medium"
+    - models:
+        - name: "claude-multi-muse-contributor-high"
+          protocol: "claude"
+        - name: "claude-multi-muse-high"
+          protocol: "claude"
+        - name: "claude-multi-muse-spark-contributor-high"
+          protocol: "claude"
+        - name: "claude-multi-muse-spark-high"
+          protocol: "claude"
+      params:
+        "output_config.effort": "high"
+    - models:
+        - name: "claude-multi-muse-contributor-xhigh"
+          protocol: "claude"
+        - name: "claude-multi-muse-spark-contributor-xhigh"
+          protocol: "claude"
+        - name: "claude-multi-muse-spark-xhigh"
+          protocol: "claude"
+        - name: "claude-multi-muse-xhigh"
+          protocol: "claude"
+      params:
+        "output_config.effort": "xhigh"
+    - models:
+        - name: "gpt-multi-astra-low"
+          protocol: "codex"
+        - name: "gpt-multi-luna-low"
+          protocol: "codex"
+        - name: "gpt-multi-sol-low"
+          protocol: "codex"
+      params:
+        "reasoning.effort": "low"
+    - models:
+        - name: "gpt-multi-astra-medium"
+          protocol: "codex"
+        - name: "gpt-multi-luna-medium"
+          protocol: "codex"
+        - name: "gpt-multi-sol-medium"
+          protocol: "codex"
+      params:
+        "reasoning.effort": "medium"
+    - models:
+        - name: "gpt-multi-astra-high"
+          protocol: "codex"
+        - name: "gpt-multi-gpt55-high"
+          protocol: "codex"
+        - name: "gpt-multi-luna-high"
+          protocol: "codex"
+        - name: "gpt-multi-sol-high"
+          protocol: "codex"
+      params:
+        "reasoning.effort": "high"
+    - models:
+        - name: "gpt-multi-astra-xhigh"
+          protocol: "codex"
+        - name: "gpt-multi-luna-xhigh"
+          protocol: "codex"
+        - name: "gpt-multi-sol-xhigh"
+          protocol: "codex"
+      params:
+        "reasoning.effort": "xhigh"
+    - models:
+        - name: "gpt-multi-astra-max"
+          protocol: "codex"
+        - name: "gpt-multi-luna-max"
+          protocol: "codex"
+        - name: "gpt-multi-sol-max"
+          protocol: "codex"
+      params:
+        "reasoning.effort": "max"
+    - models:
+        - name: "claude-multi-grok46-high"
+          protocol: "claude"
+      params:
+        "output_config.effort": "high"
+    - models:
+        - name: "claude-multi-grok46-xhigh"
+          protocol: "claude"
+      params:
+        "output_config.effort": "xhigh"
+    - models:
+        - name: "claude-multi-qwen38-max"
+          protocol: "claude"
+      params:
+        reasoning_effort: "xhigh"
+    - models:
+        - name: "claude-multi-glm52-max"
+          protocol: "claude"
+      params:
+        reasoning_effort: "max"
+  filter:
+    - models:
+        - name: "claude-multi-kimi-k3"
+          protocol: "claude"
+      params:
+        - "thinking"

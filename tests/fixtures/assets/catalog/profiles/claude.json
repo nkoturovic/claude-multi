@@ -1,0 +1,54 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "xhigh",
+      "model": "opus5"
+    },
+    "cm-analyst-strong": {
+      "effort": "xhigh",
+      "model": "opus55"
+    },
+    "cm-explorer": {
+      "effort": "xhigh",
+      "model": "opus5"
+    },
+    "cm-implementer": {
+      "effort": "xhigh",
+      "model": "opus5"
+    },
+    "cm-implementer-light": {
+      "effort": "xhigh",
+      "model": "opus5"
+    },
+    "cm-implementer-strong": {
+      "effort": "xhigh",
+      "model": "opus55"
+    },
+    "cm-reviewer": {
+      "effort": "xhigh",
+      "model": "opus5"
+    },
+    "cm-reviewer-strong": {
+      "effort": "max",
+      "model": "fable"
+    }
+  },
+  "description": "Fixture seed claude: frozen test data mirroring the shipped seed's slot families.",
+  "lead": {
+    "effort": "ultracode",
+    "model": "opus55"
+  },
+  "name": "claude",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "primary_provider": "anthropic",
+  "seed": {
+    "id": "claude",
+    "version": 2
+  },
+  "version": 2,
+  "workflows": "native"
+}

@@ -1,0 +1,15 @@
+Fallback target: anthropic · profile claude
+  cm-explorer: GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+  cm-analyst: GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+  cm-implementer-light: GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+  cm-implementer: GPT-5.6 Sol · high → Opus 5 · 1M selector · xhigh
+  cm-implementer-strong: GPT-5.6 Sol · xhigh → Opus 5.5 · 1M selector · xhigh
+  cm-reviewer: GPT-5.6 Sol · xhigh → Opus 5 · 1M selector · xhigh
+  cm-reviewer-strong: Opus 5.5 · 1M selector · xhigh → Fable 5 · 1M selector · max
+! review same-family (reduced independence)
+Effect: LIVE
+Existing agents keep their current task and model. Start fresh agents after the change.
+Fallback staged at generation 2.
+Run /reload-plugins before starting fresh agents; reload is not yet confirmed.
+pinned now: the session stops following profile balanced — /cm follow returns to it
+next: type /reload-plugins (a model cannot run it for you; it also applies any pending plugin updates)

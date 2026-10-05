@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "cm-analyst": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-analyst-strong": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "cm-explorer": {
+      "effort": "high",
+      "model": "sol"
+    },
+    "cm-implementer": {
+      "effort": "xhigh",
+      "model": "sol"
+    },
+    "cm-implementer-light": {
+      "effort": "max",
+      "model": "luna"
+    },
+    "cm-implementer-strong": {
+      "effort": "max",
+      "model": "sol"
+    },
+    "cm-reviewer": {
+      "effort": "max",
+      "model": "sol"
+    },
+    "cm-reviewer-strong": {
+      "effort": "xhigh",
+      "model": "opus"
+    }
+  },
+  "description": "Opus lead; Sol high explorer, xhigh analyst/writer and max strong writer/reviewer; Luna max light writer; Opus strong checks",
+  "lead": {
+    "effort": "ultracode",
+    "model": "opus"
+  },
+  "name": "balanced",
+  "native_agents": {
+    "explore": "replace",
+    "general_purpose": "off",
+    "plan": "native"
+  },
+  "seed": {
+    "id": "balanced",
+    "version": 3
+  },
+  "version": 2,
+  "workflows": "native"
+}
