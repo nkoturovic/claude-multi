@@ -1149,7 +1149,7 @@ class PageAnchorTests(unittest.TestCase):
         from claude_multi import __version__
 
         readme = _flat(_text("README.md"))
-        self.assertIn(f"**First release:** {__version__}", readme)
+        self.assertIn(f"**Latest release:** {__version__}", readme)
         self.assertIn("GitHub Releases", readme)
         self.assertNotIn("not released yet", readme)
         security = _flat(_text("SECURITY.md"))
