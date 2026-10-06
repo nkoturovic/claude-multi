@@ -841,8 +841,8 @@ class SharedKeyAnswersTests(test_setup_cli.SetupCase):
 
 
 class SingletonPresetTests(test_cli.OperatorCommandCase):
-    """One preset alone, with one model added and admitted, is a usable
-    profile: no other key, no sign-in, every other provider off."""
+    """One preset alone is usable without admission or diagnostics:
+    no other key, no sign-in, every other provider off."""
 
     def test_a_preset_alone_reaches_a_usable_profile(self) -> None:
         state.atomic_write(self.secret_file, b"")
@@ -865,9 +865,14 @@ class SingletonPresetTests(test_cli.OperatorCommandCase):
                                    "--source", "operator", "--effort", "high"])
         self.assertEqual(code, 0, err)
         self.serve_current()
+        plan, _warnings = self.runtime.starter_plan("alone")
+        self.assertIsNotNone(plan.document, plan.refusal)
+        self.assertEqual(plan.document["lead"]["model"], key)
+        self.assertNotIn(key, self.runtime.current_effective().admitted_lines)
+        self.assertEqual(self.calls, [], "starter selection never diagnoses a model")
         code, out, err = self.op(["models", "admit", key], "y\n")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.calls, [key])
+        self.assertEqual(self.calls, [], "the optional badge makes no inference request")
         plan, _warnings = self.runtime.starter_plan("alone")
         self.assertIsNotNone(plan.document, plan.refusal)
         self.assertEqual(plan.document["lead"]["model"], key)

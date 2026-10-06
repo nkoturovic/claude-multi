@@ -1600,25 +1600,41 @@ class KeyedAuthorityTests(KeyedServedCase):
         self.serve_current()
 
     def test_keyed_admission_preflight_fails_before_secret_or_network(self):
+        """The audit wrapper keeps this name; request authority belongs to qualify."""
+        from claude_multi.cli.commands import models as commands
+
         self.declare({KEYED_ID: keyed_document()})
-        # Unapproved: fail even before the defensive scan of unrelated keys.
+        approved = self.ledger_file.read_bytes()
         ledger = operator.ledger_document(None)
         state.atomic_write(self.ledger_file, strict_json.canonical_file_bytes(ledger))
         spy = SpyStore({KEYED_SECRET: KEYED_VALUE})
-        from claude_multi.cli.commands import models as commands
-        for verb in ("admit", "qualify"):
+        # Unapproved and changed credential destinations refuse the explicit
+        # diagnostic before even the defensive scan of unrelated keys.
+        for route in ("unapproved", "changed"):
+            if route == "changed":
+                state.atomic_write(self.ledger_file, approved)
+                self.hand_edit(lambda doc: doc["provider"].update(base_url="https://changed.chatco.example/v1"))
+            before = self.state_bytes()
             with spy_store(spy), mock.patch.object(commands, "render_identity", side_effect=AssertionError("network")):
-                code, out, err = self.op(["models", verb, KEYED_KEY])
+                code, out, err = self.op(["models", "qualify", KEYED_KEY, "--smoke"], "y\n")
             self.assertNotEqual(code, 0, out + err)
+            self.assertIn(f"route {route}", err)
             self.assertEqual(spy.calls, [])
+            self.assertEqual(self.state_bytes(), before)
         self.runtime.catalog.docs["gateway"].pop("audits", None)
-        with spy_store(spy):
-            code, out, err = self.op(["models", "admit", KEYED_KEY])
-        self.assertNotEqual(code, 0, out + err)
-        self.assertEqual(spy.calls, [])
-        self.assertEqual(self.http_calls, [])
+        # A closed security audit makes the declaration invalid for either
+        # metadata admission or a diagnostic; it must not read credentials.
+        for command in (["models", "admit", KEYED_KEY], ["models", "qualify", KEYED_KEY, "--smoke"]):
+            before = self.state_bytes()
+            with spy_store(spy), mock.patch.object(commands, "render_identity", side_effect=AssertionError("network")):
+                code, out, err = self.op(command, "y\n")
+            self.assertNotEqual(code, 0, out + err)
+            self.assertIn(catalog.KEYED_AUDIT_CLOSED, err)
+            self.assertEqual(spy.calls, [])
+            self.assertEqual(self.state_bytes(), before)
+        self.assertEqual((self.calls, self.http_calls), ([], []))
 
-    def test_keyed_admission_smoke_preserves_failure_reasons(self):
+    def test_keyed_optional_smoke_preserves_failure_reasons(self):
         from claude_multi import qualify
 
         self.prepare_keyed()
@@ -1630,7 +1646,7 @@ class KeyedAuthorityTests(KeyedServedCase):
         ):
             with self.subTest(reason=reason), mock.patch.object(
                     self.runtime, "qualify_post", return_value=response) as post:
-                code, out, err = self.op(["models", "admit", KEYED_KEY], "y\n")
+                code, out, err = self.op(["models", "qualify", KEYED_KEY, "--smoke"], "y\n")
                 self.assertNotEqual(code, 0, out + err)
                 post.assert_called_once()
                 self.assertIn(f"smoke {KEYED_KEY}: {verdict}", out)
@@ -1643,10 +1659,11 @@ class KeyedAuthorityTests(KeyedServedCase):
                 self.assertNotIn(KEYED_KEY, self.ledger().admissions)
 
     def test_keyed_admission_race_rejects_stale_render_evidence(self):
+        """The audit wrapper keeps this name; only explicit qualification sends."""
         self.prepare_keyed()
         # Sentinel remains but one alias disappears during the actual request.
         self.during_smoke = lambda: self.served.discard(KEYED_KEY)
-        code, out, err = self.op(["models", "admit", KEYED_KEY], "y\n")
+        code, out, err = self.op(["models", "qualify", KEYED_KEY, "--smoke"], "y\n")
         self.assertNotEqual(code, 0, out + err)
         self.assertEqual(len(self.http_calls), 1)
         self.assertNotIn(KEYED_KEY, self.ledger().admissions)
@@ -1663,6 +1680,46 @@ class KeyedAuthorityTests(KeyedServedCase):
         self.assertNotEqual(code, 0, out + err)
         self.assertEqual(len(self.http_calls), 2)  # stops before effort request
         self.assertNotIn(KEYED_KEY, self.ledger().admissions)
+        evidence = operator.load_evidence(self.runtime.gateway_environ(), operator.load_schemas(self.assets))
+        self.assertTrue(evidence is None or KEYED_KEY not in evidence.lines)
+
+    def test_keyed_admit_revoke_are_local_badges_despite_failed_evidence(self):
+        from claude_multi import qualify
+        from claude_multi.cli.commands import models as commands
+        from claude_multi.cli.commands import providers as providers_cmd
+
+        self.prepare_keyed()
+        with mock.patch.object(self.runtime, "qualify_post", return_value=qualify.HttpResult(200, b"", "oversize")):
+            code, out, err = self.op(["models", "qualify", KEYED_KEY, "--smoke"], "y\n")
+        self.assertEqual(code, 1, out + err)
+        evidence_path = operator.evidence_path(self.runtime.gateway_environ())
+        before_evidence = evidence_path.read_bytes()
+        # Admission neither approves this route nor requires a usable provider,
+        # key, served alias or current render. The stored failed verdict stays.
+        state.atomic_write(self.ledger_file, strict_json.canonical_file_bytes(operator.ledger_document(None)))
+        state.atomic_write(self.secret_file, b"")
+        self.runtime.settings_store.set_provider_enabled(KEYED_ID, False, catalog=self.runtime.lineup_catalog())
+        self.served.clear()
+        before_config = self.config().read_bytes()
+        with mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("badge inferred")), \
+                mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("badge smoked")), \
+                mock.patch.object(self.runtime, "render_gateway", side_effect=AssertionError("badge rendered")), \
+                mock.patch.object(commands, "render_identity", side_effect=AssertionError("badge observed gateway")), \
+                mock.patch.object(providers_cmd, "served_preflight", side_effect=AssertionError("badge planned render")):
+            code, out, err = self.op(["models", "admit", KEYED_KEY], "y\n")
+            self.assertEqual(code, 0, out + err)
+            self.assertIn(KEYED_KEY, self.ledger().admissions)
+            self.assertIn(KEYED_KEY, self.runtime.current_effective().admitted_lines)
+            self.assertFalse(self.ledger().routes)
+            self.assertEqual(evidence_path.read_bytes(), before_evidence)
+            code, out, err = self.op(["models", "revoke", KEYED_KEY, "--yes"])
+            self.assertEqual(code, 0, out + err)
+        self.assertNotIn(KEYED_KEY, self.ledger().admissions)
+        self.assertNotIn(KEYED_KEY, self.runtime.current_effective().admitted_lines)
+        self.assertFalse(self.runtime.settings_store.load()["providers"][KEYED_ID]["enabled"])
+        self.assertEqual(evidence_path.read_bytes(), before_evidence)
+        self.assertEqual(self.config().read_bytes(), before_config)
+        self.assertEqual((self.calls, self.http_calls), ([], []))
 
     def test_keyed_qualification_writes_evidence_not_grants(self):
         self.prepare_keyed()
@@ -1680,7 +1737,7 @@ class KeyedAuthorityTests(KeyedServedCase):
         self.assertEqual(first["thinking"], {"type": "adaptive"})
         self.assertEqual(first["output_config"], {"effort": "high"})
 
-    def test_keyed_audit_does_not_enable_lan_or_platform(self):
+    def test_keyed_audit_preserves_platform_refusal_and_keyless_lan_rules(self):
         for audited in (False, True):
             platform = layer_of({KEYED_ID: keyed_document(base_url="https://API.OPENAI.COM:443/v1")},
                                 audited=audited)
@@ -1689,7 +1746,12 @@ class KeyedAuthorityTests(KeyedServedCase):
             for line in lan["lines"].values():
                 line.update(capabilities=["lead", "agents"], roles=["cm-reviewer"])
             layer = layer_of({"lanbox": lan}, audited=audited)
-            self.assertTrue(any(p.code == "agents" for p in layer.problems))
+            self.assertEqual(layer.problems, ())
+            self.assertEqual(layer.route_status["lanbox"], "keyless")
+            for key in lan["lines"]:
+                self.assertTrue(operator.operator_line_offered(key, layer=layer, provider_enabled=True))
+            lan["provider"]["auth"] = {"kind": "bearer", "secret_ref": "env:LAN_FIXTURE_API_KEY"}
+            self.assertNotIn("lanbox", layer_of({"lanbox": lan}, audited=audited).providers)
 
     def facts(self):
         from claude_multi import profile
@@ -1718,13 +1780,21 @@ class KeyedAuthorityTests(KeyedServedCase):
         stale = dataclasses.replace(facts, evidence="contract-stale")
         verdict = self.eligibility(entry, stale)
         self.assertTrue(verdict.eligible)
-        self.assertIn("predates", verdict.attention)
-        missing = dataclasses.replace(facts, evidence="missing", admitted=False)
-        self.assertFalse(self.eligibility(entry, missing).eligible)
-        self.assertTrue(self.eligibility(entry, missing, mode="record", recorded=True).eligible)
-        self.assertFalse(self.eligibility(entry, missing, mode="record", recorded=False).eligible)
+        self.assertEqual(verdict.evidence, "contract-stale")
+        self.assertTrue(any(w.code == "qualification" and "predates" in w.message for w in verdict.warnings))
+        for evidence in ("missing", "definition-stale", "failed"):
+            diagnostic = dataclasses.replace(facts, evidence=evidence, admitted=False, evidence_gaps=("tools",))
+            for mode, recorded in (("current", False), ("record", True), ("record", False)):
+                with self.subTest(evidence=evidence, mode=mode, recorded=recorded):
+                    verdict = self.eligibility(entry, diagnostic, mode=mode, recorded=recorded)
+                    self.assertTrue(verdict.eligible, verdict.reasons)
+                    self.assertEqual(verdict.evidence, evidence)
+                    self.assertTrue({"admission", "qualification"} <= {w.code for w in verdict.warnings})
+                    if evidence == "failed":
+                        self.assertTrue(any(w.code == "qualification" and "failed tools" in w.message
+                                            for w in verdict.warnings))
 
-    def test_keyed_workflow_requires_forced_variant(self):
+    def test_keyed_workflow_warns_without_forced_variant(self):
         from claude_multi import profile
         self.prepare_keyed(agents=True)
         code, out, err = self.op(["models", "admit", KEYED_KEY], "y\n")
@@ -1733,17 +1803,29 @@ class KeyedAuthorityTests(KeyedServedCase):
         self.assertEqual(code, 0, out + err)
         entry, facts = self.facts()
         self.assertTrue(self.eligibility(entry, facts).eligible, self.eligibility(entry, facts).reasons)
-        self.assertFalse(self.eligibility(entry, facts, slot=None, use=profile.WORKFLOW_USE).eligible)
+        verdict = self.eligibility(entry, facts, slot=None, use=profile.WORKFLOW_USE)
+        self.assertTrue(verdict.eligible, verdict.reasons)
+        self.assertEqual(facts.tools_variants, frozenset({"auto"}))
+        self.assertTrue(any(w.code == "tool-evidence" and "forced" in w.message for w in verdict.warnings))
         code, out, err = self.op(["models", "qualify", KEYED_KEY, "--tools", "--tool-choice", "forced"], "y\n")
         self.assertEqual(code, 0, out + err)
         entry, facts = self.facts()
-        self.assertTrue(self.eligibility(entry, facts, slot=None, use=profile.WORKFLOW_USE).eligible)
+        verdict = self.eligibility(entry, facts, slot=None, use=profile.WORKFLOW_USE)
+        self.assertTrue(verdict.eligible, verdict.reasons)
+        self.assertEqual(facts.tools_variants, frozenset({"auto", "forced"}))
+        self.assertNotIn("tool-evidence", {w.code for w in verdict.warnings})
 
     def test_keyed_agents_route_eligible_only_with_trusted_flag(self):
         self.prepare_keyed(agents=True)
         entry, facts = self.facts()
         self.assertTrue(facts.d60)
-        self.assertFalse(self.eligibility(entry, facts).eligible)  # flag alone grants nothing
+        verdict = self.eligibility(entry, facts)
+        self.assertTrue(verdict.eligible, verdict.reasons)  # approved route; no badge or qualification needed
+        self.assertTrue({"admission", "qualification"} <= {w.code for w in verdict.warnings})
+        for route in ("unapproved", "changed"):
+            refused = self.eligibility(entry, dataclasses.replace(facts, route=route))
+            self.assertFalse(refused.eligible)
+            self.assertTrue(any(route in reason for reason in refused.reasons))
         provider = self.runtime.operator_snapshot().layer.providers[KEYED_ID].entry
         self.assertIsNone(operator.agent_route_kind(provider, gateway=self.runtime.catalog.docs["gateway"]))
         self.assertIsNotNone(operator.agent_route_kind(provider, gateway={}))

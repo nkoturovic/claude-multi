@@ -199,6 +199,9 @@ class KeyedClientTests(unittest.TestCase):
         for key in (AGENT, WORKFLOW, FORBIDDEN):
             declaration["lines"][key] = {**copy.deepcopy(lead), "wire_model": WIRES[key],
                 "capabilities": ["lead", "agents"], "roles": ["cm-reviewer"]}
+        # Admission is not a fence boundary. Keep the negative control
+        # served but in another lead class and unbound as an operator agent.
+        declaration["lines"][FORBIDDEN]["context"]["declared_tokens"] = 128000
         self.tls = keyed_gateway.KeyedTLS(files={keyed.KEYED_ID: declaration}, respond=self.script)
         self.addCleanup(self.tls.close)
         self.relay = Relay(self.tls.gateway).start()

@@ -29,6 +29,7 @@ from _v4 import V4Case
 from test_migrate import _retired_entry
 from claude_multi import catalog, cli, custom, lineup, profile, scope, sessions, settings, views
 import claude_multi.sessions
+import claude_multi.cli.runtime as cli_runtime
 import subprocess
 
 SPEC = "the views contract"
@@ -1142,8 +1143,8 @@ class PickerRowsTests(unittest.TestCase):
                 evidence_gaps=("tools",) if evidence == "failed" else ())
             current = lcat.with_gate(profile.AgentGate(facts={operator_key: facts}))
             eff = _eff(current)
-            with mock.patch.object(cli.Runtime, "smoke", side_effect=AssertionError("automatic smoke")) as smoke, \
-                    mock.patch.object(cli.Runtime, "qualify_post", side_effect=AssertionError("automatic qualification")) as qualify:
+            with mock.patch.object(cli_runtime.Runtime, "smoke", side_effect=AssertionError("automatic smoke")) as smoke, \
+                    mock.patch.object(cli_runtime.Runtime, "qualify_post", side_effect=AssertionError("automatic qualification")) as qualify:
                 rows = views.line_rows(current, eff, custom_ids=frozenset(legacy))
                 for key in (*legacy, operator_key):
                     row = next(r for r in rows if r.key == key)
