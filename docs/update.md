@@ -84,9 +84,18 @@ applies to the Nix package too.
 
 ## Offline and behind a proxy
 
-`claude-multi update --from-dir <path>` installs from release files you
-downloaded yourself (the signature is still checked). The update
-connects to the release location directly; see
-[guides/networking.md](guides/networking.md). How old the installed
-release is (on the card and in doctor) is the release's date, also when
-you are offline.
+`claude-multi update` and the card's **U** use the invoking process's
+`https_proxy` / `HTTPS_PROXY` and `no_proxy` / `NO_PROXY` environment
+variables, not the gateway's proxy setting. Lowercase wins, including an
+empty lowercase override. See [guides/networking.md](guides/networking.md)
+for proxy and certificate configuration and its limits.
+
+The installed **1.0.0** updater disables environment proxies. If your
+network requires a proxy, use the [installer](install/linux.md#install) or
+`claude-multi update --from-dir <path>` once to reach a release with this
+fix. The installer uses `curl`'s or `wget`'s proxy settings.
+
+`--from-dir <path>` installs from release files you downloaded yourself
+(the signature is still checked), and remains available offline. How old
+the installed release is (on the card and in doctor) is the release's date,
+also when you are offline.

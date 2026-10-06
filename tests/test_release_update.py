@@ -18,11 +18,13 @@ from __future__ import annotations
 import contextlib
 import datetime
 import hashlib
+import http.client
 import http.server
 import io
 import json
 import os
 import shutil
+import socket
 import ssl
 import subprocess
 import tarfile
@@ -471,8 +473,10 @@ class FactsTests(JourneyTestCase):
 
 class _Handler(http.server.BaseHTTPRequestHandler):
     routes: dict[str, tuple[int, dict[str, str], bytes]] = {}
+    requests: list[str] = []
 
     def do_GET(self) -> None:  # noqa: N802 - http.server API
+        self.requests.append(self.path)
         status, headers, body = self.routes.get(self.path, (404, {}, b"missing"))
         self.send_response(status)
         for name, value in headers.items():
@@ -485,9 +489,80 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return None
 
 
-@unittest.skipUnless(shutil.which("openssl"), "BOUNDARY: openssl is not installed (it makes the test CA)")
-class HttpsTests(unittest.TestCase):
-    """The transport, the redirect lock and the trust source, over real TLS."""
+def proxy_environment(**values):
+    """Keep the test HOME/tripwires, but no inherited proxy or bypass setting."""
+    clean = {key: value for key, value in os.environ.items() if not key.lower().endswith("_proxy")}
+    return mock.patch.dict(os.environ, {**clean, **values}, clear=True)
+
+
+class _ConnectProxy:
+    """Loopback CONNECT/TLS fixture: serves bytes, never resolves or forwards."""
+
+    def __init__(self, target: str, context: ssl.SSLContext) -> None:
+        self.connects: list[str] = []
+        self.requests: list[str] = []
+        self.routes: dict[str, tuple[int, dict[str, str], bytes]] = {}
+        self.reply: bytes | None = None
+        owner = self
+
+        class Origin(_Handler):
+            routes = owner.routes
+            requests = owner.requests
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_CONNECT(self) -> None:  # noqa: N802 - http.server API
+                owner.connects.append(self.path)
+                self.close_connection = True
+                if self.path != target:
+                    self.send_error(403)
+                    return
+                if owner.reply is not None:
+                    self.wfile.write(owner.reply)
+                    self.wfile.flush()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.flush()
+                try:
+                    with context.wrap_socket(self.connection, server_side=True) as connection:
+                        Origin(connection, self.client_address, self.server)
+                except OSError:
+                    pass  # A refused certificate or a capped read closes the connection.
+
+            def log_message(self, *_args) -> None:
+                return None
+
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads = False  # server_close joins handlers (all socket operations are bounded).
+
+            def get_request(self):
+                connection, address = super().get_request()
+                connection.settimeout(3)
+                return connection, address
+
+        self.server = Server(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            raise AssertionError("CONNECT fixture did not stop")
+
+
+class _HttpsFixture:
+    """Shared temporary CA and direct TLS origin, with isolated proxy settings."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        environment = proxy_environment()
+        environment.start()
+        self.addCleanup(environment.stop)
+        _Handler.routes = {}
+        _Handler.requests = []
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -507,6 +582,8 @@ class HttpsTests(unittest.TestCase):
             "-days", "2", "-extfile", "ext", "-out", "server.pem")
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cls.tmp / "server.pem", cls.tmp / "server.key")
+        cls.tls_context = context
+        cls.ca_dir = cls.tmp
         cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         cls.server.socket = context.wrap_socket(cls.server.socket, server_side=True)
         cls.thread = threading.Thread(target=cls.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
@@ -518,10 +595,16 @@ class HttpsTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.server.shutdown()
         cls.server.server_close()
-        shutil.rmtree(cls.tmp, ignore_errors=True)
+        cls.thread.join(timeout=5)
+        shutil.rmtree(cls.ca_dir, ignore_errors=True)
 
     def url(self, path: str = "", host: str = "localhost") -> str:
         return f"https://{host}:{self.port}{path}"
+
+
+@unittest.skipUnless(shutil.which("openssl"), "BOUNDARY: openssl is not installed (it makes the test CA)")
+class HttpsTests(_HttpsFixture, unittest.TestCase):
+    """The transport, the redirect lock and the trust source, over real TLS."""
 
     def test_fetch_download_and_caps(self) -> None:
         _Handler.routes = {"/v1.0.0/MANIFEST.json": (200, {}, b"{}"), "/latest/MANIFEST.json": (200, {}, b"{\"a\":1}"),
@@ -587,6 +670,232 @@ class HttpsTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"SSL_CERT_FILE": str(self.tmp / "other.pem")}), \
                 mock.patch.object(tls, "SYSTEM_BUNDLES", ()), self.assertRaises(OSError):
             acquire._open(self.url("/claude"), headers={}, timeout=10)
+
+
+@unittest.skipUnless(shutil.which("openssl"), "BOUNDARY: openssl is not installed (it makes the test CA)")
+class ProxyHttpsTests(_HttpsFixture, JourneyTestCase):
+    """Real CONNECT, TLS and signed updates; every destination is a fixture."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.proxy = _ConnectProxy(f"localhost:{self.port}", self.tls_context)
+        self.addCleanup(self.proxy.close)
+        self.proxy.routes.update({"/MANIFEST.json": (200, {}, b"proxied"),
+                                  "/bundle.tar.gz": (200, {}, b"proxy bundle")})
+        _Handler.routes = {"/MANIFEST.json": (200, {}, b"direct")}
+
+    def transport(self, **kwargs) -> ru.HttpsTransport:
+        return ru.HttpsTransport(self.url(), environ=self.trusted, timeout=3, **kwargs)
+
+    def test_fetch_and_download_use_each_proxy_spelling(self) -> None:
+        for variable in ("https_proxy", "HTTPS_PROXY"):
+            with self.subTest(variable=variable), proxy_environment(**{variable: self.proxy.url}):
+                before = len(self.proxy.connects)
+                transport = self.transport()
+                self.assertEqual(transport.fetch("MANIFEST.json", None, 20), b"proxied")
+                destination = self.tmp / "bundle"
+                transport.download("bundle.tar.gz", "1.1.0", destination, 12)
+                self.assertEqual(destination.read_bytes(), b"proxy bundle")
+                self.assertEqual(self.proxy.connects[before:], [f"localhost:{self.port}"] * 2)
+                self.assertEqual(self.proxy.requests[-2:], ["/MANIFEST.json", "/bundle.tar.gz"])
+                self.assertEqual(transport.hosts, frozenset({"localhost"}))  # Never the proxy host.
+        self.assertEqual(_Handler.requests, [])
+
+    def test_lowercase_wins_and_empty_lowercase_disables_uppercase(self) -> None:
+        other = _ConnectProxy(f"localhost:{self.port}", self.tls_context)
+        self.addCleanup(other.close)
+        with proxy_environment(https_proxy=self.proxy.url, HTTPS_PROXY=other.url):
+            self.assertEqual(self.transport().fetch("MANIFEST.json", None, 20), b"proxied")
+        self.assertEqual(len(self.proxy.connects), 1)
+        self.assertEqual(other.connects, [])
+        with proxy_environment(https_proxy="", HTTPS_PROXY=self.proxy.url):
+            self.assertEqual(self.transport().fetch("MANIFEST.json", None, 20), b"direct")
+        self.assertEqual(len(self.proxy.connects), 1)
+        self.assertEqual(_Handler.requests, ["/MANIFEST.json"])
+
+    def test_matching_bypass_in_either_case_and_nonmatching_bypass(self) -> None:
+        for variable in ("no_proxy", "NO_PROXY"):
+            for bypass, expected in (("localhost", b"direct"), ("other.invalid", b"proxied")):
+                with self.subTest(variable=variable, bypass=bypass), \
+                        proxy_environment(https_proxy=self.proxy.url, **{variable: bypass}):
+                    before = len(self.proxy.connects)
+                    self.assertEqual(self.transport().fetch("MANIFEST.json", None, 20), expected)
+                    self.assertEqual(len(self.proxy.connects) - before, int(expected == b"proxied"))
+        with proxy_environment(https_proxy=self.proxy.url, no_proxy="", NO_PROXY="localhost"):
+            self.assertEqual(self.transport().fetch("MANIFEST.json", None, 20), b"proxied")
+        self.assertEqual(len(self.proxy.connects), 3)
+        self.assertEqual(_Handler.requests, ["/MANIFEST.json"] * 2)
+
+    def test_no_proxy_variables_keep_direct_operation(self) -> None:
+        with proxy_environment():
+            self.assertEqual(self.transport().fetch("MANIFEST.json", None, 20), b"direct")
+        self.assertEqual(self.proxy.connects, [])
+        self.assertEqual(_Handler.requests, ["/MANIFEST.json"])
+
+    def test_environ_argument_controls_trust_not_proxy_selection(self) -> None:
+        with proxy_environment(https_proxy=self.proxy.url):
+            transport = ru.HttpsTransport(self.url(), environ={**self.trusted, "https_proxy": "",
+                                                               "no_proxy": "localhost"}, timeout=3)
+            self.assertEqual(transport.fetch("MANIFEST.json", None, 20), b"proxied")
+        self.assertEqual(len(self.proxy.connects), 1)
+        self.assertEqual(_Handler.requests, [])
+
+    def test_unavailable_proxy_never_retries_directly(self) -> None:
+        # Reserve the port without listening: guaranteed refusal, no unrelated listener.
+        with socket.socket() as unavailable:
+            unavailable.bind(("127.0.0.1", 0))
+            with proxy_environment(https_proxy=f"http://127.0.0.1:{unavailable.getsockname()[1]}"):
+                with self.assertRaisesRegex(ru.TransportError, "connection failed"):
+                    self.transport().fetch("MANIFEST.json", None, 20)
+        self.assertEqual(_Handler.requests, [])
+        self.assertEqual(self.proxy.connects, [])
+
+    def test_redirects_through_proxy_keep_https_and_host_restrictions(self) -> None:
+        self.proxy.routes["/allowed"] = (302, {"Location": self.url("/MANIFEST.json")}, b"")
+        with proxy_environment(https_proxy=self.proxy.url):
+            self.assertEqual(self.transport().fetch("allowed", None, 20), b"proxied")
+            self.assertEqual(self.proxy.requests, ["/allowed", "/MANIFEST.json"])
+            self.assertEqual(len(self.proxy.connects), 2)
+            for target in (f"http://localhost:{self.port}/forbidden", self.url("/forbidden", host="127.0.0.1")):
+                with self.subTest(target=target):
+                    self.proxy.routes["/redirect"] = (302, {"Location": target}, b"")
+                    before = len(self.proxy.connects)
+                    with self.assertRaisesRegex(ru.TransportError, "not a release host"):
+                        self.transport().fetch("redirect", None, 20)
+                    self.assertEqual(len(self.proxy.connects), before + 1)
+            self.assertEqual(self.proxy.requests, ["/allowed", "/MANIFEST.json", "/redirect", "/redirect"])
+        self.assertEqual(_Handler.requests, [])
+
+    def test_final_response_host_and_timeout_seam_stay_enforced(self) -> None:
+        for final in (self.url(host="127.0.0.1"), f"http://localhost:{self.port}"):
+            with self.subTest(final=final), proxy_environment(https_proxy=self.proxy.url):
+                response = io.BytesIO(b"untrusted")
+                response.geturl = lambda: final
+                opener = mock.Mock(return_value=response)
+                with self.assertRaisesRegex(ru.TransportError, "not a release host"):
+                    self.transport(opener=opener).fetch("MANIFEST.json", None, 20)
+                opener.assert_called_once_with(self.url("/MANIFEST.json"), timeout=3)
+                self.assertTrue(response.closed)
+        self.assertEqual(self.proxy.connects, [])
+
+    def test_proxy_does_not_weaken_tls_or_size_caps(self) -> None:
+        with proxy_environment(https_proxy=self.proxy.url):
+            untrusted = ru.HttpsTransport(self.url(), timeout=3,
+                                          environ={"SSL_CERT_FILE": str(self.ca_dir / "other.pem")})
+            with mock.patch.object(tls, "SYSTEM_BUNDLES", ()), \
+                    self.assertRaisesRegex(ru.TransportError, "connection failed"):
+                untrusted.fetch("MANIFEST.json", None, 20)
+            self.assertEqual(self.proxy.requests, [])
+            with self.assertRaisesRegex(ru.TransportError, "larger than 3 bytes"):
+                self.transport().fetch("MANIFEST.json", None, 3)
+            with self.assertRaisesRegex(ru.TransportError, "larger than the 3 bytes"):
+                self.transport().download("bundle.tar.gz", "1.1.0", self.tmp / "overrun", 3)
+        self.assertEqual(len(self.proxy.connects), 3)
+        self.assertEqual(_Handler.requests, [])
+
+    def test_malformed_proxy_urls_are_sanitized(self) -> None:
+        for proxy in ("http://fixture-user:fixture-password@[broken",
+                      "http://fixture-user:fixture-password@127.0.0.1:invalid"):
+            with self.subTest(proxy=proxy), proxy_environment(https_proxy=proxy):
+                with self.assertRaises(ru.TransportError) as caught:
+                    self.transport().fetch("MANIFEST.json", None, 20)
+                self.assertEqual(str(caught.exception),
+                                 "cannot reach the release server for MANIFEST.json: connection failed")
+        self.assertEqual(_Handler.requests, [])
+        self.assertEqual(self.proxy.connects, [])
+
+    def test_credential_bearing_errors_are_sanitized_and_http_status_is_numeric(self) -> None:
+        secret = "http://fixture-user:fixture-password@proxy.invalid CONNECT fixture-body"
+        for error in (ru.urllib.error.URLError(secret), OSError(secret), ValueError(secret),
+                      http.client.HTTPException(secret), http.client.BadStatusLine(secret)):
+            with self.subTest(error=type(error).__name__):
+                with self.assertRaises(ru.TransportError) as caught:
+                    self.transport(opener=mock.Mock(side_effect=error)).fetch("MANIFEST.json", None, 20)
+                self.assertEqual(str(caught.exception),
+                                 "cannot reach the release server for MANIFEST.json: connection failed")
+                self.assertTrue(caught.exception.__suppress_context__)
+        error = ru.urllib.error.HTTPError(self.url(), 407, secret, {}, None)
+        with self.assertRaises(ru.TransportError) as caught:
+            self.transport(opener=mock.Mock(side_effect=error)).fetch("MANIFEST.json", None, 20)
+        self.assertEqual(str(caught.exception), "the release server answered 407 for MANIFEST.json")
+
+    def test_malformed_and_refused_connect_replies_are_sanitized(self) -> None:
+        for reply in (b"fixture-user fixture-password fixture-body\r\n\r\n",
+                      b"HTTP/1.1 407 fixture-user fixture-password\r\nContent-Length: 12\r\n\r\nfixture-body"):
+            with self.subTest(reply=reply), proxy_environment(https_proxy=self.proxy.url):
+                self.proxy.reply = reply
+                with self.assertRaises(ru.TransportError) as caught:
+                    self.transport().fetch("MANIFEST.json", None, 20)
+                self.assertEqual(str(caught.exception),
+                                 "cannot reach the release server for MANIFEST.json: connection failed")
+        self.assertEqual(len(self.proxy.connects), 2)
+        self.assertEqual(self.proxy.requests, [])
+        self.assertEqual(_Handler.requests, [])
+
+    def installed_pair(self) -> tuple[str, str]:
+        self.seed(self.release("0.9.0"))
+        code, out = self.run_journey(from_dir=str(self.release("1.0.0").dir), assume_yes=True)
+        self.assertEqual(code, ru.EXIT_OK, out)
+        return self.current(), os.readlink(self.root / "previous")
+
+    def serve_release(self, release: FakeRelease) -> None:
+        self.proxy.routes.clear()
+        self.proxy.routes.update({f"/{path.name}": (200, {}, path.read_bytes())
+                                  for path in release.dir.iterdir() if path.is_file()})
+
+    def proxy_journey(self, **kwargs) -> tuple[int, str]:
+        with proxy_environment(https_proxy=self.proxy.url):
+            return self.run_journey(journey=self.journey(environ={**self.environ, **self.trusted}),
+                                    base_url=self.url(), assume_yes=True, **kwargs)
+
+    def test_signed_check_and_update_succeed_through_proxy(self) -> None:
+        before = self.installed_pair()
+        newer = self.release("1.1.0")
+        self.serve_release(newer)
+        code, out = self.proxy_journey(mode="check")
+        self.assertEqual(code, ru.EXIT_OK, out)
+        self.assertIn("1.1.0 is available", out)
+        self.assertEqual((self.current(), os.readlink(self.root / "previous")), before)
+        self.assertNotIn(f"/{newer.asset().name}", self.proxy.requests)
+        code, out = self.proxy_journey()
+        self.assertEqual(code, ru.EXIT_OK, out)
+        self.assertIn("Updated claude-multi to 1.1.0", out)
+        self.assertEqual((self.current(), os.readlink(self.root / "previous")),
+                         ("versions/1.1.0", "versions/1.0.0"))
+        for name in ("MANIFEST.json", "SHA256SUMS", "SHA256SUMS.sshsig", newer.asset().name):
+            self.assertIn(f"/{name}", self.proxy.requests)
+        self.assertEqual(len(self.proxy.connects), len(self.proxy.requests))
+        self.assertEqual(_Handler.requests, [])
+
+    def test_rogue_signature_and_tampered_bundle_leave_both_links_unchanged(self) -> None:
+        before = self.installed_pair()
+        for tamper in ("signature", "bundle"):
+            with self.subTest(tamper=tamper):
+                newer = self.release("1.1.0")
+                if tamper == "signature":
+                    sign(newer, SEED_B)
+                else:
+                    data = newer.asset().read_bytes()
+                    newer.asset().write_bytes(bytes([data[0] ^ 1]) + data[1:])  # Same size, wrong hash.
+                self.serve_release(newer)
+                code, out = self.proxy_journey()
+                self.assertEqual(code, ru.EXIT_REFUSED, out)
+                self.assertIn("is not trusted" if tamper == "signature" else "does not match the signed checksum", out)
+                self.assertEqual((self.current(), os.readlink(self.root / "previous")), before)
+        self.assertTrue(self.proxy.connects)
+        self.assertEqual(_Handler.requests, [])
+
+    def test_connect_failures_stay_inside_the_journey_error_boundary(self) -> None:
+        before = self.installed_pair()
+        self.proxy.reply = b"fixture-user fixture-password fixture-body\r\n\r\n"
+        code, out = self.proxy_journey(mode="check")
+        self.assertEqual(code, ru.EXIT_REFUSED, out)
+        self.assertIn("connection failed", out)
+        for value in ("fixture-user", "fixture-password", "fixture-body", self.proxy.url, "Traceback", "CONNECT"):
+            self.assertNotIn(value, out)
+        self.assertEqual((self.current(), os.readlink(self.root / "previous")), before)
+        self.assertEqual(len(self.proxy.connects), 1)
+        self.assertEqual(_Handler.requests, [])
 
 
 class CommandLineTests(JourneyTestCase):

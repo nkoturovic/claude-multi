@@ -20,10 +20,24 @@ Requirements:
 
 - glibc 2.17 or newer;
 - `curl` or `wget` for the downloads;
+- trusted CA certificates for HTTPS downloads (`ca-certificates` on Debian,
+  Ubuntu and Fedora);
 - `ssh-keygen` (OpenSSH 8.1 or newer) to verify the release signature.
   Without it, the installer of a release checks the download against the
   checksums built into that installer instead (see
   [the release trust modes](../security.md#signed-releases)).
+
+On a minimal Debian or Ubuntu image, install the download and verification
+prerequisites first (run these commands as root, or with `sudo`):
+
+```sh
+apt-get update
+apt-get install --yes --no-install-recommends curl ca-certificates openssh-client
+```
+
+On Fedora, the corresponding packages are `curl`, `ca-certificates` and
+`openssh-clients`. These are system packages; the claude-multi installer
+itself runs as your normal user.
 
 ## Install
 

@@ -33,6 +33,20 @@ verifier and the key the installed release carries. `--allowed-signers
 FILE` changes only that one installation's check, never the trust the
 installed updater uses afterwards.
 
+Download the checksum list and signature for the same release as the files
+you want to verify. Replace `VERSION` with its version number, without the
+leading `v` (for example, `1.0.1`):
+
+```sh
+version=VERSION
+curl -fsSLO "https://github.com/nkoturovic/claude-multi/releases/download/v${version}/SHA256SUMS"
+curl -fsSLO "https://github.com/nkoturovic/claude-multi/releases/download/v${version}/SHA256SUMS.sshsig"
+```
+
+Run these commands in the directory containing the downloaded installer
+or bundle. Use the same version for every file; do not mix a versioned
+download with files from `latest`.
+
 `SHA256SUMS` lists `MANIFEST.json`, every bundle and both installers, so
 you can check a download, the installer included, before you run it. The
 release key, as an installation carries it:
