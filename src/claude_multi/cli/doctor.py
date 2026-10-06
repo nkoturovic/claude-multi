@@ -2052,6 +2052,11 @@ def _check_scope_integrity(
                 f"after launch; live agent changes need a relaunch — claude-multi -r {mid} "
                 "after it exits"
             )
+    if ep.diagnostics_kept:
+        attention.append(
+            f"session {m8}: review labels and model diagnostics changed since launch; "
+            "the proven scope is kept until the next resume"
+        )
     if ep.launch_files_kept and ep.preference_launch_differs:
         # A preference-only launch-item difference is lazy
         # state with its own wording, never BLOCK and never "catalog changed".

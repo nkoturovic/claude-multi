@@ -1,0 +1,347 @@
+{
+  "agent_classes": {
+    "cm-implementer": 1000000,
+    "cm-reviewer": 258400,
+    "cm-reviewer-strong": 500000
+  },
+  "agent_files": {
+    ".claude/agents/cm-implementer.md": "---\nname: cm-implementer\ndescription: \"Normal bounded implementation. Default implementer grade. Worktree-isolated; reports changed files, validation and the worktree state. Managed cm session: if a selected cm-* type is unavailable, stop; never substitute a generic agent.\"\nmodel: gpt-multi-sol-high[1m]\neffort: high\nisolation: worktree\n---\n\n# Implementer \u2014 bounded implementation\n\nYou are an implementation agent. Execute the bounded task exactly as scoped,\ninside an isolated worktree.\n\n## Scope discipline\n\n- Touch only what the task requires. No speculative refactors, drive-by\n  cleanups, or unrelated formatting changes.\n- One writer owns an overlapping file scope at a time. If the task collides\n  with another writer's scope, stop and report the collision instead of\n  working around it.\n- Stay inside the assigned isolation boundary. Report back; the lead owns\n  integration and final merge.\n\n## Contract\n\n- Implement the task, then validate it with the checks available in the\n  repository (focused tests, builds, linters) and report exactly: files\n  changed, what changed, which validations ran, and their results.\n- When the brief names a gating check, run it and report its exact result;\n  the task is not done until that check passes or you report why it cannot.\n- When you are worktree-isolated, close your report with the worktree path,\n  branch, base ref you branched from, and whether the work is committed,\n  uncommitted, or mixed, so review and integration can target it directly.\n  Leave the worktree in place; the lead owns cleanup.\n- If assigned an existing worktree, work in it by absolute path\n  (`git -C <path>`, `(cd <path> && <command>)`); EnterWorktree is not\n  required and may be refused from a repository-root session.\n- Do not commit, push, open pull requests, or modify shared state unless the\n  task explicitly says to.\n- Match existing style and conventions. Keep the change minimal and complete.\n- Never end your turn waiting for a reply. To ask the lead something, send\n  the message and keep working, or finish with status `blocked` and the\n  exact need.\n\n## Delegation\n\n- You may delegate distinct bounded subproblems inside the assigned scope when\n  parallelism helps. Descendants share these same boundaries; you keep\n  validation ownership for everything you delegate.\n- Spawn only `cm-*` agent types for delegated work; native generic agents\n  are not valid substitutes and may be denied by the effective session\n  policy. Never TaskStop a delegated child agent \u2014 another agent's tasks\n  are refused by ownership (the main session stops anything; you may stop\n  your own background shell/monitor tasks). Report a stuck or failed\n  delegate in your final text.\n- Never invoke a skill that spawns agents (such as `code-review`): its\n  agents run outside the lineup. Do that work yourself.\n",
+    ".claude/agents/cm-reviewer-strong.md": "---\nname: cm-reviewer-strong\ndescription: \"Independent report-only review, same contract, for high-stakes changes and strong or lead authors (see the review routing table); several times the cost of cm-reviewer. Read-only. Managed cm session: if a selected cm-* type is unavailable, stop; never substitute a generic agent.\"\nmodel: claude-multi-grok46-xhigh\neffort: xhigh\ndisallowedTools: Edit, Write, NotebookEdit, Agent, Skill\n---\n\n# Reviewer \u2014 independent change review\n\nYou review the change presented to you independently and report. You are\nreport-only: you have no edit, write, agent or skill tools, and you never\ncommit, push or change branches, the index or remote state. A finding with\na concrete failure scenario and a suggested fix is already an exact spec;\nthe lead hands it to an implementer.\n\n## Output contract\n\n- Rank every finding BLOCKER, MAJOR, MINOR or NIT.\n- Give each finding its file and line, a concrete failure scenario (the\n  inputs or state that produce the wrong result, and what goes wrong) and a\n  suggested fix.\n- Verify every finding before you report it: reproduce it, or confirm it by\n  a command, a test or an exact code path. Leave out what you cannot verify,\n  or list it separately as an unverified question.\n- End with exactly one verdict: APPROVE or REVISE. Only verified BLOCKER or MAJOR findings can produce REVISE; MINOR and NIT findings never block.\n- Review the actual change, not a summary of it: read the diff and the\n  surrounding code you need.\n- Never end your turn waiting for a reply. To ask the lead something, send\n  the message and keep reviewing, or finish with status `blocked` and the\n  exact need.\n\n## Rounds\n\n- Review the finished change set once.\n- In round 2 check only the fixes for your round-1 findings; raise a new issue only if a fix introduced it.\n\n## Reading worktree-isolated work\n\n- A worktree is a plain directory: read files at its path directly, and use\n  `git -C <path> status|diff|log` for the change under review. Run checks\n  with `(cd <path> && <command>)` in a subshell, and only commands that do\n  not write.\n- Never call EnterWorktree to inspect another agent's worktree: from a\n  repository-root session it is refused, and you never need it. If a\n  reported worktree path is gone, report that instead of improvising.\n\n## Independence\n\n- Judge the work on its evidence, not on the author's reputation or the\n  lead's preference.\n",
+    ".claude/agents/cm-reviewer.md": "---\nname: cm-reviewer\ndescription: \"Independent report-only review: verified BLOCKER/MAJOR/MINOR/NIT findings and an APPROVE or REVISE verdict. Default reviewer; choose per the review routing table. Read-only. Managed cm session: if a selected cm-* type is unavailable, stop; never substitute a generic agent.\"\nmodel: gpt-multi-gpt55-high\neffort: high\ndisallowedTools: Edit, Write, NotebookEdit, Agent, Skill\n---\n\n# Reviewer \u2014 independent change review\n\nYou review the change presented to you independently and report. You are\nreport-only: you have no edit, write, agent or skill tools, and you never\ncommit, push or change branches, the index or remote state. A finding with\na concrete failure scenario and a suggested fix is already an exact spec;\nthe lead hands it to an implementer.\n\n## Output contract\n\n- Rank every finding BLOCKER, MAJOR, MINOR or NIT.\n- Give each finding its file and line, a concrete failure scenario (the\n  inputs or state that produce the wrong result, and what goes wrong) and a\n  suggested fix.\n- Verify every finding before you report it: reproduce it, or confirm it by\n  a command, a test or an exact code path. Leave out what you cannot verify,\n  or list it separately as an unverified question.\n- End with exactly one verdict: APPROVE or REVISE. Only verified BLOCKER or MAJOR findings can produce REVISE; MINOR and NIT findings never block.\n- Review the actual change, not a summary of it: read the diff and the\n  surrounding code you need.\n- Never end your turn waiting for a reply. To ask the lead something, send\n  the message and keep reviewing, or finish with status `blocked` and the\n  exact need.\n\n## Rounds\n\n- Review the finished change set once.\n- In round 2 check only the fixes for your round-1 findings; raise a new issue only if a fix introduced it.\n\n## Reading worktree-isolated work\n\n- A worktree is a plain directory: read files at its path directly, and use\n  `git -C <path> status|diff|log` for the change under review. Run checks\n  with `(cd <path> && <command>)` in a subshell, and only commands that do\n  not write.\n- Never call EnterWorktree to inspect another agent's worktree: from a\n  repository-root session it is refused, and you never need it. If a\n  reported worktree path is gone, report that instead of improvising.\n\n## Independence\n\n- Judge the work on its evidence, not on the author's reputation or the\n  lead's preference.\n"
+  },
+  "other_files": {
+    ".claude/skills/cm/SKILL.md": "---\nname: cm\ndescription: Show or change this claude-multi session's agent lineup (/cm, /cm profiles, /cm profile NAME, /cm set AGENT=MODEL[:EFFORT], /cm unset AGENT, /cm direct [MODEL[:EFFORT]], /cm pin, /cm follow, /cm fallback PROVIDER [--preview], /cm review [high-stakes] [RANGE], /cm quota)\nargument-hint: \"profiles \u00b7 profile NAME \u00b7 set AGENT=MODEL[:EFFORT] \u00b7 unset AGENT \u00b7 direct [MODEL[:EFFORT]] \u00b7 pin \u00b7 follow \u00b7 fallback PROVIDER [--preview] \u00b7 review [high-stakes] [RANGE] \u00b7 quota\"\ndisable-model-invocation: true\nallowed-tools: Bash(claude-multi lineup:*)\n---\n!`claude-multi lineup --session ${CLAUDE_SESSION_ID} '$ARGUMENTS'`\n",
+    "lead-set.json": "{\"context\":{\"percent\":90,\"scalar\":null,\"trigger\":702000,\"window\":800000},\"lead\":{\"display\":\"Opus 4.8 \u00b7 1M selector\",\"effort\":\"ultracode\",\"family\":\"anthropic\",\"key\":\"opus\",\"selector\":\"claude-multi-opus-4-8[1m]\"},\"lead_class\":\"large\",\"lead_providers\":null,\"rows\":[{\"display\":\"Fable 5 \u00b7 1M selector\",\"effort\":null,\"family\":\"anthropic\",\"key\":\"fable\",\"label\":\"Fable 5 \u00b7 1M selector \u00b7 anthropic \u00b7 1M\",\"provider\":\"anthropic\",\"selector\":\"claude-fable-5[1m]\",\"source\":\"catalog\"},{\"display\":\"Kimi K3 \u00b7 1M selector\",\"effort\":\"max\",\"family\":\"moonshot\",\"key\":\"kimi-k3\",\"label\":\"Kimi K3 \u00b7 1M selector \u00b7 max \u00b7 moonshot \u00b7 1M\",\"provider\":\"kimi\",\"selector\":\"claude-multi-kimi-k3[1m]\",\"source\":\"catalog\"},{\"display\":\"Opus 4.8 \u00b7 1M selector\",\"effort\":null,\"family\":\"anthropic\",\"key\":\"opus\",\"label\":\"Opus 4.8 \u00b7 1M selector \u00b7 anthropic \u00b7 1M\",\"provider\":\"anthropic\",\"selector\":\"claude-multi-opus-4-8[1m]\",\"source\":\"catalog\"},{\"display\":\"Opus 5 \u00b7 1M selector\",\"effort\":null,\"family\":\"anthropic\",\"key\":\"opus5\",\"label\":\"Opus 5 \u00b7 1M selector \u00b7 anthropic \u00b7 1M\",\"provider\":\"anthropic\",\"selector\":\"claude-multi-opus-5[1m]\",\"source\":\"catalog\"},{\"display\":\"Opus 5.5 \u00b7 1M selector\",\"effort\":null,\"family\":\"anthropic\",\"key\":\"opus55\",\"label\":\"Opus 5.5 \u00b7 1M selector \u00b7 anthropic \u00b7 1M\",\"provider\":\"anthropic\",\"selector\":\"claude-multi-opus-5-5[1m]\",\"source\":\"catalog\"},{\"display\":\"DeepSeek V4 Flash \u00b7 OpenRouter\",\"effort\":\"high\",\"family\":\"deepseek\",\"key\":\"or-deepseek\",\"label\":\"DeepSeek V4 Flash \u00b7 OpenRouter \u00b7 high \u00b7 deepseek \u00b7 1M\",\"provider\":\"openrouter\",\"selector\":\"claude-multi-or-deepseek-high[1m]\",\"source\":\"catalog\"},{\"display\":\"DeepSeek V4 Flash \u00b7 OpenRouter\",\"effort\":\"xhigh\",\"family\":\"deepseek\",\"key\":\"or-deepseek\",\"label\":\"DeepSeek V4 Flash \u00b7 OpenRouter \u00b7 xhigh \u00b7 deepseek \u00b7 1M\",\"provider\":\"openrouter\",\"selector\":\"claude-multi-or-deepseek-xhigh[1m]\",\"source\":\"catalog\"},{\"display\":\"Gemini 3 Flash \u00b7 OpenRouter\",\"effort\":\"high\",\"family\":\"google\",\"key\":\"or-gemini\",\"label\":\"Gemini 3 Flash \u00b7 OpenRouter \u00b7 high \u00b7 google \u00b7 1M\",\"provider\":\"openrouter\",\"selector\":\"claude-multi-or-gemini-high[1m]\",\"source\":\"catalog\"},{\"display\":\"Gemini 3 Flash \u00b7 OpenRouter\",\"effort\":\"xhigh\",\"family\":\"google\",\"key\":\"or-gemini\",\"label\":\"Gemini 3 Flash \u00b7 OpenRouter \u00b7 xhigh \u00b7 google \u00b7 1M\",\"provider\":\"openrouter\",\"selector\":\"claude-multi-or-gemini-xhigh[1m]\",\"source\":\"catalog\"},{\"display\":\"GPT-6 Sol \u00b7 OpenRouter\",\"effort\":\"high\",\"family\":\"openai\",\"key\":\"or-gpt\",\"label\":\"GPT-6 Sol \u00b7 OpenRouter \u00b7 high \u00b7 openai \u00b7 1M\",\"provider\":\"openrouter\",\"selector\":\"claude-multi-or-gpt-high[1m]\",\"source\":\"catalog\"},{\"display\":\"GPT-6 Sol \u00b7 OpenRouter\",\"effort\":\"xhigh\",\"family\":\"openai\",\"key\":\"or-gpt\",\"label\":\"GPT-6 Sol \u00b7 OpenRouter \u00b7 xhigh \u00b7 openai \u00b7 1M\",\"provider\":\"openrouter\",\"selector\":\"claude-multi-or-gpt-xhigh[1m]\",\"source\":\"catalog\"},{\"display\":\"Opus 5.5 \u00b7 OpenRouter\",\"effort\":\"high\",\"family\":\"anthropic\",\"key\":\"or-opus\",\"label\":\"Opus 5.5 \u00b7 OpenRouter \u00b7 high \u00b7 anthropic \u00b7 1M\",\"provider\":\"openrouter\",\"selector\":\"claude-multi-or-opus-high[1m]\",\"source\":\"catalog\"},{\"display\":\"Opus 5.5 \u00b7 OpenRouter\",\"effort\":\"xhigh\",\"family\":\"anthropic\",\"key\":\"or-opus\",\"label\":\"Opus 5.5 \u00b7 OpenRouter \u00b7 xhigh \u00b7 anthropic \u00b7 1M\",\"provider\":\"openrouter\",\"selector\":\"claude-multi-or-opus-xhigh[1m]\",\"source\":\"catalog\"},{\"display\":\"Qwen3.8 Max\",\"effort\":\"max\",\"family\":\"alibaba\",\"key\":\"qwen38\",\"label\":\"Qwen3.8 Max \u00b7 max \u00b7 alibaba \u00b7 1M\",\"provider\":\"qwen\",\"selector\":\"claude-multi-qwen38-max[1m]\",\"source\":\"catalog\"},{\"display\":\"GPT-5.6 Sol\",\"effort\":\"high\",\"family\":\"openai\",\"key\":\"sol\",\"label\":\"GPT-5.6 Sol \u00b7 high \u00b7 openai \u00b7 1M\",\"provider\":\"openai\",\"selector\":\"gpt-multi-sol-high[1m]\",\"source\":\"catalog\"},{\"display\":\"GPT-5.6 Sol\",\"effort\":\"xhigh\",\"family\":\"openai\",\"key\":\"sol\",\"label\":\"GPT-5.6 Sol \u00b7 xhigh \u00b7 openai \u00b7 1M\",\"provider\":\"openai\",\"selector\":\"gpt-multi-sol-xhigh[1m]\",\"source\":\"catalog\"}],\"version\":1}\n",
+    "lineup.gen": "1 0e24f865e6e8\n",
+    "lineup.md": "# claude-multi lineup (lineup_generation 1)\n\nProfile: compatibility \u00b7 lead class large (1M) \u00b7 providers: openai 2 \u00b7 openrouter 1 \u00b7 anthropic 0 (+lead)\n\n## Lead\n- lead: Opus 4.8 \u00b7 1M selector \u00b7 ultracode \u00b7 anthropic \u00b7 `claude-multi-opus-4-8[1m]`\n- /model offers only the lead set (16 entries); any other model needs a relaunch with another profile.\n- /model's built-in Default row is `claude-opus-4-8[1m]`, outside this lead set; it is refused.\n\n## Agents\n- `cm-implementer`: GPT-5.6 Sol \u00b7 high \u00b7 openai \u00b7 `gpt-multi-sol-high[1m]`\n- `cm-reviewer`: GPT-5.5 \u00b7 high \u00b7 openai \u00b7 `gpt-multi-gpt55-high`\n- `cm-reviewer-strong`: Grok 4.6 \u00b7 xhigh \u00b7 x-ai \u00b7 `claude-multi-grok46-xhigh`\n- not bound: `cm-explorer`, `cm-analyst`, `cm-analyst-strong`, `cm-implementer-light`, `cm-implementer-strong`, `cm-designer`\n\n## Provider exhaustion\n- implementer: openai: `cm-implementer` \u2014 no other-provider grade; ask the operator for `/cm profile claude` (or another profile that avoids that provider) or `/cm set <agent>=<model>:<effort>`, then `/reload-plugins`.\n- reviewer: openai: `cm-reviewer`; openrouter: `cm-reviewer-strong` \u2014 reroute to the grade on another provider.\n\n## Review routing\n| Author | Normal change | High-stakes change |\n|---|---|---|\n| cm-implementer (openai) | cm-reviewer-strong (only other-family) | cm-reviewer-strong |\n| lead (anthropic) | cm-reviewer-strong | cm-reviewer-strong |\n\nReview rounds: at most 2 per change set; then decide yourself and report open disagreement to the operator.\n\n## Rules\n- Trust the lineup with the highest lineup_generation; this one is generation 1.\n- After a lineup change, run `/reload-plugins` before spawning: until then new spawns keep the previous bindings. Running agents keep their model.\n- Never SendMessage-continue an agent spawned under an earlier lineup_generation: spawn it fresh with a self-contained brief. A round-2 review after a lineup change is a fresh spawn of the same agent type, given the round-1 findings; first re-read the routing table of the current lineup_generation: if that author's cell is now same-family or names the other reviewer, follow the current table.\n- `/model`: press `s` (this session only). Enter saves the model into the user's global settings, which plain `claude` then inherits.\n\n## Checks\n- ! reviewer: context 258K is below the lead's 1M class (allowed)\n- ! reviewer-strong: context 500K is below the lead's 1M class (allowed)\n"
+  },
+  "record": {
+    "applied": {
+      "agents": {
+        "cm-implementer": {
+          "effort": "high",
+          "generation": "5.6",
+          "key": "sol",
+          "selector": "gpt-multi-sol-high[1m]"
+        },
+        "cm-reviewer": {
+          "effort": "high",
+          "generation": "5.5",
+          "key": "gpt55",
+          "selector": "gpt-multi-gpt55-high"
+        },
+        "cm-reviewer-strong": {
+          "effort": "xhigh",
+          "generation": "4.6",
+          "key": "grok46",
+          "selector": "claude-multi-grok46-xhigh"
+        }
+      },
+      "lead": {
+        "compaction": {
+          "client_tokens": 1000000,
+          "percent": 90,
+          "provider_tokens": 1000000,
+          "scalar": null,
+          "trigger": 702000,
+          "window": 800000
+        },
+        "effort": "ultracode",
+        "env": {},
+        "generation": "4.8",
+        "key": "opus",
+        "selector": "claude-multi-opus-4-8[1m]"
+      },
+      "lead_providers": null,
+      "native_agents": {
+        "explore": "native",
+        "general_purpose": "on",
+        "plan": "native"
+      },
+      "no_subagents": false,
+      "settings": {
+        "admitted_lines": [],
+        "compaction_percent": 90,
+        "explore_inherit_cap_disabled": true,
+        "providers_enabled": {
+          "anthropic": true,
+          "deepseek": true,
+          "kimi": true,
+          "llm-local": true,
+          "meta": true,
+          "openai": true,
+          "openrouter": true,
+          "qwen": true
+        },
+        "review_round_cap": 2,
+        "version": 1,
+        "workflow_default_binding": null
+      },
+      "settings_overrides": {},
+      "workflows": "native"
+    },
+    "applied_hash": "sha256:0e6d39cfc88430869c894997556294944592c2241ea9264ee86615102f366cfc",
+    "catalog_hash": "sha256:63a605581069d16d93dcf0cebad68158ae6a3077fe5bc00056a27c7d32d73939",
+    "catalog_version": 31,
+    "created_at": "2026-10-05T00:00:00Z",
+    "cwd": "/fixture/project",
+    "follow": false,
+    "forked_from": null,
+    "identity_state": "unverified",
+    "last_event_source": null,
+    "last_seen_at": "2026-10-05T00:00:00Z",
+    "launch_epoch": 0,
+    "launch_fence": "sha256:ab64b334ac8245585d30763ba9e7f6c35910e8106c9481ac44b1919435948e48",
+    "launcher_version": "1.0.0",
+    "lead_class": "large",
+    "lineup_generation": 1,
+    "managed_id": "11111111-1111-4111-8111-111111111111",
+    "migrated_from_version": null,
+    "pending_forks": [],
+    "profile": "compatibility",
+    "runtime_aliases": [],
+    "runtime_session_id": "11111111-1111-4111-8111-111111111111",
+    "scope_lead": {
+      "effort": "ultracode",
+      "key": "opus",
+      "selector": "claude-multi-opus-4-8[1m]"
+    },
+    "version": 4
+  },
+  "scenario": "catalog",
+  "settings": {
+    "apiKeyHelper": "/fixture/bin/claude-multi-gateway-token",
+    "autoCompactEnabled": true,
+    "availableModels": [
+      "claude-fable-5[1m]",
+      "claude-multi-grok46-high",
+      "claude-multi-grok46-xhigh",
+      "claude-multi-kimi-k3[1m]",
+      "claude-multi-opus-4-8[1m]",
+      "claude-multi-opus-5-5[1m]",
+      "claude-multi-opus-5[1m]",
+      "claude-multi-or-deepseek-high[1m]",
+      "claude-multi-or-deepseek-xhigh[1m]",
+      "claude-multi-or-gemini-high[1m]",
+      "claude-multi-or-gemini-xhigh[1m]",
+      "claude-multi-or-gpt-high[1m]",
+      "claude-multi-or-gpt-xhigh[1m]",
+      "claude-multi-or-grok-high",
+      "claude-multi-or-grok-xhigh",
+      "claude-multi-or-opus-high[1m]",
+      "claude-multi-or-opus-xhigh[1m]",
+      "claude-multi-qwen38-max[1m]",
+      "claude-opus-4-8[1m]",
+      "claude-opus-5[1m]",
+      "claude-sonnet-5[1m]",
+      "gpt-multi-gpt55-high",
+      "gpt-multi-sol-high[1m]",
+      "gpt-multi-sol-xhigh[1m]"
+    ],
+    "disableAllHooks": false,
+    "disableWorkflows": false,
+    "env": {
+      "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5[1m]",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]",
+      "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "800000",
+      "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP": "1",
+      "CLAUDE_CODE_DISABLE_FAST_MODE": "1",
+      "CLAUDE_CODE_RETRY_WATCHDOG": "1",
+      "CLAUDE_CODE_SEND_FEEDBACK": "false",
+      "CLAUDE_MULTI_LAUNCH_EPOCH": "0",
+      "CLAUDE_MULTI_MANAGED_ID": "11111111-1111-4111-8111-111111111111",
+      "CLAUDE_MULTI_SESSION_ID": "11111111-1111-4111-8111-111111111111"
+    },
+    "hooks": {
+      "PostModelSwitch": [
+        {
+          "hooks": [
+            {
+              "command": "/fixture/bin/claude-multi-hook-3 session-event postmodel --managed-id 11111111-1111-4111-8111-111111111111 --launch-epoch 0 --hook-protocol 3",
+              "timeout": 5,
+              "type": "command"
+            }
+          ]
+        }
+      ],
+      "PreModelSwitch": [
+        {
+          "hooks": [
+            {
+              "command": "/fixture/bin/claude-multi-hook-3 session-event premodel --managed-id 11111111-1111-4111-8111-111111111111 --launch-epoch 0 --hook-protocol 3",
+              "timeout": 5,
+              "type": "command"
+            }
+          ]
+        }
+      ],
+      "SessionEnd": [
+        {
+          "hooks": [
+            {
+              "command": "/fixture/bin/claude-multi-hook-3 session-event end --managed-id 11111111-1111-4111-8111-111111111111 --launch-epoch 0 --hook-protocol 3",
+              "timeout": 5,
+              "type": "command"
+            }
+          ]
+        }
+      ],
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "command": "/fixture/bin/claude-multi-hook-3 session-event start --managed-id 11111111-1111-4111-8111-111111111111 --launch-epoch 0 --hook-protocol 3",
+              "timeout": 5,
+              "type": "command"
+            }
+          ]
+        }
+      ],
+      "SubagentStart": [
+        {
+          "hooks": [
+            {
+              "command": "/fixture/bin/claude-multi-hook-3 session-event subagent --managed-id 11111111-1111-4111-8111-111111111111 --launch-epoch 0 --hook-protocol 3",
+              "timeout": 5,
+              "type": "command"
+            }
+          ]
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "hooks": [
+            {
+              "command": "/fixture/bin/claude-multi-hook-3 session-event prompt --managed-id 11111111-1111-4111-8111-111111111111 --launch-epoch 0 --hook-protocol 3",
+              "timeout": 5,
+              "type": "command"
+            }
+          ]
+        }
+      ]
+    },
+    "model": "claude-multi-opus-4-8[1m]",
+    "modelPicker": {
+      "options": [
+        {
+          "description": "claude-multi \u00b7 fable",
+          "label": "Fable 5 \u00b7 1M selector \u00b7 anthropic \u00b7 1M",
+          "model": "claude-fable-5[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 kimi-k3",
+          "label": "Kimi K3 \u00b7 1M selector \u00b7 max \u00b7 moonshot \u00b7 1M",
+          "model": "claude-multi-kimi-k3[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 opus",
+          "label": "Opus 4.8 \u00b7 1M selector \u00b7 anthropic \u00b7 1M",
+          "model": "claude-multi-opus-4-8[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 opus5",
+          "label": "Opus 5 \u00b7 1M selector \u00b7 anthropic \u00b7 1M",
+          "model": "claude-multi-opus-5[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 opus55",
+          "label": "Opus 5.5 \u00b7 1M selector \u00b7 anthropic \u00b7 1M",
+          "model": "claude-multi-opus-5-5[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 or-deepseek",
+          "label": "DeepSeek V4 Flash \u00b7 OpenRouter \u00b7 high \u00b7 deepseek \u00b7 1M",
+          "model": "claude-multi-or-deepseek-high[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 or-deepseek",
+          "label": "DeepSeek V4 Flash \u00b7 OpenRouter \u00b7 xhigh \u00b7 deepseek \u00b7 1M",
+          "model": "claude-multi-or-deepseek-xhigh[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 or-gemini",
+          "label": "Gemini 3 Flash \u00b7 OpenRouter \u00b7 high \u00b7 google \u00b7 1M",
+          "model": "claude-multi-or-gemini-high[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 or-gemini",
+          "label": "Gemini 3 Flash \u00b7 OpenRouter \u00b7 xhigh \u00b7 google \u00b7 1M",
+          "model": "claude-multi-or-gemini-xhigh[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 or-gpt",
+          "label": "GPT-6 Sol \u00b7 OpenRouter \u00b7 high \u00b7 openai \u00b7 1M",
+          "model": "claude-multi-or-gpt-high[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 or-gpt",
+          "label": "GPT-6 Sol \u00b7 OpenRouter \u00b7 xhigh \u00b7 openai \u00b7 1M",
+          "model": "claude-multi-or-gpt-xhigh[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 or-opus",
+          "label": "Opus 5.5 \u00b7 OpenRouter \u00b7 high \u00b7 anthropic \u00b7 1M",
+          "model": "claude-multi-or-opus-high[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 or-opus",
+          "label": "Opus 5.5 \u00b7 OpenRouter \u00b7 xhigh \u00b7 anthropic \u00b7 1M",
+          "model": "claude-multi-or-opus-xhigh[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 qwen38",
+          "label": "Qwen3.8 Max \u00b7 max \u00b7 alibaba \u00b7 1M",
+          "model": "claude-multi-qwen38-max[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 sol",
+          "label": "GPT-5.6 Sol \u00b7 high \u00b7 openai \u00b7 1M",
+          "model": "gpt-multi-sol-high[1m]"
+        },
+        {
+          "description": "claude-multi \u00b7 sol",
+          "label": "GPT-5.6 Sol \u00b7 xhigh \u00b7 openai \u00b7 1M",
+          "model": "gpt-multi-sol-xhigh[1m]"
+        }
+      ],
+      "replaceBuiltInOptions": true
+    },
+    "permissions": {
+      "deny": [
+        "Agent(claude)",
+        "Skill(batch)",
+        "Skill(code-review)",
+        "Skill(commit)",
+        "Skill(commit-push-pr)",
+        "Skill(debug)",
+        "Skill(design-sync)",
+        "Skill(doctor)",
+        "Skill(fewer-permission-prompts)",
+        "Skill(init)",
+        "Skill(keybindings-help)",
+        "Skill(pr)",
+        "Skill(run-skill-generator)",
+        "Skill(schedule)",
+        "Skill(security-review)",
+        "Skill(simplify)",
+        "Skill(update-config)",
+        "Skill(verify)",
+        "Read(~/.config/claude-multi/**)",
+        "Read(~/.local/share/claude-multi/**)",
+        "Read(~/.config/anthropic/**)",
+        "Read(~/.claude/.credentials.json)",
+        "Edit(~/.local/state/claude-multi/**)",
+        "Edit(~/.config/claude-multi/**)"
+      ]
+    },
+    "workflowKeywordTriggerEnabled": false,
+    "workflowSizeGuideline": "medium",
+    "worktree": {
+      "baseRef": "head"
+    }
+  },
+  "source_ref": "ec821bab8ec3fb7a2d31554c1abd337ba82e6da9",
+  "source_release": "1.0.0"
+}
