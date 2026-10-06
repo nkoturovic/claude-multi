@@ -34,7 +34,8 @@ import _gateway_harness as harness
 
 
 def test_ids():
-    return tuple(dict.fromkeys(name for names in harness.PATCH_ROWS.values() for name in names))
+    return tuple(dict.fromkeys(name for patch, names in harness.PATCH_ROWS.items()
+                               for name in (*names, *harness.PATCH_CONTROL_ROWS.get(patch, ()))))
 
 
 def boundary_error(err):
@@ -197,7 +198,7 @@ def git_provenance(worktree):
     return {"head": head, "dirty": bool(status), "status_porcelain": status.splitlines()}
 
 
-def prove(destination):
+def prove(destination, patches=None):
     worktree = REPO_ROOT
     state.ensure_private_dir(destination)
     report = {"schema": "gwtest-patch-revert-v2", "git_tracked_only": True,
@@ -220,7 +221,12 @@ def prove(destination):
         print("Revert proof uses a dirty tree: HEAD alone does not identify the tested code; "
               "see status_porcelain in patch-revert.json.", file=sys.stderr)
     save()
-    closures = {patch: omission_closure(patch, manifest, harness.PATCH_DEPENDENCIES) for patch in manifest}
+    selected = tuple(dict.fromkeys(patches)) if patches else tuple(manifest)
+    if set(selected) - set(manifest):
+        raise ValueError("selected patch is outside the admitted manifest")
+    report["selected_patches"] = list(selected)
+    report["control_rows"] = harness.PATCH_CONTROL_ROWS
+    closures = {patch: omission_closure(patch, manifest, harness.PATCH_DEPENDENCIES) for patch in selected}
     # Include a dependents-only control even when it is not already another
     # patch's omission. Dict insertion order deduplicates those build sets.
     plans = dict.fromkeys([(), *closures.values(),
@@ -247,6 +253,12 @@ def prove(destination):
             if len(paths) != 1:
                 raise RuntimeError("Nix did not return exactly one diagnostic outPath")
             diagnostic = Path(paths[0])
+            # Keep every completed variant's closure live across later builds.
+            roots = destination / "roots"
+            roots.mkdir(exist_ok=True)
+            subprocess.run(["nix-store", "--add-root", str(roots / str(len(report["variants"]))),
+                            "--indirect", "--realise", str(diagnostic)], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
             gateway = (diagnostic / "share/gateway-outpath").read_text().strip()
             variant.update(build="ok", gateway=gateway, diagnostic=str(diagnostic),
                            go_modules_consumed=harness.consumed_vendor(diagnostic),
@@ -280,7 +292,7 @@ def prove(destination):
                                 any(value != "ok" for value in rows["outcomes"].values())):
                 return 1
             print(f"{', '.join(omitted) or 'control'}: rows finished, rc={run.returncode}", flush=True)
-        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             variant.update(build="failed" if variant["build"] == "pending" else variant["build"],
                            error=type(exc).__name__)
             save()
@@ -306,9 +318,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=Path.home() / ".cache/claude-multi-gateway-revert" /
                         datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    parser.add_argument("--patch", action="append", help="prove this patch's closure (repeatable; default: every patch); all rows still run")
     parser.add_argument("--run-rows", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
-    return run_rows(args.run_rows) if args.run_rows else prove(args.out)
+    return run_rows(args.run_rows) if args.run_rows else prove(args.out, args.patch)
 
 
 if __name__ == "__main__":

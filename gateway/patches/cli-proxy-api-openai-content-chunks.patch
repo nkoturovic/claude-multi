@@ -1,0 +1,570 @@
+diff --git a/internal/translator/openai/claude/openai_claude_response.go b/internal/translator/openai/claude/openai_claude_response.go
+--- a/internal/translator/openai/claude/openai_claude_response.go
++++ b/internal/translator/openai/claude/openai_claude_response.go
+@@ -230,79 +230,29 @@
+ 			// Don't send content_block_start for text here - wait for actual content
+ 		}
+ 
+-		// Handle reasoning content delta
++		// Handle reasoning content delta; its precedence is independent of content.
+ 		for _, reasoningText := range collectOpenAIObjectReasoningTexts(delta) {
+-			if reasoningText == "" {
+-				continue
+-			}
+-			if param.OpenToolCallIndex != -1 {
+-				if n := len(param.InterleavedContentChunks); n > 0 && param.InterleavedContentChunks[n-1].Type == "thinking" {
+-					param.InterleavedContentChunks[n-1].Text += reasoningText
+-				} else {
+-					param.InterleavedContentChunks = append(param.InterleavedContentChunks, InterleavedContentChunk{
+-						Type: "thinking",
+-						Text: reasoningText,
+-					})
++			if reasoningText != "" {
++				emitOpenAIThinkingDelta(param, &results, reasoningText)
++			}
++		}
++
++		// Only arrays use chunk decoding. Strings, null and absent content keep
++		// the same emission path, including the raw fallback for unknown arrays.
++		if content := delta.Get("content"); content.Exists() && content.String() != "" {
++			if chunks, ok := decodeOpenAIContentChunks(content); ok {
++				for _, chunk := range chunks {
++					if chunk.Text == "" {
++						continue
++					}
++					if chunk.Type == "thinking" {
++						emitOpenAIThinkingDelta(param, &results, chunk.Text)
++					} else {
++						emitOpenAITextDelta(param, &results, chunk.Text)
++					}
+ 				}
+ 			} else {
+-				stopTextContentBlock(param, &results)
+-				if !param.ThinkingContentBlockStarted {
+-					if param.ThinkingContentBlockIndex == -1 {
+-						param.ThinkingContentBlockIndex = param.NextContentBlockIndex
+-						param.NextContentBlockIndex++
+-					}
+-					contentBlockStartJSON := `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`
+-					contentBlockStartJSONBytes := []byte(contentBlockStartJSON)
+-					contentBlockStartJSONBytes, _ = sjson.SetBytes(contentBlockStartJSONBytes, "index", param.ThinkingContentBlockIndex)
+-					results = append(results, translatorcommon.AppendSSEEventBytes(nil, "content_block_start", contentBlockStartJSONBytes, 2))
+-					param.ThinkingContentBlockStarted = true
+-				}
+-
+-				thinkingDeltaJSON := `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`
+-				thinkingDeltaJSONBytes := []byte(thinkingDeltaJSON)
+-				thinkingDeltaJSONBytes, _ = sjson.SetBytes(thinkingDeltaJSONBytes, "index", param.ThinkingContentBlockIndex)
+-				thinkingDeltaJSONBytes, _ = sjson.SetBytes(thinkingDeltaJSONBytes, "delta.thinking", reasoningText)
+-				results = append(results, translatorcommon.AppendSSEEventBytes(nil, "content_block_delta", thinkingDeltaJSONBytes, 2))
+-			}
+-		}
+-
+-		// Handle content delta
+-		if content := delta.Get("content"); content.Exists() && content.String() != "" {
+-			if param.OpenToolCallIndex != -1 {
+-				// Tool call content block is currently active on the wire.
+-				// Buffer this text so content blocks remain strictly sequential.
+-				if n := len(param.InterleavedContentChunks); n > 0 && param.InterleavedContentChunks[n-1].Type == "text" {
+-					param.InterleavedContentChunks[n-1].Text += content.String()
+-				} else {
+-					param.InterleavedContentChunks = append(param.InterleavedContentChunks, InterleavedContentChunk{
+-						Type: "text",
+-						Text: content.String(),
+-					})
+-				}
+-				param.ContentAccumulator.WriteString(content.String())
+-			} else {
+-				// Send content_block_start for text if not already sent
+-				if !param.TextContentBlockStarted {
+-					stopThinkingContentBlock(param, &results)
+-					if param.TextContentBlockIndex == -1 {
+-						param.TextContentBlockIndex = param.NextContentBlockIndex
+-						param.NextContentBlockIndex++
+-					}
+-					contentBlockStartJSON := `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+-					contentBlockStartJSONBytes := []byte(contentBlockStartJSON)
+-					contentBlockStartJSONBytes, _ = sjson.SetBytes(contentBlockStartJSONBytes, "index", param.TextContentBlockIndex)
+-					results = append(results, translatorcommon.AppendSSEEventBytes(nil, "content_block_start", contentBlockStartJSONBytes, 2))
+-					param.TextContentBlockStarted = true
+-				}
+-
+-				contentDeltaJSON := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`
+-				contentDeltaJSONBytes := []byte(contentDeltaJSON)
+-				contentDeltaJSONBytes, _ = sjson.SetBytes(contentDeltaJSONBytes, "index", param.TextContentBlockIndex)
+-				contentDeltaJSONBytes, _ = sjson.SetBytes(contentDeltaJSONBytes, "delta.text", content.String())
+-				results = append(results, translatorcommon.AppendSSEEventBytes(nil, "content_block_delta", contentDeltaJSONBytes, 2))
+-
+-				// Accumulate content
+-				param.ContentAccumulator.WriteString(content.String())
++				emitOpenAITextDelta(param, &results, content.String())
+ 			}
+ 		}
+ 
+@@ -418,6 +368,126 @@
+ 	return results
+ }
+ 
++// decodeOpenAIContentChunks accepts only the text/thinking array shape. If any
++// chunk is unsupported or malformed, callers retain their original array path
++// instead of consuming part of an unfamiliar provider response.
++func decodeOpenAIContentChunks(content gjson.Result) ([]InterleavedContentChunk, bool) {
++	if !content.IsArray() {
++		return nil, false
++	}
++	var chunks []InterleavedContentChunk
++	for _, item := range content.Array() {
++		if !item.IsObject() {
++			return nil, false
++		}
++		switch item.Get("type").String() {
++		case "text":
++			text := item.Get("text")
++			if text.Type != gjson.String {
++				return nil, false
++			}
++			chunks = append(chunks, InterleavedContentChunk{Type: "text", Text: text.String()})
++		case "thinking":
++			text, ok := openAIThinkingChunkText(item)
++			if !ok {
++				return nil, false
++			}
++			chunks = append(chunks, InterleavedContentChunk{Type: "thinking", Text: text})
++		default:
++			return nil, false
++		}
++	}
++	return chunks, true
++}
++
++func openAIThinkingChunkText(item gjson.Result) (string, bool) {
++	thinking := item.Get("thinking")
++	if !thinking.IsArray() {
++		return "", false
++	}
++	var text strings.Builder
++	for _, nested := range thinking.Array() {
++		if !nested.IsObject() || nested.Get("type").String() != "text" || nested.Get("text").Type != gjson.String {
++			return "", false
++		}
++		text.WriteString(nested.Get("text").String())
++	}
++	// closed describes a chunk, not the end of the reasoning block. Signatures
++	// cannot be manufactured from this unsigned response representation.
++	return text.String(), true
++}
++
++func emitOpenAIThinkingDelta(param *ConvertOpenAIResponseToAnthropicParams, results *[][]byte, reasoningText string) {
++	if param.OpenToolCallIndex != -1 {
++		if n := len(param.InterleavedContentChunks); n > 0 && param.InterleavedContentChunks[n-1].Type == "thinking" {
++			param.InterleavedContentChunks[n-1].Text += reasoningText
++		} else {
++			param.InterleavedContentChunks = append(param.InterleavedContentChunks, InterleavedContentChunk{
++				Type: "thinking",
++				Text: reasoningText,
++			})
++		}
++	} else {
++		stopTextContentBlock(param, results)
++		if !param.ThinkingContentBlockStarted {
++			if param.ThinkingContentBlockIndex == -1 {
++				param.ThinkingContentBlockIndex = param.NextContentBlockIndex
++				param.NextContentBlockIndex++
++			}
++			contentBlockStartJSON := `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`
++			contentBlockStartJSONBytes := []byte(contentBlockStartJSON)
++			contentBlockStartJSONBytes, _ = sjson.SetBytes(contentBlockStartJSONBytes, "index", param.ThinkingContentBlockIndex)
++			*results = append(*results, translatorcommon.AppendSSEEventBytes(nil, "content_block_start", contentBlockStartJSONBytes, 2))
++			param.ThinkingContentBlockStarted = true
++		}
++
++		thinkingDeltaJSON := `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`
++		thinkingDeltaJSONBytes := []byte(thinkingDeltaJSON)
++		thinkingDeltaJSONBytes, _ = sjson.SetBytes(thinkingDeltaJSONBytes, "index", param.ThinkingContentBlockIndex)
++		thinkingDeltaJSONBytes, _ = sjson.SetBytes(thinkingDeltaJSONBytes, "delta.thinking", reasoningText)
++		*results = append(*results, translatorcommon.AppendSSEEventBytes(nil, "content_block_delta", thinkingDeltaJSONBytes, 2))
++	}
++}
++
++func emitOpenAITextDelta(param *ConvertOpenAIResponseToAnthropicParams, results *[][]byte, text string) {
++	if param.OpenToolCallIndex != -1 {
++		// Tool call content block is currently active on the wire.
++		// Buffer this text so content blocks remain strictly sequential.
++		if n := len(param.InterleavedContentChunks); n > 0 && param.InterleavedContentChunks[n-1].Type == "text" {
++			param.InterleavedContentChunks[n-1].Text += text
++		} else {
++			param.InterleavedContentChunks = append(param.InterleavedContentChunks, InterleavedContentChunk{
++				Type: "text",
++				Text: text,
++			})
++		}
++		param.ContentAccumulator.WriteString(text)
++	} else {
++		// Send content_block_start for text if not already sent
++		if !param.TextContentBlockStarted {
++			stopThinkingContentBlock(param, results)
++			if param.TextContentBlockIndex == -1 {
++				param.TextContentBlockIndex = param.NextContentBlockIndex
++				param.NextContentBlockIndex++
++			}
++			contentBlockStartJSON := `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
++			contentBlockStartJSONBytes := []byte(contentBlockStartJSON)
++			contentBlockStartJSONBytes, _ = sjson.SetBytes(contentBlockStartJSONBytes, "index", param.TextContentBlockIndex)
++			*results = append(*results, translatorcommon.AppendSSEEventBytes(nil, "content_block_start", contentBlockStartJSONBytes, 2))
++			param.TextContentBlockStarted = true
++		}
++
++		contentDeltaJSON := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`
++		contentDeltaJSONBytes := []byte(contentDeltaJSON)
++		contentDeltaJSONBytes, _ = sjson.SetBytes(contentDeltaJSONBytes, "index", param.TextContentBlockIndex)
++		contentDeltaJSONBytes, _ = sjson.SetBytes(contentDeltaJSONBytes, "delta.text", text)
++		*results = append(*results, translatorcommon.AppendSSEEventBytes(nil, "content_block_delta", contentDeltaJSONBytes, 2))
++
++		// Accumulate content
++		param.ContentAccumulator.WriteString(text)
++	}
++}
++
+ // convertOpenAIDoneToAnthropic handles the [DONE] marker and sends final events
+ func convertOpenAIDoneToAnthropic(param *ConvertOpenAIResponseToAnthropicParams) [][]byte {
+ 	var results [][]byte
+@@ -457,9 +527,21 @@
+ 
+ 		// Handle text content
+ 		if content := choice.Get("message.content"); content.Exists() && content.String() != "" {
+-			block := []byte(`{"type":"text","text":""}`)
+-			block, _ = sjson.SetBytes(block, "text", content.String())
+-			contentBlocks = append(contentBlocks, block)
++			if chunks, ok := decodeOpenAIContentChunks(content); ok {
++				for _, chunk := range chunks {
++					if chunk.Text == "" {
++						continue
++					}
++					block := []byte(`{"type":""}`)
++					block, _ = sjson.SetBytes(block, "type", chunk.Type)
++					block, _ = sjson.SetBytes(block, chunk.Type, chunk.Text)
++					contentBlocks = append(contentBlocks, block)
++				}
++			} else {
++				block := []byte(`{"type":"text","text":""}`)
++				block, _ = sjson.SetBytes(block, "text", content.String())
++				contentBlocks = append(contentBlocks, block)
++			}
+ 		}
+ 
+ 		// Handle tool calls
+@@ -864,6 +946,15 @@
+ 									return true
+ 								})
+ 							}
++						case "thinking":
++							if text, ok := openAIThinkingChunkText(item); ok {
++								flushText()
++								thinkingBuilder.WriteString(text)
++							} else {
++								// Malformed chunks keep the unknown-type behavior.
++								flushThinking()
++								flushText()
++							}
+ 						case "reasoning":
+ 							flushText()
+ 							if thinking := item.Get("text"); thinking.Exists() {
+diff --git a/internal/translator/openai/claude/openai_claude_content_chunks_test.go b/internal/translator/openai/claude/openai_claude_content_chunks_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/translator/openai/claude/openai_claude_content_chunks_test.go
+@@ -0,0 +1,242 @@
++package claude
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"reflect"
++	"strings"
++	"testing"
++
++	"github.com/tidwall/gjson"
++)
++
++func contentChunksStream(deltas ...string) [][]byte {
++	var param any
++	var out [][]byte
++	for _, delta := range deltas {
++		out = append(out, ConvertOpenAIResponseToClaude(context.Background(), "", []byte(`{"stream":true}`), nil,
++			[]byte(`data: {"id":"fixture","model":"fixture","choices":[{"delta":`+delta+`}]}`), &param)...)
++	}
++	out = append(out, ConvertOpenAIResponseToClaude(context.Background(), "", []byte(`{"stream":true}`), nil,
++		[]byte(`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`), &param)...)
++	out = append(out, ConvertOpenAIResponseToClaude(context.Background(), "", []byte(`{"stream":true}`), nil,
++		[]byte(`data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":4}}`), &param)...)
++	out = append(out, ConvertOpenAIResponseToClaude(context.Background(), "", []byte(`{"stream":true}`), nil,
++		[]byte(`data: [DONE]`), &param)...)
++	return out
++}
++
++func contentChunksBlocks(t *testing.T, out [][]byte) []string {
++	t.Helper()
++	var blocks []string
++	open := -1
++	starts, stops := 0, 0
++	for _, raw := range out {
++		parts := bytes.SplitN(raw, []byte("\ndata: "), 2)
++		if len(parts) != 2 {
++			t.Fatalf("not an SSE event: %q", raw)
++		}
++		value := gjson.ParseBytes(bytes.TrimSpace(parts[1]))
++		switch value.Get("type").String() {
++		case "content_block_start":
++			if open != -1 {
++				t.Fatal("overlapping blocks")
++			}
++			open = int(value.Get("index").Int())
++			if open != len(blocks) {
++				t.Fatalf("index %d, expected %d", open, len(blocks))
++			}
++			blocks = append(blocks, value.Get("content_block.type").String()+":")
++		case "content_block_delta":
++			if open < 0 || int(value.Get("index").Int()) != open {
++				t.Fatal("delta outside its block")
++			}
++			for _, field := range []string{"text", "thinking", "partial_json"} {
++				blocks[open] += value.Get("delta." + field).String()
++			}
++			if value.Get("delta.type").String() == "signature_delta" {
++				t.Fatal("fabricated signature")
++			}
++		case "content_block_stop":
++			if open < 0 || int(value.Get("index").Int()) != open {
++				t.Fatal("stop outside its block")
++			}
++			open = -1
++		case "message_start":
++			starts++
++		case "message_stop":
++			stops++
++		}
++	}
++	if open != -1 || starts != 1 || stops != 1 {
++		t.Fatalf("incomplete stream: open=%d starts=%d stops=%d", open, starts, stops)
++	}
++	return blocks
++}
++
++func TestContentChunksStreaming(t *testing.T) {
++	cases := []struct {
++		name    string
++		content []string
++		want    []string
++	}{
++		{"thinking-repeat-closed", []string{`[{"type":"thinking","thinking":[{"type":"text","text":"a"}],"closed":true}]`, `[{"type":"thinking","thinking":[{"type":"text","text":"b"}],"closed":true}]`}, []string{"thinking:ab"}},
++		{"transition-in-one-array", []string{`[{"type":"thinking","thinking":[{"type":"text","text":"a"},{"type":"text","text":"b"}]},{"type":"text","text":"answer"}]`}, []string{"thinking:ab", "text:answer"}},
++		{"text-only", []string{`[{"type":"text","text":"a"},{"type":"text","text":"b"}]`}, []string{"text:ab"}},
++		{"back-to-thinking", []string{`[{"type":"thinking","thinking":[{"type":"text","text":"a"}]},{"type":"text","text":"b"},{"type":"thinking","thinking":[{"type":"text","text":"c"}]}]`}, []string{"thinking:a", "text:b", "thinking:c"}},
++		{"empty-array", []string{`[]`}, nil},
++		{"empty-chunks", []string{`[{"type":"text","text":""},{"type":"thinking","thinking":[],"closed":true}]`}, nil},
++		{"null", []string{`null`}, nil},
++		{"null-chunk", []string{`[null]`}, []string{"text:[null]"}},
++		{"malformed-text", []string{`[{"type":"text","text":7}]`}, []string{`text:[{"type":"text","text":7}]`}},
++		{"malformed-thinking", []string{`[{"type":"thinking","thinking":"a"}]`}, []string{`text:[{"type":"thinking","thinking":"a"}]`}},
++		{"unknown-nested", []string{`[{"type":"thinking","thinking":[{"type":"image","url":"fixture"}]}]`}, []string{`text:[{"type":"thinking","thinking":[{"type":"image","url":"fixture"}]}]`}},
++		{"unknown-mixed", []string{`[{"type":"text","text":"a"},{"type":"image","url":"fixture"}]`}, []string{`text:[{"type":"text","text":"a"},{"type":"image","url":"fixture"}]`}},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			var deltas []string
++			for _, content := range tc.content {
++				deltas = append(deltas, `{"content":`+content+`}`)
++			}
++			out := contentChunksStream(deltas...)
++			if got := contentChunksBlocks(t, out); !reflect.DeepEqual(got, tc.want) {
++				t.Fatalf("blocks = %#v, want %#v", got, tc.want)
++			}
++			wire := string(bytes.Join(out, nil))
++			if !strings.Contains(wire, `"stop_reason":"end_turn"`) || !strings.Contains(wire, `"input_tokens":11,"output_tokens":4`) {
++				t.Fatalf("finish/usage missing: %s", wire)
++			}
++		})
++	}
++}
++
++func TestContentChunksToolInterleaving(t *testing.T) {
++	out := contentChunksStream(
++		`{"content":[{"type":"thinking","thinking":[{"type":"text","text":"before"}]}]}`,
++		`{"tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"fixture","arguments":"{\"k\":"}}]}`,
++		`{"content":[{"type":"thinking","thinking":[{"type":"text","text":"during"}],"closed":true},{"type":"text","text":"answer"}]}`,
++		`{"tool_calls":[{"index":0,"function":{"arguments":"1}"}}]}`,
++	)
++	want := []string{"thinking:before", `tool_use:{"k":1}`, "thinking:during", "text:answer"}
++	if got := contentChunksBlocks(t, out); !reflect.DeepEqual(got, want) {
++		t.Fatalf("blocks = %#v, want %#v", got, want)
++	}
++	if !bytes.Contains(bytes.Join(out, nil), []byte(`"stop_reason":"tool_use"`)) {
++		t.Fatal("tool finish lost")
++	}
++}
++
++func TestContentChunksNonStreaming(t *testing.T) {
++	cases := []struct {
++		name, content    string
++		want, registered []string
++	}{
++		{"thinking-text", `[{"type":"thinking","thinking":[{"type":"text","text":"a"},{"type":"text","text":"b"}],"closed":true},{"type":"text","text":"answer"}]`, []string{"thinking:ab", "text:answer"}, nil},
++		{"text-only", `[{"type":"text","text":"a"}]`, []string{"text:a"}, nil},
++		{"repeated-thinking", `[{"type":"thinking","thinking":[{"type":"text","text":"a"}],"closed":true},{"type":"thinking","thinking":[{"type":"text","text":"b"}],"closed":true}]`, []string{"thinking:a", "thinking:b"}, []string{"thinking:ab"}},
++		{"empty", `[]`, []string{}, nil},
++		{"null", `null`, []string{}, nil},
++		{"malformed", `[{"type":"thinking","thinking":null}]`, []string{`text:[{"type":"thinking","thinking":null}]`}, []string{}},
++		{"unknown", `[{"type":"image","url":"fixture"}]`, []string{`text:[{"type":"image","url":"fixture"}]`}, []string{}},
++		{"unknown-mixed", `[{"type":"text","text":"a"},{"type":"unknown"}]`, []string{`text:[{"type":"text","text":"a"},{"type":"unknown"}]`}, []string{"text:a"}},
++	}
++	for _, tc := range cases {
++		for _, registered := range []bool{false, true} {
++			name := "helper/"
++			if registered {
++				name = "registered/"
++			}
++			t.Run(name+tc.name, func(t *testing.T) {
++				raw := []byte(`{"id":"fixture","model":"fixture","choices":[{"message":{"content":` + tc.content + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4}}`)
++				out := convertOpenAINonStreamingToAnthropic(raw)[0]
++				want := tc.want
++				if registered {
++					out = ConvertOpenAIResponseToClaudeNonStream(context.Background(), "", nil, nil, raw, nil)
++					if tc.registered != nil {
++						want = tc.registered
++					}
++				}
++				got := []string{}
++				for _, block := range gjson.GetBytes(out, "content").Array() {
++					kind := block.Get("type").String()
++					got = append(got, kind+":"+block.Get(kind).String())
++					if block.Get("signature").Exists() {
++						t.Fatal("fabricated signature")
++					}
++				}
++				if !reflect.DeepEqual(got, want) {
++					t.Fatalf("got %#v, want %#v", got, want)
++				}
++				if gjson.GetBytes(out, "usage.input_tokens").Int() != 11 || gjson.GetBytes(out, "usage.output_tokens").Int() != 4 || gjson.GetBytes(out, "stop_reason").String() != "end_turn" {
++					t.Fatalf("finish/usage lost: %s", out)
++				}
++			})
++		}
++	}
++}
++
++func TestContentChunksReasoningPrecedenceAndTools(t *testing.T) {
++	for _, key := range []string{"reasoning_content", "reasoning", "reasoning_details"} {
++		t.Run(key, func(t *testing.T) {
++			message := map[string]any{"content": []any{map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "chunk"}}}, map[string]any{"type": "text", "text": "answer"}}, "reasoning_details": []any{map[string]any{"text": "field"}}, "tool_calls": []any{map[string]any{"id": "call_fixture", "type": "function", "function": map[string]any{"name": "fixture", "arguments": "{}"}}}}
++			if key != "reasoning_details" {
++				message["reasoning"] = "field"
++			}
++			if key == "reasoning_content" {
++				message[key] = "field"
++				message["reasoning"] = "ignored"
++			}
++			encoded, _ := json.Marshal(message)
++			out := contentChunksStream(string(encoded))
++			if got := contentChunksBlocks(t, out); !reflect.DeepEqual(got, []string{"thinking:fieldchunk", "text:answer", "tool_use:{}"}) {
++				t.Fatalf("stream blocks: %#v", got)
++			}
++			raw := []byte(`{"choices":[{"message":` + string(encoded) + `,"finish_reason":"tool_calls"}]}`)
++			for _, out := range [][]byte{convertOpenAINonStreamingToAnthropic(raw)[0], ConvertOpenAIResponseToClaudeNonStream(context.Background(), "", nil, nil, raw, nil)} {
++				if strings.Count(string(out), `"thinking":"field"`) != 1 || bytes.Contains(out, []byte("ignored")) || gjson.GetBytes(out, "content.#").Int() != 4 || gjson.GetBytes(out, "stop_reason").String() != "tool_use" {
++					t.Fatalf("nonstream: %s", out)
++				}
++			}
++		})
++	}
++}
++
++func TestContentChunksFinishAndUsage(t *testing.T) {
++	for _, finish := range []string{"stop", "length", ""} {
++		for _, withUsage := range []bool{false, true} {
++			t.Run(fmt.Sprintf("%s/usage=%t", finish, withUsage), func(t *testing.T) {
++				var param any
++				var out [][]byte
++				emit := func(raw string) {
++					out = append(out, ConvertOpenAIResponseToClaude(context.Background(), "", []byte(`{"stream":true}`), nil, []byte("data: "+raw), &param)...)
++				}
++				emit(`{"id":"fixture","model":"fixture","choices":[{"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"thought"}],"closed":true},{"type":"text","text":"answer"}]}}]}`)
++				if finish != "" {
++					emit(`{"choices":[{"delta":{},"finish_reason":"` + finish + `"}]}`)
++				}
++				if withUsage {
++					emit(`{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":4}}`)
++				}
++				emit(`[DONE]`)
++				emit(`[DONE]`)
++				if got := contentChunksBlocks(t, out); !reflect.DeepEqual(got, []string{"thinking:thought", "text:answer"}) {
++					t.Fatalf("blocks: %#v", got)
++				}
++				wire := string(bytes.Join(out, nil))
++				want := "end_turn"
++				if finish == "length" {
++					want = "max_tokens"
++				}
++				if strings.Count(wire, "event: message_delta\n") != 1 || !strings.Contains(wire, `"stop_reason":"`+want+`"`) {
++					t.Fatalf("terminal events: %s", wire)
++				}
++				if withUsage && !strings.Contains(wire, `"input_tokens":11,"output_tokens":4`) {
++					t.Fatal("usage lost")
++				}
++			})
++		}
++	}
++}
+diff --git a/internal/translator/openai/claude/openai_claude_content_goldens_test.go b/internal/translator/openai/claude/openai_claude_content_goldens_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/translator/openai/claude/openai_claude_content_goldens_test.go
+@@ -0,0 +1,47 @@
++package claude
++
++import (
++	"bytes"
++	"context"
++	"testing"
++)
++
++// Exact bytes captured from the pinned translator before content-chunk decoding.
++// Unknown chunks deliberately retain each path's distinct legacy outcome.
++var contentChunksLegacyGoldens = []struct{ name, message, stream, helper, registered string }{
++	{"string", "{\"content\":\"answer\"}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"null", "{\"content\":null}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"absent", "{}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"reasoning-content", "{\"reasoning_content\":\"thought\",\"content\":\"answer\"}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"thought\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"thought\"},{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"},{\"type\":\"thinking\",\"thinking\":\"thought\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"reasoning", "{\"reasoning\":\"thought\",\"content\":\"answer\"}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"thought\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"thought\"},{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"},{\"type\":\"thinking\",\"thinking\":\"thought\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"reasoning-details", "{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"thought\"}],\"content\":\"answer\"}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"thought\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"thought\"},{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"},{\"type\":\"thinking\",\"thinking\":\"thought\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"precedence", "{\"reasoning_content\":\"thought\",\"reasoning\":\"ignored\",\"reasoning_details\":[{\"text\":\"ignored\"}],\"content\":\"answer\"}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"thought\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"thought\"},{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"},{\"type\":\"thinking\",\"thinking\":\"thought\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"reasoning-fallback", "{\"reasoning_content\":\"\",\"reasoning\":\"thought\",\"reasoning_details\":[{\"text\":\"ignored\"}],\"content\":\"answer\"}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"thought\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"thought\"},{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"},{\"type\":\"thinking\",\"thinking\":\"thought\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"unknown", "{\"content\":[{\"type\":\"unknown\",\"text\":\"do not reinterpret\"}]}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"[{\\\"type\\\":\\\"unknown\\\",\\\"text\\\":\\\"do not reinterpret\\\"}]\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"[{\\\"type\\\":\\\"unknown\\\",\\\"text\\\":\\\"do not reinterpret\\\"}]\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"unknown-mixed", "{\"content\":[{\"type\":\"text\",\"text\":\"answer\"},{\"type\":\"unknown\",\"text\":\"do not reinterpret\"}]}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"[{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"answer\\\"},{\\\"type\\\":\\\"unknown\\\",\\\"text\\\":\\\"do not reinterpret\\\"}]\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"[{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"answer\\\"},{\\\"type\\\":\\\"unknown\\\",\\\"text\\\":\\\"do not reinterpret\\\"}]\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"malformed", "{\"content\":[null,{\"type\":\"text\",\"text\":7}]}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"[null,{\\\"type\\\":\\\"text\\\",\\\"text\\\":7}]\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"[null,{\\\"type\\\":\\\"text\\\",\\\"text\\\":7}]\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"7\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"malformed-thinking", "{\"content\":[{\"type\":\"thinking\",\"thinking\":null}]}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"[{\\\"type\\\":\\\"thinking\\\",\\\"thinking\\\":null}]\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"[{\\\"type\\\":\\\"thinking\\\",\\\"thinking\\\":null}]\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++	{"legacy-tool-reasoning", "{\"content\":[{\"type\":\"reasoning\",\"text\":\"thought\"},{\"type\":\"tool_calls\",\"tool_calls\":[{\"id\":\"fixture\",\"function\":{\"name\":\"fixture\",\"arguments\":\"{}\"}}]},{\"type\":\"text\",\"text\":\"answer\"}]}", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"[{\\\"type\\\":\\\"reasoning\\\",\\\"text\\\":\\\"thought\\\"},{\\\"type\\\":\\\"tool_calls\\\",\\\"tool_calls\\\":[{\\\"id\\\":\\\"fixture\\\",\\\"function\\\":{\\\"name\\\":\\\"fixture\\\",\\\"arguments\\\":\\\"{}\\\"}}]},{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"answer\\\"}]\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"text\",\"text\":\"[{\\\"type\\\":\\\"reasoning\\\",\\\"text\\\":\\\"thought\\\"},{\\\"type\\\":\\\"tool_calls\\\",\\\"tool_calls\\\":[{\\\"id\\\":\\\"fixture\\\",\\\"function\\\":{\\\"name\\\":\\\"fixture\\\",\\\"arguments\\\":\\\"{}\\\"}}]},{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"answer\\\"}]\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}", "{\"id\":\"fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"thought\"},{\"type\":\"tool_use\",\"id\":\"fixture\",\"name\":\"fixture\",\"input\":{}},{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}"},
++}
++
++func TestContentChunksLegacyGoldens(t *testing.T) {
++	for _, tc := range contentChunksLegacyGoldens {
++		t.Run(tc.name, func(t *testing.T) {
++			stream := bytes.Join(contentChunksStream(tc.message), nil)
++			raw := []byte(`{"id":"fixture","model":"fixture","choices":[{"message":` + tc.message + `,"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4}}`)
++			for _, result := range []struct {
++				name string
++				got  []byte
++				want string
++			}{
++				{"stream", stream, tc.stream},
++				{"helper", convertOpenAINonStreamingToAnthropic(raw)[0], tc.helper},
++				{"registered", ConvertOpenAIResponseToClaudeNonStream(context.Background(), "", nil, nil, raw, nil), tc.registered},
++			} {
++				if !bytes.Equal(result.got, []byte(result.want)) {
++					t.Errorf("%s bytes changed: got %q, want %q", result.name, result.got, result.want)
++				}
++			}
++		})
++	}
++}

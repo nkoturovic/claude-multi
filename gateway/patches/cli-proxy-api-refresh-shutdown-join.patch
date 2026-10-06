@@ -1,0 +1,1156 @@
+diff --git a/sdk/auth/refresh_shutdown_test.go b/sdk/auth/refresh_shutdown_test.go
+new file mode 100644
+--- /dev/null
++++ b/sdk/auth/refresh_shutdown_test.go
+@@ -0,0 +1,191 @@
++package auth
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	log "github.com/sirupsen/logrus"
++)
++
++// Keep this integration in the FileTokenStore package so it uses the existing
++// private saveFileOps seam, rather than adding a production fault-injection API.
++type shutdownSyncFile struct {
++	saveFile
++	beforeSync func()
++	fail       bool
++}
++
++func (f *shutdownSyncFile) Sync() error {
++	f.beforeSync()
++	if f.fail {
++		return errors.New("synthetic file sync failure")
++	}
++	return f.saveFile.Sync()
++}
++
++type shutdownFileExecutor struct{ coreauth.ProviderExecutor }
++
++func (*shutdownFileExecutor) Identifier() string { return "shutdown-fixture" }
++func (*shutdownFileExecutor) Refresh(_ context.Context, a *coreauth.Auth) (*coreauth.Auth, error) {
++	a = a.Clone()
++	a.Metadata["refresh_token"] = "replacement-refresh"
++	a.Metadata["access_token"] = "replacement-access"
++	return a, nil
++}
++
++type shutdownFileReceipt struct{ messages chan string }
++
++func (*shutdownFileReceipt) Levels() []log.Level { return log.AllLevels }
++func (h *shutdownFileReceipt) Fire(e *log.Entry) error {
++	if strings.HasPrefix(e.Message, "credential_save_v1 operation=refresh ") {
++		h.messages <- e.Message
++	}
++	return nil
++}
++
++func TestRefreshShutdownFileTokenStore(t *testing.T) {
++	for _, stage := range []string{"sync", "dirsync"} {
++		for _, fail := range []bool{false, true} {
++			name := stage + "/success"
++			if fail {
++				name = stage + "/failure"
++			}
++			t.Run(name, func(t *testing.T) {
++				entered, release := make(chan struct{}), make(chan struct{})
++				var once sync.Once
++				unblock := func() { once.Do(func() { close(release) }) }
++				var fileSyncs, dirSyncs atomic.Int32
++				pause := func() { close(entered); <-release }
++				store := NewFileTokenStore()
++				root := t.TempDir()
++				store.SetBaseDir(root)
++				ops := *defaultSaveFileOps
++				ops.openTemp = func(name string) (saveFile, error) {
++					file, err := defaultSaveFileOps.openTemp(name)
++					if err != nil {
++						return nil, err
++					}
++					return &shutdownSyncFile{saveFile: file, fail: stage == "sync" && fail, beforeSync: func() {
++						fileSyncs.Add(1)
++						if stage == "sync" {
++							pause()
++						}
++					}}, nil
++				}
++				ops.syncDir = func(dir string) error {
++					dirSyncs.Add(1)
++					if stage == "dirsync" {
++						pause()
++						if fail {
++							return errors.New("synthetic directory sync failure")
++						}
++					}
++					return defaultSaveFileOps.syncDir(dir)
++				}
++				store.fileOps = &ops
++				path := filepath.Join(root, "shutdown.json")
++				if err := os.WriteFile(path, []byte(`{"type":"shutdown-fixture","refresh_token":"old-refresh","access_token":"old-access"}`), 0600); err != nil {
++					t.Fatal(err)
++				}
++				manager := coreauth.NewManager(store, nil, nil)
++				manager.RegisterExecutor(&shutdownFileExecutor{})
++				_, err := manager.Register(coreauth.WithSkipPersist(context.Background()), &coreauth.Auth{
++					ID: "shutdown.json", FileName: "shutdown.json", Provider: "shutdown-fixture",
++					Metadata: map[string]any{"type": "shutdown-fixture", "refresh_token": "old-refresh", "access_token": "old-access", "refresh_interval_seconds": 3600},
++				})
++				if err != nil {
++					t.Fatal(err)
++				}
++				logger := log.StandardLogger()
++				oldHooks, oldLevel := logger.ReplaceHooks(make(log.LevelHooks)), logger.GetLevel()
++				logger.SetLevel(log.InfoLevel)
++				hook := &shutdownFileReceipt{messages: make(chan string, 2)}
++				logger.AddHook(hook)
++				t.Cleanup(func() {
++					unblock()
++					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++					defer cancel()
++					if err := manager.StopAutoRefreshAndWait(ctx); err != nil {
++						t.Errorf("cleanup: %v", err)
++					}
++					logger.ReplaceHooks(oldHooks)
++					logger.SetLevel(oldLevel)
++				})
++				manager.StartAutoRefresh(context.Background(), time.Hour)
++				select {
++				case <-entered:
++				case <-time.After(5 * time.Second):
++					t.Fatal("refresh did not reach FileTokenStore sync")
++				}
++				done := make(chan error, 1)
++				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++				defer cancel()
++				go func() { done <- manager.StopAutoRefreshAndWait(ctx) }()
++				select {
++				case err := <-done:
++					t.Fatalf("join returned during %s: %v", stage, err)
++				case <-time.After(20 * time.Millisecond):
++				}
++				select {
++				case msg := <-hook.messages:
++					t.Fatalf("receipt before sync completion: %s", msg)
++				default:
++				}
++				unblock()
++				select {
++				case err := <-done:
++					if err != nil {
++						t.Fatal(err)
++					}
++				case <-time.After(5 * time.Second):
++					t.Fatal("join did not finish after sync")
++				}
++				var receipt string
++				select {
++				case receipt = <-hook.messages:
++				default:
++					t.Fatal("join returned before receipt reporting")
++				}
++				if fail {
++					if !strings.Contains(receipt, "result=failed ") || !strings.Contains(receipt, "stage="+stage+" ") {
++						t.Fatalf("sync failure was not reported honestly: %s", receipt)
++					}
++				} else if !strings.Contains(receipt, "result=persisted ") {
++					t.Fatalf("missing durable-save receipt: %s", receipt)
++				}
++				if fileSyncs.Load() != 1 {
++					t.Fatalf("file sync calls = %d, want 1", fileSyncs.Load())
++				}
++				wantDirSyncs := int32(1)
++				wantToken := "replacement-refresh"
++				if stage == "sync" && fail {
++					wantDirSyncs = 0
++					wantToken = "old-refresh"
++				}
++				if dirSyncs.Load() != wantDirSyncs {
++					t.Fatalf("directory sync calls = %d, want %d", dirSyncs.Load(), wantDirSyncs)
++				}
++				raw, err := os.ReadFile(path)
++				if err != nil {
++					t.Fatal(err)
++				}
++				var saved map[string]any
++				if err := json.Unmarshal(raw, &saved); err != nil {
++					t.Fatal(err)
++				}
++				if saved["refresh_token"] != wantToken {
++					t.Fatalf("on-disk refresh token = %v, want %s", saved["refresh_token"], wantToken)
++				}
++			})
++		}
++	}
++}
+diff --git a/sdk/cliproxy/auth/auto_refresh_loop.go b/sdk/cliproxy/auth/auto_refresh_loop.go
+--- a/sdk/cliproxy/auth/auto_refresh_loop.go
++++ b/sdk/cliproxy/auth/auto_refresh_loop.go
+@@ -28,6 +28,7 @@
+ 
+ 	wakeCh chan struct{}
+ 	jobs   chan string
++	done   chan struct{} // closed only after scheduling and every worker have finished
+ }
+ 
+ func newAuthAutoRefreshLoop(manager *Manager, interval time.Duration, concurrency int) *authAutoRefreshLoop {
+@@ -49,6 +50,7 @@
+ 		dirty:       make(map[string]struct{}),
+ 		wakeCh:      make(chan struct{}, 1),
+ 		jobs:        make(chan string, jobBuffer),
++		done:        make(chan struct{}),
+ 	}
+ }
+ 
+@@ -66,7 +68,11 @@
+ }
+ 
+ func (l *authAutoRefreshLoop) run(ctx context.Context) {
+-	if l == nil || l.manager == nil {
++	if l == nil {
++		return
++	}
++	defer close(l.done)
++	if l.manager == nil {
+ 		return
+ 	}
+ 
+@@ -74,11 +80,17 @@
+ 	if workers <= 0 {
+ 		workers = refreshMaxConcurrency
+ 	}
++	var wg sync.WaitGroup
++	wg.Add(workers)
+ 	for i := 0; i < workers; i++ {
+-		go l.worker(ctx)
++		go func() {
++			defer wg.Done()
++			l.worker(ctx)
++		}()
+ 	}
+ 
+ 	l.loop(ctx)
++	wg.Wait()
+ }
+ 
+ func (l *authAutoRefreshLoop) worker(ctx context.Context) {
+@@ -87,6 +99,10 @@
+ 		case <-ctx.Done():
+ 			return
+ 		case authID := <-l.jobs:
++			// select can dequeue a ready job even when cancellation is ready too.
++			if ctx.Err() != nil {
++				return
++			}
+ 			if authID == "" {
+ 				continue
+ 			}
+diff --git a/sdk/cliproxy/auth/auto_refresh_shutdown_test.go b/sdk/cliproxy/auth/auto_refresh_shutdown_test.go
+new file mode 100644
+--- /dev/null
++++ b/sdk/cliproxy/auth/auto_refresh_shutdown_test.go
+@@ -0,0 +1,420 @@
++package auth
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	log "github.com/sirupsen/logrus"
++)
++
++// Embedding the interface makes an accidental non-refresh call fail the test.
++type shutdownRefreshExecutor struct {
++	ProviderExecutor
++	refresh func(context.Context, *Auth) (*Auth, error)
++}
++
++func (*shutdownRefreshExecutor) Identifier() string { return "shutdown-fixture" }
++func (e *shutdownRefreshExecutor) Refresh(ctx context.Context, a *Auth) (*Auth, error) {
++	return e.refresh(ctx, a)
++}
++
++type shutdownRefreshStore struct {
++	Store
++	mu    sync.Mutex
++	saved string
++	save  func(SaveOptions)
++}
++
++func (s *shutdownRefreshStore) SaveWithReport(_ context.Context, a *Auth, opts SaveOptions) (SaveReport, error) {
++	if s.save != nil {
++		s.save(opts)
++	}
++	if opts.Commit != nil {
++		release, ok := opts.Commit()
++		if !ok {
++			return SaveReport{Outcome: SaveOutcomeSkipped}, nil
++		}
++		defer release()
++	}
++	s.mu.Lock()
++	s.saved, _ = a.Metadata["refresh_token"].(string)
++	s.mu.Unlock()
++	return SaveReport{Outcome: SaveOutcomePersisted, Stage: SaveStageNone, Category: SaveCategoryNone, CredentialsChanged: true}, nil
++}
++
++func (s *shutdownRefreshStore) token() string {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	return s.saved
++}
++
++func shutdownRefreshReplacement(a *Auth) *Auth {
++	a = a.Clone()
++	a.Metadata["refresh_token"] = "replacement-refresh"
++	a.Metadata["access_token"] = "replacement-access"
++	return a
++}
++
++func shutdownRefreshManager(t *testing.T, store *shutdownRefreshStore, refresh func(context.Context, *Auth) (*Auth, error)) *Manager {
++	t.Helper()
++	m := NewManager(store, nil, nil)
++	m.SetConfig(&internalconfig.Config{AuthAutoRefreshWorkers: 1})
++	m.RegisterExecutor(&shutdownRefreshExecutor{refresh: refresh})
++	_, err := m.Register(WithSkipPersist(context.Background()), &Auth{
++		ID: "shutdown-fixture", Provider: "shutdown-fixture",
++		Metadata: map[string]any{"refresh_token": "old-refresh", "access_token": "old-access"},
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++		defer cancel()
++		if err := m.StopAutoRefreshAndWait(ctx); err != nil {
++			t.Errorf("refresh cleanup: %v", err)
++		}
++	})
++	return m
++}
++
++func shutdownRefreshStart(m *Manager) *authAutoRefreshLoop {
++	// This provider has no automatic refresh lead: enqueue explicitly, without timers.
++	m.StartAutoRefresh(context.Background(), time.Hour)
++	m.mu.RLock()
++	loop := m.refreshLoop
++	m.mu.RUnlock()
++	loop.jobs <- "shutdown-fixture"
++	return loop
++}
++
++func shutdownRefreshSignal(t *testing.T, ch <-chan struct{}) {
++	t.Helper()
++	select {
++	case <-ch:
++	case <-time.After(5 * time.Second):
++		t.Fatal("timed out waiting for refresh fixture")
++	}
++}
++
++func shutdownRefreshBlocked(t *testing.T, done <-chan error) {
++	t.Helper()
++	select {
++	case err := <-done:
++		t.Fatalf("join returned before refresh completion: %v", err)
++	case <-time.After(20 * time.Millisecond):
++	}
++}
++
++func shutdownRefreshJoined(t *testing.T, done <-chan error, store *shutdownRefreshStore) {
++	t.Helper()
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("refresh join did not finish")
++	}
++	if got := store.token(); got != "replacement-refresh" {
++		t.Fatalf("saved token = %q, want replacement-refresh", got)
++	}
++}
++
++func shutdownRefreshJoin(m *Manager) <-chan error {
++	done := make(chan error, 1)
++	go func() {
++		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++		defer cancel()
++		done <- m.StopAutoRefreshAndWait(ctx)
++	}()
++	return done
++}
++
++func shutdownRefreshRelease(t *testing.T) (chan struct{}, func()) {
++	t.Helper()
++	ch := make(chan struct{})
++	var once sync.Once
++	release := func() { once.Do(func() { close(ch) }) }
++	t.Cleanup(release)
++	return ch, release
++}
++
++func TestRefreshShutdownWaitsForExecutor(t *testing.T) {
++	entered, cancelled := make(chan struct{}), make(chan struct{})
++	store := &shutdownRefreshStore{}
++	var hold <-chan struct{}
++	m := shutdownRefreshManager(t, store, func(ctx context.Context, a *Auth) (*Auth, error) {
++		close(entered)
++		<-ctx.Done()
++		close(cancelled)
++		// Like a shielded provider HTTP attempt, cancellation does not end this call.
++		<-hold
++		return shutdownRefreshReplacement(a), nil
++	})
++	releaseCh, release := shutdownRefreshRelease(t)
++	hold = releaseCh
++	shutdownRefreshStart(m)
++	shutdownRefreshSignal(t, entered)
++	done := shutdownRefreshJoin(m)
++	shutdownRefreshSignal(t, cancelled)
++	shutdownRefreshBlocked(t, done)
++	if got := store.token(); got != "" {
++		t.Fatalf("save occurred before executor release: %q", got)
++	}
++	release()
++	shutdownRefreshJoined(t, done, store)
++}
++
++type shutdownReceiptHook struct {
++	entered chan struct{}
++	release <-chan struct{}
++	once    sync.Once
++}
++
++func (*shutdownReceiptHook) Levels() []log.Level { return []log.Level{log.InfoLevel} }
++func (h *shutdownReceiptHook) Fire(e *log.Entry) error {
++	if strings.HasPrefix(e.Message, "credential_save_v1 operation=refresh result=persisted ") {
++		h.once.Do(func() {
++			close(h.entered)
++			<-h.release
++		})
++	}
++	return nil
++}
++
++func TestRefreshShutdownWaitsForDurableSave(t *testing.T) {
++	storeEntered := make(chan struct{})
++	store := &shutdownRefreshStore{}
++	m := shutdownRefreshManager(t, store, func(_ context.Context, a *Auth) (*Auth, error) {
++		return shutdownRefreshReplacement(a), nil
++	})
++	// The receipt hook is installed before starting any refresh and restored only
++	// after cleanup joined it; the store barrier and reporting barrier are separate.
++	logger := log.StandardLogger()
++	oldHooks, oldLevel := logger.ReplaceHooks(make(log.LevelHooks)), logger.GetLevel()
++	logger.SetLevel(log.InfoLevel)
++	t.Cleanup(func() { logger.ReplaceHooks(oldHooks); logger.SetLevel(oldLevel) })
++	storeHold, releaseStore := shutdownRefreshRelease(t)
++	receiptHold, releaseReceipt := shutdownRefreshRelease(t)
++	hook := &shutdownReceiptHook{entered: make(chan struct{}), release: receiptHold}
++	logger.AddHook(hook)
++	store.save = func(opts SaveOptions) {
++		if !opts.Sync {
++			t.Error("refresh did not request a durable save")
++		}
++		close(storeEntered)
++		<-storeHold
++	}
++	shutdownRefreshStart(m)
++	shutdownRefreshSignal(t, storeEntered)
++	done := shutdownRefreshJoin(m)
++	shutdownRefreshBlocked(t, done)
++	releaseStore()
++	shutdownRefreshSignal(t, hook.entered)
++	shutdownRefreshBlocked(t, done)
++	releaseReceipt()
++	shutdownRefreshJoined(t, done, store)
++}
++
++func TestRefreshShutdownSkipsQueuedJobs(t *testing.T) {
++	entered, cancelled := make(chan struct{}), make(chan struct{})
++	store := &shutdownRefreshStore{}
++	var hold <-chan struct{}
++	calls := 0 // read only after the join
++	m := shutdownRefreshManager(t, store, func(ctx context.Context, a *Auth) (*Auth, error) {
++		calls++
++		if calls == 1 {
++			close(entered)
++			<-ctx.Done()
++			close(cancelled)
++			<-hold
++		}
++		return shutdownRefreshReplacement(a), nil
++	})
++	releaseCh, release := shutdownRefreshRelease(t)
++	hold = releaseCh
++	loop := shutdownRefreshStart(m)
++	shutdownRefreshSignal(t, entered)
++	for i := 0; i < cap(loop.jobs); i++ {
++		loop.jobs <- "shutdown-fixture"
++	}
++	done := shutdownRefreshJoin(m)
++	shutdownRefreshSignal(t, cancelled)
++	release()
++	shutdownRefreshJoined(t, done, store)
++	if calls != 1 {
++		t.Fatalf("executor calls = %d, want only the already-active refresh", calls)
++	}
++}
++
++func TestRefreshShutdownCanceledAuthLockWaitDoesNotStartRefresh(t *testing.T) {
++	store := &shutdownRefreshStore{}
++	called := make(chan struct{}, 1)
++	m := shutdownRefreshManager(t, store, func(_ context.Context, a *Auth) (*Auth, error) {
++		called <- struct{}{}
++		return shutdownRefreshReplacement(a), nil
++	})
++	lock := &authRefreshLock{}
++	lock.mu.Lock()
++	m.refreshLocks.Store("shutdown-fixture", lock)
++	var once sync.Once
++	unlock := func() { once.Do(lock.mu.Unlock) }
++	t.Cleanup(unlock)
++	loop := shutdownRefreshStart(m)
++	deadline := time.After(5 * time.Second)
++	for len(loop.jobs) != 0 {
++		select {
++		case <-deadline:
++			t.Fatal("worker did not dequeue the job")
++		case <-time.After(time.Millisecond):
++		}
++	}
++	// Cancellation occurs before the held per-auth lock can be acquired, whether
++	// the worker is already waiting there or is just about to try to acquire it.
++	m.StopAutoRefresh()
++	unlock()
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	if err := m.StopAutoRefreshAndWait(ctx); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-called:
++		t.Fatal("cancelled lock waiter started a provider refresh")
++	default:
++	}
++	if got := store.token(); got != "" {
++		t.Fatalf("cancelled lock waiter saved token %q", got)
++	}
++}
++
++func TestRefreshShutdownDeadline(t *testing.T) {
++	entered := make(chan struct{})
++	store := &shutdownRefreshStore{}
++	var hold <-chan struct{}
++	m := shutdownRefreshManager(t, store, func(_ context.Context, a *Auth) (*Auth, error) {
++		close(entered)
++		<-hold
++		return shutdownRefreshReplacement(a), nil
++	})
++	releaseCh, release := shutdownRefreshRelease(t)
++	hold = releaseCh
++	shutdownRefreshStart(m)
++	shutdownRefreshSignal(t, entered)
++	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
++	defer cancel()
++	done := make(chan error, 1)
++	go func() { done <- m.StopAutoRefreshAndWait(ctx) }()
++	select {
++	case err := <-done:
++		if !errors.Is(err, context.DeadlineExceeded) {
++			t.Fatalf("join error = %v, want deadline exceeded", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("uncooperative refresh hung the bounded join")
++	}
++	if got := store.token(); got != "" {
++		t.Fatalf("deadline exit claimed an unfinished save: %q", got)
++	}
++	// Deadline failure must retain the old run for a later join.
++	release()
++	shutdownRefreshJoined(t, shutdownRefreshJoin(m), store)
++}
++
++func TestRefreshShutdownRepeatedStop(t *testing.T) {
++	var nilManager *Manager
++	nilManager.StopAutoRefresh()
++	if err := nilManager.StopAutoRefreshAndWait(nil); err != nil {
++		t.Fatal(err)
++	}
++	m := NewManager(nil, nil, nil)
++	if err := m.StopAutoRefreshAndWait(nil); err != nil {
++		t.Fatal(err)
++	}
++	entered := make(chan struct{})
++	store := &shutdownRefreshStore{}
++	var hold <-chan struct{}
++	m = shutdownRefreshManager(t, store, func(_ context.Context, a *Auth) (*Auth, error) {
++		close(entered)
++		<-hold
++		return shutdownRefreshReplacement(a), nil
++	})
++	releaseCh, release := shutdownRefreshRelease(t)
++	hold = releaseCh
++	shutdownRefreshStart(m)
++	shutdownRefreshSignal(t, entered)
++	// The old API must return promptly even though the executor ignores cancel.
++	m.StopAutoRefresh()
++	m.StopAutoRefresh()
++	const waiters = 8
++	dones := make([]<-chan error, waiters)
++	for i := range dones {
++		dones[i] = shutdownRefreshJoin(m)
++	}
++	shutdownRefreshBlocked(t, dones[0])
++	release()
++	for _, done := range dones {
++		shutdownRefreshJoined(t, done, store)
++	}
++	cancelled, cancel := context.WithCancel(context.Background())
++	cancel()
++	if err := m.StopAutoRefreshAndWait(cancelled); err != nil {
++		t.Fatalf("already-complete run: %v", err)
++	}
++}
++
++func TestRefreshShutdownPreviousRunIsJoined(t *testing.T) {
++	for _, stopFirst := range []bool{false, true} {
++		name := "replacement"
++		if stopFirst {
++			name = "stop_then_replacement"
++		}
++		t.Run(name, func(t *testing.T) {
++			entered := make(chan struct{})
++			store := &shutdownRefreshStore{}
++			var hold <-chan struct{}
++			m := shutdownRefreshManager(t, store, func(_ context.Context, a *Auth) (*Auth, error) {
++				close(entered)
++				<-hold
++				return shutdownRefreshReplacement(a), nil
++			})
++			releaseCh, release := shutdownRefreshRelease(t)
++			hold = releaseCh
++			shutdownRefreshStart(m)
++			shutdownRefreshSignal(t, entered)
++			if stopFirst {
++				m.StopAutoRefresh()
++			}
++			m.StartAutoRefresh(context.Background(), time.Hour)
++			done := shutdownRefreshJoin(m)
++			shutdownRefreshBlocked(t, done)
++			release()
++			shutdownRefreshJoined(t, done, store)
++		})
++	}
++
++	// Start/stop publication races must not orphan a run before it starts.
++	t.Run("concurrent_start_stop", func(t *testing.T) {
++		m := NewManager(nil, nil, nil)
++		var wg sync.WaitGroup
++		for i := 0; i < 8; i++ {
++			wg.Add(1)
++			go func() {
++				defer wg.Done()
++				m.StartAutoRefresh(context.Background(), time.Hour)
++				m.StopAutoRefresh()
++			}()
++		}
++		wg.Wait()
++		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++		defer cancel()
++		if err := m.StopAutoRefreshAndWait(ctx); err != nil {
++			t.Fatal(err)
++		}
++	})
++}
+diff --git a/sdk/cliproxy/auth/conductor.go b/sdk/cliproxy/auth/conductor.go
+--- a/sdk/cliproxy/auth/conductor.go
++++ b/sdk/cliproxy/auth/conductor.go
+@@ -192,6 +192,7 @@
+ 	// Auto refresh state
+ 	refreshCancel context.CancelFunc
+ 	refreshLoop   *authAutoRefreshLoop
++	refreshRuns   []*authAutoRefreshRun // includes cancelled runs whose workers have not finished
+ 
+ 	requestPrepareLocks sync.Map
+ 	// refreshLocks serializes credential refresh per auth ID so concurrent
+diff --git a/sdk/cliproxy/auth/conductor_refresh.go b/sdk/cliproxy/auth/conductor_refresh.go
+--- a/sdk/cliproxy/auth/conductor_refresh.go
++++ b/sdk/cliproxy/auth/conductor_refresh.go
+@@ -38,52 +38,110 @@
+ 	transientErrorCooldown    = time.Minute
+ )
+ 
++// authAutoRefreshRun retains completion even after cancellation or replacement.
++// Its lifetime covers executor refresh, durable persistence and save reporting.
++type authAutoRefreshRun struct {
++	cancel context.CancelFunc
++	done   <-chan struct{}
++}
++
+ // StartAutoRefresh launches a background loop that evaluates auth freshness
+ // every few seconds and triggers refresh operations when required.
+ // Only one loop is kept alive; starting a new one cancels the previous run.
+ func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duration) {
++	if m == nil {
++		return
++	}
++	if parent == nil {
++		parent = context.Background()
++	}
+ 	if interval <= 0 {
+ 		interval = refreshCheckInterval
+ 	}
+ 
++	ctx, cancelCtx := context.WithCancel(parent)
++	loop := newAuthAutoRefreshLoop(m, interval, m.refreshWorkers())
++	run := &authAutoRefreshRun{cancel: cancelCtx, done: loop.done}
++
+ 	m.mu.Lock()
+-	cancelPrev := m.refreshCancel
++	if m.refreshCancel != nil {
++		m.refreshCancel()
++	}
++	m.pruneRefreshRunsLocked()
++	m.refreshRuns = append(m.refreshRuns, run)
++	m.refreshCancel = cancelCtx
++	m.refreshLoop = loop
++	m.mu.Unlock()
++
++	loop.rebuild(time.Now())
++	go loop.run(ctx)
++}
++
++// StopAutoRefresh cancels background refresh without waiting for active workers.
++// It also stops the selector if it implements StoppableSelector.
++func (m *Manager) StopAutoRefresh() {
++	m.stopAutoRefresh()
++}
++
++// StopAutoRefreshAndWait cancels and joins every refresh run admitted before its
++// stop snapshot, including runs cancelled by an earlier stop or replacement start.
++// A concurrent start admitted after the snapshot is not included. Waiting holds
++// neither manager nor per-auth locks. A deadline limits the wait, not the worker's
++// durable save: a nil return means completion, not that every save succeeded.
++func (m *Manager) StopAutoRefreshAndWait(ctx context.Context) error {
++	runs := m.stopAutoRefresh()
++	if ctx == nil {
++		ctx = context.Background()
++	}
++	for _, run := range runs {
++		select {
++		case <-run.done:
++			continue
++		default:
++		}
++		select {
++		case <-run.done:
++		case <-ctx.Done():
++			return ctx.Err()
++		}
++	}
++	return nil
++}
++
++// stopAutoRefresh linearizes stop at the snapshot under m.mu. Unfinished handles
++// remain reachable for subsequent joiners, even after a cancellation-only stop.
++func (m *Manager) stopAutoRefresh() []*authAutoRefreshRun {
++	if m == nil {
++		return nil
++	}
++	m.mu.Lock()
++	m.pruneRefreshRunsLocked()
++	runs := append([]*authAutoRefreshRun(nil), m.refreshRuns...)
++	for _, run := range runs {
++		run.cancel()
++	}
+ 	m.refreshCancel = nil
+ 	m.refreshLoop = nil
+ 	m.mu.Unlock()
+-	if cancelPrev != nil {
+-		cancelPrev()
+-	}
+-
+-	ctx, cancelCtx := context.WithCancel(parent)
+-	workers := m.refreshWorkers()
+-	loop := newAuthAutoRefreshLoop(m, interval, workers)
+-
+-	m.mu.Lock()
+-	m.refreshCancel = cancelCtx
+-	m.refreshLoop = loop
+-	m.mu.Unlock()
+-
+-	loop.rebuild(time.Now())
+-	go loop.run(ctx)
+-}
+-
+-// StopAutoRefresh cancels the background refresh loop, if running.
+-// It also stops the selector if it implements StoppableSelector.
+-func (m *Manager) StopAutoRefresh() {
+-	m.mu.Lock()
+-	cancel := m.refreshCancel
+-	m.refreshCancel = nil
+-	m.refreshLoop = nil
+-	m.mu.Unlock()
+-	if cancel != nil {
+-		cancel()
+-	}
+-	// Stop selector if it implements StoppableSelector (e.g., SessionAffinitySelector)
++
+ 	sel := m.Selector()
+ 	if stoppable, ok := sel.(StoppableSelector); ok && stoppable != nil {
+ 		stoppable.Stop()
+ 	}
++	return runs
++}
++
++func (m *Manager) pruneRefreshRunsLocked() {
++	active := m.refreshRuns[:0]
++	for _, run := range m.refreshRuns {
++		select {
++		case <-run.done:
++		default:
++			active = append(active, run)
++		}
++	}
++	clear(m.refreshRuns[len(active):])
++	m.refreshRuns = active
+ }
+ 
+ func (m *Manager) queueRefreshReschedule(authID string) {
+@@ -541,6 +599,11 @@
+ 		}
+ 	}
+ 
++	// Check after both lock acquisitions: a queued worker may have waited behind
++	// another refresh or the stop snapshot. Do not begin a new shielded attempt.
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
+ 	base := auth.Clone()
+ 	updated, err := exec.Refresh(ctx, base.Clone())
+ 	if err != nil && errors.Is(err, context.Canceled) {
+diff --git a/sdk/cliproxy/service_lifecycle.go b/sdk/cliproxy/service_lifecycle.go
+--- a/sdk/cliproxy/service_lifecycle.go
++++ b/sdk/cliproxy/service_lifecycle.go
+@@ -58,11 +58,11 @@
+ 		redisqueue.SetUsageStatisticsEnabled(true)
+ 	}
+ 
+-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+-	defer shutdownCancel()
+ 	defer func() {
+-		if err := s.Shutdown(shutdownCtx); err != nil {
+-			log.Errorf("service shutdown returned error: %v", err)
++		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
++		defer shutdownCancel()
++		if errShutdown := s.Shutdown(shutdownCtx); errShutdown != nil {
++			log.Errorf("service shutdown returned error: %v", errShutdown)
+ 		}
+ 	}()
+ 
+@@ -296,12 +296,19 @@
+ 			s.watcherCancel()
+ 		}
+ 		if s.coreManager != nil {
+-			s.coreManager.StopAutoRefresh()
++			// Keep the existing grace budget. An overrun is not verified persistence;
++			// active provider attempts or disk sync can outlast this bounded join.
++			if err := s.coreManager.StopAutoRefreshAndWait(ctx); err != nil {
++				log.Warn("credential refresh workers still running at shutdown deadline; persistence unverified")
++				shutdownErr = fmt.Errorf("credential refresh shutdown incomplete: %w", err)
++			}
+ 		}
+ 		if s.watcher != nil {
+ 			if err := s.watcher.Stop(); err != nil {
+ 				log.Errorf("failed to stop file watcher: %v", err)
+-				shutdownErr = err
++				if shutdownErr == nil {
++					shutdownErr = err
++				}
+ 			}
+ 		}
+ 		if s.wsGateway != nil {
+diff --git a/sdk/cliproxy/service_shutdown_test.go b/sdk/cliproxy/service_shutdown_test.go
+new file mode 100644
+--- /dev/null
++++ b/sdk/cliproxy/service_shutdown_test.go
+@@ -0,0 +1,260 @@
++package cliproxy
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher"
++	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
++	log "github.com/sirupsen/logrus"
++)
++
++type serviceShutdownExecutor struct {
++	coreauth.ProviderExecutor
++	entered   chan struct{}
++	cancelled chan struct{}
++	release   <-chan struct{}
++}
++
++func (*serviceShutdownExecutor) Identifier() string { return "shutdown-fixture" }
++func (e *serviceShutdownExecutor) Refresh(ctx context.Context, a *coreauth.Auth) (*coreauth.Auth, error) {
++	close(e.entered)
++	<-ctx.Done()
++	close(e.cancelled)
++	<-e.release // model a cancellation-shielded successful provider attempt
++	a = a.Clone()
++	a.Metadata["refresh_token"] = "replacement-refresh"
++	return a, nil
++}
++
++type serviceShutdownStore struct {
++	coreauth.Store
++	entered chan struct{}
++	release <-chan struct{}
++	saved   string // read only after the refresh join
++}
++
++func (s *serviceShutdownStore) SaveWithReport(_ context.Context, a *coreauth.Auth, opts coreauth.SaveOptions) (coreauth.SaveReport, error) {
++	close(s.entered)
++	<-s.release
++	if !opts.Sync {
++		return coreauth.SaveReport{}, errors.New("refresh did not request sync")
++	}
++	s.saved, _ = a.Metadata["refresh_token"].(string)
++	return coreauth.SaveReport{Outcome: coreauth.SaveOutcomePersisted, Stage: coreauth.SaveStageNone, Category: coreauth.SaveCategoryNone, CredentialsChanged: true}, nil
++}
++
++func serviceShutdownSignal(t *testing.T, ch <-chan struct{}) {
++	t.Helper()
++	select {
++	case <-ch:
++	case <-time.After(5 * time.Second):
++		t.Fatal("timed out waiting for shutdown fixture")
++	}
++}
++
++func serviceShutdownBlocked(t *testing.T, done <-chan error) {
++	t.Helper()
++	select {
++	case err := <-done:
++		t.Fatalf("shutdown returned before cleanup completed: %v", err)
++	case <-time.After(20 * time.Millisecond):
++	}
++}
++
++func serviceShutdownRelease() (chan struct{}, func()) {
++	ch := make(chan struct{})
++	var once sync.Once
++	return ch, func() { once.Do(func() { close(ch) }) }
++}
++
++type serviceShutdownLog struct {
++	messages chan string
++}
++
++func (*serviceShutdownLog) Levels() []log.Level { return []log.Level{log.WarnLevel} }
++func (h *serviceShutdownLog) Fire(e *log.Entry) error {
++	if strings.Contains(e.Message, "credential refresh workers still running") {
++		h.messages <- e.Message
++	}
++	return nil
++}
++
++func TestServiceShutdownJoinsRefresh(t *testing.T) {
++	for _, deadline := range []bool{false, true} {
++		name := "completion"
++		if deadline {
++			name = "deadline"
++		}
++		t.Run(name, func(t *testing.T) {
++			executorHold, releaseExecutor := serviceShutdownRelease()
++			storeHold, releaseStore := serviceShutdownRelease()
++			exec := &serviceShutdownExecutor{entered: make(chan struct{}), cancelled: make(chan struct{}), release: executorHold}
++			store := &serviceShutdownStore{entered: make(chan struct{}), release: storeHold}
++			m := coreauth.NewManager(store, nil, nil)
++			m.RegisterExecutor(exec)
++			_, err := m.Register(coreauth.WithSkipPersist(context.Background()), &coreauth.Auth{
++				ID: "shutdown-fixture", Provider: "shutdown-fixture",
++				Metadata: map[string]any{"refresh_token": "old-refresh", "refresh_interval_seconds": 3600},
++			})
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() {
++				releaseExecutor()
++				releaseStore()
++				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++				defer cancel()
++				if err := m.StopAutoRefreshAndWait(ctx); err != nil {
++					t.Errorf("cleanup: %v", err)
++				}
++			})
++			m.StartAutoRefresh(context.Background(), time.Hour)
++			serviceShutdownSignal(t, exec.entered)
++			s := &Service{coreManager: m}
++			budget := 5 * time.Second
++			if deadline {
++				budget = 20 * time.Millisecond
++				// A later cleanup error must not replace the refresh deadline error.
++				s.watcher = &WatcherWrapper{stop: func() error { return errors.New("synthetic watcher failure") }}
++			}
++			logger := log.StandardLogger()
++			hook := &serviceShutdownLog{messages: make(chan string, 1)}
++			oldHooks := logger.ReplaceHooks(make(log.LevelHooks))
++			logger.AddHook(hook)
++			t.Cleanup(func() { logger.ReplaceHooks(oldHooks) })
++			ctx, cancel := context.WithTimeout(context.Background(), budget)
++			defer cancel()
++			done := make(chan error, 1)
++			go func() { done <- s.Shutdown(ctx) }()
++			serviceShutdownSignal(t, exec.cancelled)
++			if deadline {
++				select {
++				case err := <-done:
++					if !errors.Is(err, context.DeadlineExceeded) {
++						t.Fatalf("shutdown error = %v, want refresh deadline", err)
++					}
++				case <-time.After(5 * time.Second):
++					t.Fatal("shutdown ignored its deadline")
++				}
++				select {
++				case message := <-hook.messages:
++					if message != "credential refresh workers still running at shutdown deadline; persistence unverified" {
++						t.Fatalf("unexpected deadline diagnostic: %q", message)
++					}
++				default:
++					t.Fatal("missing credential-free deadline diagnostic")
++				}
++				releaseExecutor()
++				releaseStore()
++				joinCtx, joinCancel := context.WithTimeout(context.Background(), 5*time.Second)
++				defer joinCancel()
++				if err := m.StopAutoRefreshAndWait(joinCtx); err != nil {
++					t.Fatal(err)
++				}
++			} else {
++				serviceShutdownBlocked(t, done)
++				releaseExecutor()
++				serviceShutdownSignal(t, store.entered)
++				serviceShutdownBlocked(t, done)
++				releaseStore()
++				select {
++				case err := <-done:
++					if err != nil {
++						t.Fatal(err)
++					}
++				case <-time.After(5 * time.Second):
++					t.Fatal("shutdown did not finish after save")
++				}
++			}
++			if store.saved != "replacement-refresh" {
++				t.Fatalf("saved refresh token = %q, want replacement-refresh", store.saved)
++			}
++		})
++	}
++}
++
++type shutdownEmptyTokens struct{}
++
++func (shutdownEmptyTokens) Load(context.Context, *config.Config) (*TokenClientResult, error) {
++	return &TokenClientResult{}, nil
++}
++
++type shutdownEmptyAPIKeys struct{}
++
++func (shutdownEmptyAPIKeys) Load(context.Context, *config.Config) (*APIKeyClientResult, error) {
++	return &APIKeyClientResult{}, nil
++}
++
++// This deliberately runs once, outside the short gateway lane and repeated race
++// gate: the old context expired after 30 seconds of uptime, not after cancellation.
++func TestRunShutdownContextStartsAtExit(t *testing.T) {
++	t.Setenv("MANAGEMENT_PASSWORD", "")
++	t.Setenv("WRITABLE_PATH", t.TempDir())
++	t.Setenv("writable_path", "")
++	s := &Service{
++		cfg:           &config.Config{Host: "127.0.0.1", Port: 0, AuthDir: t.TempDir()},
++		coreManager:   coreauth.NewManager(nil, nil, nil),
++		tokenProvider: shutdownEmptyTokens{}, apiKeyProvider: shutdownEmptyAPIKeys{},
++		authUpdates: make(chan watcher.AuthUpdate),
++	}
++	started, stopping := make(chan struct{}), make(chan struct{})
++	barrier := make(chan struct{})
++	close(barrier)
++	s.watcherFactory = func(string, string, func(*config.Config)) (*WatcherWrapper, error) {
++		return &WatcherWrapper{
++			start: func(context.Context) error {
++				// The real consumer receives this update, then waits at authUpdateMu.
++				s.authUpdates <- watcher.AuthUpdate{Action: watcher.AuthUpdateActionDelete, ID: "consumer-fixture"}
++				close(started)
++				return nil
++			},
++			stop:                func() error { close(stopping); return nil },
++			dispatchAuthBarrier: func() <-chan struct{} { return barrier },
++		}, nil
++	}
++	s.authUpdateMu.Lock()
++	var once sync.Once
++	unblock := func() { once.Do(s.authUpdateMu.Unlock) }
++	ctx, cancel := context.WithCancel(context.Background())
++	done := make(chan error, 1)
++	finished := make(chan struct{})
++	go func() {
++		done <- s.Run(ctx)
++		close(finished)
++	}()
++	t.Cleanup(func() {
++		cancel()
++		unblock()
++		serviceShutdownSignal(t, finished)
++	})
++	serviceShutdownSignal(t, started)
++	select {
++	case err := <-done:
++		t.Fatalf("Run exited before cancellation: %v", err)
++	case <-time.After(31 * time.Second):
++	}
++	cancel()
++	serviceShutdownSignal(t, stopping)
++	// No refresh work exists in this test; only the consumer join can hold Run.
++	serviceShutdownBlocked(t, done)
++	unblock()
++	select {
++	case err := <-done:
++		if !errors.Is(err, context.Canceled) {
++			t.Fatalf("Run error = %v, want context cancelled", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("Run did not finish after consumer release")
++	}
++	select {
++	case <-s.authQueueDone:
++	default:
++		t.Fatal("Run returned before the real auth-update consumer finished")
++	}
++}

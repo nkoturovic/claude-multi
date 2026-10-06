@@ -140,6 +140,16 @@
       "basename": "cli-proxy-api-codex-api-key-safety.patch",
       "sha256": "b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628",
       "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-refresh-shutdown-join.patch",
+      "sha256": "6474a404f9ecba94c07fc9415ffee3601059941101cbf944a17a623e5b80c8e3",
+      "admitted": true
+    },
+    {
+      "basename": "cli-proxy-api-openai-content-chunks.patch",
+      "sha256": "f2db67071e99b3c106ea262502c04be887f6fb17277a848d0cdd6810f9b03025",
+      "admitted": true
     }
   ],
   "candidates": [
@@ -651,6 +661,126 @@
         "TestCodexKeyErrorBodyReadIsBounded",
         "TestCodexPlainKeyIdentity"
       ]
+    },
+    {
+      "name": "refresh-shutdown",
+      "packages": [
+        "./sdk/cliproxy/auth"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestRefreshShutdownWaitsForExecutor",
+        "TestRefreshShutdownWaitsForDurableSave",
+        "TestRefreshShutdownSkipsQueuedJobs",
+        "TestRefreshShutdownCanceledAuthLockWaitDoesNotStartRefresh",
+        "TestRefreshShutdownDeadline",
+        "TestRefreshShutdownRepeatedStop",
+        "TestRefreshShutdownPreviousRunIsJoined"
+      ],
+      "run": "^(TestRefreshShutdownWaitsForExecutor|TestRefreshShutdownWaitsForDurableSave|TestRefreshShutdownSkipsQueuedJobs|TestRefreshShutdownCanceledAuthLockWaitDoesNotStartRefresh|TestRefreshShutdownDeadline|TestRefreshShutdownRepeatedStop|TestRefreshShutdownPreviousRunIsJoined)$"
+    },
+    {
+      "name": "race-refresh-shutdown",
+      "packages": [
+        "./sdk/cliproxy/auth"
+      ],
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestRefreshShutdownWaitsForExecutor",
+        "TestRefreshShutdownWaitsForDurableSave",
+        "TestRefreshShutdownSkipsQueuedJobs",
+        "TestRefreshShutdownCanceledAuthLockWaitDoesNotStartRefresh",
+        "TestRefreshShutdownDeadline",
+        "TestRefreshShutdownRepeatedStop",
+        "TestRefreshShutdownPreviousRunIsJoined"
+      ],
+      "run": "^(TestRefreshShutdownWaitsForExecutor|TestRefreshShutdownWaitsForDurableSave|TestRefreshShutdownSkipsQueuedJobs|TestRefreshShutdownCanceledAuthLockWaitDoesNotStartRefresh|TestRefreshShutdownDeadline|TestRefreshShutdownRepeatedStop|TestRefreshShutdownPreviousRunIsJoined)$"
+    },
+    {
+      "name": "service-refresh-shutdown",
+      "packages": [
+        "./sdk/cliproxy"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestServiceShutdownJoinsRefresh"
+      ],
+      "run": "^(TestServiceShutdownJoinsRefresh)$"
+    },
+    {
+      "name": "race-service-refresh-shutdown",
+      "packages": [
+        "./sdk/cliproxy"
+      ],
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestServiceShutdownJoinsRefresh"
+      ],
+      "run": "^(TestServiceShutdownJoinsRefresh)$"
+    },
+    {
+      "name": "refresh-shutdown-file-store",
+      "packages": [
+        "./sdk/auth"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestRefreshShutdownFileTokenStore"
+      ],
+      "run": "^(TestRefreshShutdownFileTokenStore)$"
+    },
+    {
+      "name": "race-refresh-shutdown-file-store",
+      "packages": [
+        "./sdk/auth"
+      ],
+      "platforms": "linux",
+      "race": true,
+      "count": 100,
+      "expected_tests": [
+        "TestRefreshShutdownFileTokenStore"
+      ],
+      "run": "^(TestRefreshShutdownFileTokenStore)$"
+    },
+    {
+      "name": "run-shutdown-context",
+      "packages": [
+        "./sdk/cliproxy"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestRunShutdownContextStartsAtExit"
+      ],
+      "run": "^(TestRunShutdownContextStartsAtExit)$"
+    },
+    {
+      "name": "openai-content-chunks",
+      "packages": [
+        "./internal/translator/openai/claude"
+      ],
+      "platforms": "portable",
+      "race": false,
+      "count": null,
+      "expected_tests": [
+        "TestContentChunksStreaming",
+        "TestContentChunksToolInterleaving",
+        "TestContentChunksNonStreaming",
+        "TestContentChunksReasoningPrecedenceAndTools",
+        "TestContentChunksFinishAndUsage",
+        "TestContentChunksLegacyGoldens"
+      ]
     }
   ],
   "source_pins": [
@@ -705,6 +835,10 @@
     {
       "patch": "cli-proxy-api-codex-client-identity.patch",
       "text": "codex-tui/0.159.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.159.1)"
+    },
+    {
+      "patch": "cli-proxy-api-refresh-shutdown-join.patch",
+      "text": "credential refresh workers still running at shutdown deadline; persistence unverified"
     }
   ]
 }
