@@ -90,7 +90,14 @@ __all__ = [
     "bindings_path",
     "bindings_schema_path",
     "declared_efforts",
+    "available_efforts",
+    "effort_warnings",
+    "binding_warnings",
+    "qualification_warnings",
+    "MODEL_WARNING_CODES",
+    "TRANSIENT_WARNING_CODES",
     "derive_routing",
+    "recognized_family",
     "AgentEligibility",
     "AgentFacts",
     "AgentGate",
@@ -263,6 +270,43 @@ def declared_efforts(entry: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(sorted(set(values), key=_rank_key))
 
 
+def available_efforts(entry: Mapping[str, Any], native_efforts: Sequence[str], *,
+                      lead: bool = False, workflow: bool = False) -> tuple[str, ...]:
+    """Representable efforts, independent of a line's recommendations.
+
+    A single-selector client line carries native effort separately. Workflow
+    defaults have no separate effort channel, so only its default is usable.
+    Gateway efforts always require their exact selector/contract mapping.
+    """
+
+    declared = declared_efforts(entry)
+    native = set(native_efforts)
+    client = isinstance(entry.get("efforts"), (list, tuple))
+    if client:
+        allowed = native if isinstance(entry.get("selector"), str) and entry["selector"] else set()
+        if workflow:
+            allowed = allowed & {entry.get("default_effort")}
+    else:
+        efforts = entry.get("efforts")
+        allowed = {level for level in declared if level in native and isinstance(efforts[level], Mapping)
+                   and efforts[level].get("selector") and "proxy_contract" in efforts[level]}
+    if lead and ULTRACODE in native and isinstance(entry.get("lead"), Mapping):
+        allowed.add(ULTRACODE)
+    else:
+        allowed.discard(ULTRACODE)
+    return tuple(sorted(allowed, key=_rank_key))
+
+
+def effort_warnings(entry: Mapping[str, Any], effort: str, *, slot: str | None = None) -> tuple[Finding, ...]:
+    """A supported single-selector effort not verified by this declaration."""
+
+    if (isinstance(entry.get("efforts"), (list, tuple)) and effort != ULTRACODE
+            and effort not in declared_efforts(entry)):
+        message = f"effort {effort!r} unverified for this line (not declared)"
+        return (Finding("effort-unverified", slot, message, message),)
+    return ()
+
+
 def format_tokens(n: int) -> str:
     """``1_000_000`` → ``"1M"``, ``258_400`` → ``"258K"``, ``500_000`` → ``"500K"``."""
 
@@ -358,7 +402,7 @@ def binding_selector(
 # policy: an agent on a 1M-class line whose provider bound is at least the
 # session window keeps ``[1m]`` and runs at the window; one whose bound is
 # below it uses the same alias without ``[1m]``, so it compacts in the 200K
-# class and never overflows its route.
+# class. Very small provider bounds can still overflow; evaluation warns.
 SUFFIX_1M = "[1m]"
 
 
@@ -432,8 +476,8 @@ def role_window(
     is narrowed to the same alias without ``[1m]``. ``decide`` False reads a
     selector as bound (the lead, a resolved or recorded binding). The class
     is 1M for ``[1m]``; otherwise the exported scalar when the policy has
-    one, else the 200K class for a narrowed agent and the line's
-    ``client_tokens`` for any other selector."""
+    one, else 200K for a newly decided agent. Reading an already bound
+    selector retains its ``client_tokens``."""
 
     narrowed = decide and selector.endswith(SUFFIX_1M) and provider_tokens < policy.window
     if narrowed:
@@ -443,20 +487,18 @@ def role_window(
     elif policy.scalar is not None:
         client = policy.scalar
     else:
-        client = CLASS_STANDARD if narrowed else client_tokens
+        client = CLASS_STANDARD if decide else client_tokens
     window = min(client, policy.window)
     return RoleWindow(selector, client, window, agent_compaction_trigger(window, policy.percent), narrowed)
 
 
 def lead_set_member(entry: Mapping[str, Any], provider_id: str, lead_class: str | None,
                     lead_providers: Iterable[str] | None) -> bool:
-    """Whether an offered line is in the lead set of ``lead_class``: lead
-    capable, of that class and, when ``lead_providers`` narrows the set, on
-    one of them (the lead set's one membership rule; ``scope`` builds the
-    rows with it)."""
+    """Whether an offered line has the lead fields and ``lead_class`` the
+    process needs and, when ``lead_providers`` narrows the set, is on one
+    of them. Capability recommendations do not change membership."""
 
-    capabilities = entry.get("capabilities") or ()
-    if "lead" not in capabilities or entry.get("lead") is None:
+    if not isinstance(entry.get("lead"), Mapping):
         return False
     context = entry.get("context") if isinstance(entry.get("context"), Mapping) else {}
     if lead_class is None or context.get("ordinary_profile") != lead_class:
@@ -482,10 +524,7 @@ def session_policy(
         provider_id = entry.get("provider")
         if not isinstance(provider_id, str) or provider_id not in lcat.providers:
             continue
-        if effective is None:
-            if entry.get("status", "active") != "active":
-                continue
-        elif not settings.line_offered(key, entry, effective):
+        if effective is not None and not settings.line_offered(key, entry, effective):
             continue
         if not lead_set_member(entry, provider_id, lead_class, lead_providers):
             continue
@@ -513,13 +552,10 @@ def agent_selectors(entry: Mapping[str, Any], provider: Mapping[str, Any]) -> tu
 
 def line_agent_window_problems(entry: Mapping[str, Any], provider: Mapping[str, Any], *,
                                policy: WindowPolicy | None = None) -> tuple[str, ...]:
-    """Every agent selector of one agents-capable line whose decided class
-    compacts above the provider bound under ``policy`` (the default policy
-    without one), with the shared :func:`agent_window_problem` text. Empty
-    for a lead-only line."""
+    """Every agent selector whose decided class compacts above the provider
+    bound under ``policy``, with the shared :func:`agent_window_problem`
+    warning text (including a line not recommended for agents)."""
 
-    if "agents" not in (entry.get("capabilities") or ()):
-        return ()
     context = entry.get("context") or {}
     bound = int(context.get("provider_tokens", 0))
     problems = []
@@ -568,9 +604,10 @@ def keep_recorded_agent_class(
     changed = dataclasses.replace(lineup, agents=types.MappingProxyType(agents))
     if lcat is None:
         return changed
-    attention = tuple(f for f in lineup.warnings if f.code == "operator-agent-attention")
+    old_derived = _warnings(lineup.lead, lineup.agents, lineup.routing, lcat, lineup.primary_provider, lineup.policy)
+    other = tuple(f for f in lineup.warnings if f not in old_derived)
     return dataclasses.replace(changed, warnings=_warnings(
-        changed.lead, changed.agents, changed.routing, lcat, changed.primary_provider) + attention)
+        changed.lead, changed.agents, changed.routing, lcat, changed.primary_provider, changed.policy) + other)
 
 
 def lineup_windows(lineup: "ResolvedLineup") -> tuple[tuple[str, RoleWindow], ...]:
@@ -607,17 +644,27 @@ def _line_mode(entry: Mapping[str, Any], provider: Mapping[str, Any]) -> str:
 # profile never imports the operator layer; a test pins the equality).
 OPERATOR_LINES_KEY = "operator-lines"
 OPERATOR_SECRET_NAMES_KEY = "operator-secret-names"
+OPERATOR_KNOWN_FAMILIES_KEY = "_operator_known_families"
+# Mutable diagnostics never enter durable scope identity or launch fences.
+TRANSIENT_WARNING_CODES = frozenset({
+    "admission", "qualification", "exact-client", "tool-evidence", "operator-agent-attention", "context-risk",
+})
+# Current provider bounds can change while a running selector keeps its old
+# class. Capacity predictions are displayed, never hashed into that scope.
+MODEL_WARNING_CODES = TRANSIENT_WARNING_CODES | frozenset({
+    "capability-recommendation", "role-recommendation", "lead-env-ignored", "family-unknown",
+    "effort-unverified", "independence-unknown", "companion-grade", "explore-replacement-unbound",
+})
 LINE_ORIGINS = ("catalog", "legacy-custom", "operator", "operator-migrated")
 OPERATOR_ORIGINS = frozenset({"operator", "operator-migrated"})
 
 
 # ------------------------------------------------------------ agent gate
 #
-# One pure gate, ``agent_eligibility``, is the only authority for an
-# operator (T2) agent grant. Profile evaluation, named bindings, the workflow default,
-# picker facts, doctor and the fence builder all reach it through
-# ``LineupCatalog.agent_gate``. Its inputs are explicit facts (never a
-# filesystem read); the operator layer computes them for the current state.
+# One pure gate separates operator-agent routing errors from recommendations
+# and optional diagnostics. Evaluation, workflow defaults, pickers, doctor and
+# the fence builder share it through LineupCatalog.agent_gate. Inputs are
+# explicit facts, never filesystem reads or evidence minted during selection.
 AGENT_MODE_CURRENT = "current"  # fresh launch, resume, new or changed in-session slots
 AGENT_MODE_RECORD = "record"  # doctor, converge, live apply of unchanged slots
 AGENT_MODES = (AGENT_MODE_CURRENT, AGENT_MODE_RECORD)
@@ -650,14 +697,14 @@ class AgentFacts:
     provider: str
     admitted: bool  # the current admission predicate (digest-bound)
     route: str  # approved | keyless | catalog | unapproved | changed
-    d60: bool  # the route kind is retention-audited for agents (compat stays closed)
+    d60: bool  # retained compatibility fact; no separate agent-only route allowlist
     route_kind: str
     family: str
     t1_families: frozenset[str]
     evidence: str  # current | contract-stale | missing | failed | definition-stale
     evidence_gaps: tuple[str, ...] = ()
     tools_variants: frozenset[str] = frozenset()
-    pool: bool = False  # a first-party pool line: the exact-client proof is required
+    pool: bool = False  # a first-party pool line: optional exact-client diagnostics
     exact_client: str = "not-required"  # not-required | current | contract-stale | missing | failed | unavailable
 
 
@@ -688,6 +735,7 @@ class AgentEligibility:
     remedy: str
     attention: str | None
     evidence: str
+    warnings: tuple[Finding, ...] = ()
 
     def refusal(self, *, key: str, slot: str, profile_name: str | None) -> str:
         """The refusal text for a slot whose line cannot be bound."""
@@ -730,113 +778,130 @@ def agent_window_problem(selector: str, provider_tokens: int, *, policy: WindowP
                        policy=policy, decide=True)
     if role.trigger <= provider_tokens:
         return None
-    return (f"its agent class {format_tokens(role.client_class)} compacts at {role.trigger} tokens "
-            f"({policy.percent}%), above its provider bound {provider_tokens}")
+    return _window_risk_text(role, provider_tokens, policy)
+
+
+def _window_risk_text(role: RoleWindow, provider_tokens: int, policy: WindowPolicy) -> str:
+    return (f"its agent class {format_tokens(role.client_class)} ({role.client_class} tokens), "
+            f"shared process window {policy.window}, effective window {role.window}, "
+            f"compacts at {role.trigger} tokens ({policy.percent}%), above its provider bound {provider_tokens}")
+
+
+def binding_warnings(entry: Mapping[str, Any], *, key: str, slot: str | None, effort: str,
+                     family: str, known_families: Iterable[str], admitted: bool = True) -> tuple[Finding, ...]:
+    """Recommendations shared by explicit lead, agent and workflow bindings."""
+
+    found: list[Finding] = []
+
+    def warn(code: str, message: str) -> None:
+        found.append(Finding(code, slot, f"{key}: {message}", f"{key}: {message}"))
+
+    lead_use = slot == LEAD_ROLE
+    capability = "lead" if lead_use else "agents"
+    if capability not in (entry.get("capabilities") or ()):
+        warn("capability-recommendation", f'explicit binding overrides the missing "{capability}" recommendation')
+    roles = entry.get("roles")
+    if not lead_use and slot is not None and roles != "all" and slot not in (roles or ()):
+        warn("role-recommendation", f"explicit binding overrides the recommendation against {slot}")
+    lead = entry.get("lead")
+    if not lead_use and isinstance(lead, Mapping) and lead.get("env"):
+        warn("lead-env-ignored", "its lead-only environment is not applied to an agent")
+    if not recognized_family(family, known_families):
+        warn("family-unknown", f"family {family!r}: review independence unknown")
+    if not admitted:
+        warn("admission", "not admitted with its current definition (optional attestation)")
+    found.extend(effort_warnings(entry, effort, slot=slot))
+    return tuple(found)
+
+
+def qualification_warnings(key: str, facts: AgentFacts | None, *, slot: str | None,
+                           use: str = AGENT_USE) -> tuple[Finding, ...]:
+    """Optional operator attestations; absence never grants or denies a route."""
+
+    found: list[Finding] = []
+
+    def warn(code: str, message: str) -> None:
+        found.append(Finding(code, slot, f"{key}: {message}", f"{key}: {message}"))
+
+    if facts is None or not facts.admitted:
+        warn("admission", "not admitted with its current definition (optional attestation)")
+    evidence = facts.evidence if facts is not None else "missing"
+    gaps = ", ".join(facts.evidence_gaps) if facts is not None and facts.evidence_gaps else "agent"
+    if evidence == "missing":
+        warn("qualification", f"not qualified: no current {gaps} evidence")
+    elif evidence == "failed":
+        warn("qualification", f"failed {gaps} qualification")
+    elif evidence == "definition-stale":
+        warn("qualification", "qualification is stale for the current definition")
+    elif evidence == "contract-stale":
+        warn("qualification", "qualification predates the current pins (stale evidence)")
+    elif evidence != "current":
+        warn("qualification", f"qualification {evidence}")
+    if use == WORKFLOW_USE and (facts is None or "forced" not in facts.tools_variants):
+        warn("tool-evidence", "no passing forced named-tool evidence for the workflow default")
+    if facts is not None and facts.pool and facts.exact_client != "current":
+        warn("exact-client", f"exact-client check {facts.exact_client}")
+    return tuple(found)
 
 
 def agent_eligibility(
     entry: Mapping[str, Any], *, key: str, slot: str | None, effort: str,
     facts: AgentFacts | None, agent_efforts: Sequence[str], mode: str = AGENT_MODE_CURRENT,
     recorded: bool = False, use: str = AGENT_USE, policy: WindowPolicy | None = None,
+    family: str | None = None, known_families: Iterable[str] | None = None,
 ) -> AgentEligibility:
-    """The six-condition gate for an operator line used as an agent (pure).
+    """Hard routing/effort problems and advisory findings for an operator agent.
 
-    ``current``: every condition with current facts — the requested
-    capability and role, a declared native effort (never ``ultracode``),
-    lead env ``{}``, a retention-audited route, the current admission and a
-    usable route, an honest family (a T1 family or ``unknown``), the session
-    window, qualification evidence (``contract-stale`` is eligible with
-    Attention; ``missing``, ``failed`` and ``definition-stale`` are not),
-    the tools semantics the use needs (a workflow default needs the forced
-    named-tool variant), and for first-party pools the exact-client proof.
-    The window condition reads the session's ``policy`` (the default
-    policy at the largest percent when the gate runs outside a lineup).
-
-    ``record`` with ``recorded``: the proven recorded grant is kept (no
-    mutable fact revokes it); stale evidence is Attention only.
+    Evidence never authorizes a route or changes a recorded selector. Both
+    modes produce the same deterministic recommendations; callers preserve
+    recorded classes and launch fences independently of these diagnostics.
     """
 
     if mode not in AGENT_MODES:
         raise ValueError(f"unknown agent eligibility mode {mode!r}")
-    if mode == AGENT_MODE_RECORD and recorded:
-        attention = None
-        if facts is not None and facts.evidence == "contract-stale":
-            attention = AGENT_ATTENTION_CONTRACT.format(key=key)
-        elif facts is not None and facts.evidence != "current":
-            attention = AGENT_ATTENTION_STALE.format(key=key)
-        return AgentEligibility(True, (), "", attention, facts.evidence if facts is not None else "recorded")
     reasons: list[str] = []
-    remedy = f"claude-multi models qualify {key} --agents"
     remedies: list[str] = []
-    capabilities = entry.get("capabilities") or ()
-    if "agents" not in capabilities:
-        reasons.append('the line does not request the "agents" capability')
-        remedies.append(f"claude-multi models edit {key}")
+    warnings: list[Finding] = []
+
+    def warn(code: str, message: str) -> None:
+        warnings.append(Finding(code, slot, f"{key}: {message}", f"{key}: {message}"))
+
+    if "agents" not in (entry.get("capabilities") or ()):
+        warn("capability-recommendation", 'explicit binding overrides the missing "agents" recommendation')
     roles = entry.get("roles")
     if use == AGENT_USE and slot is not None and roles != "all" and slot not in (roles or ()):
-        reasons.append(f"its roles do not request {slot}")
-        remedies.append(f"claude-multi models edit {key}")
-    if effort == ULTRACODE or effort not in declared_efforts(entry) or effort not in agent_efforts:
-        reasons.append(f"effort {effort!r} is not a declared native agent effort")
-        remedies.append("bind a declared effort")
+        warn("role-recommendation", f"explicit binding overrides the recommendation against {slot}")
+    allowed = available_efforts(entry, agent_efforts, workflow=use == WORKFLOW_USE)
+    if effort not in allowed:
+        reasons.append(f"effort {effort!r} is not a representable native agent effort")
+        remedies.append("bind a supported effort with an existing selector mapping")
+    warnings.extend(effort_warnings(entry, effort, slot=slot) if effort in allowed else ())
     lead = entry.get("lead")
     if isinstance(lead, Mapping) and lead.get("env"):
-        reasons.append("its lead env is not empty")
-        remedies.append("bind another model")
-    if facts is None:
-        reasons.append("no operator facts (qualification unknown)")
-        remedies.append(remedy)
-        return AgentEligibility(False, tuple(reasons), remedies[0], None, "missing")
-    if not facts.d60:
-        reasons.append(f"\"agents\" needs a retention-audited route; {facts.route_kind} is lead-only until the compat audit")
-        remedies.append("bind another model")
-    if facts.route in ("unapproved", "changed"):
+        warn("lead-env-ignored", "its lead-only environment is not applied to an agent")
+    if (facts is not None and facts.route not in ("approved", "keyless", "catalog")
+            and not (mode == AGENT_MODE_RECORD and recorded)):
         reasons.append(f"the route of provider {facts.provider} is {facts.route}")
         remedies.append(f"claude-multi providers approve {facts.provider}")
-    elif not facts.admitted:
-        reasons.append("not admitted with its current definition")
-        remedies.append(f"claude-multi models admit {key}")
-    if facts.family != UNKNOWN_FAMILY and facts.family not in facts.t1_families:
-        reasons.append(f"family {facts.family} is not a catalog-declared family (declare one, or unknown)")
-        remedies.append(f"claude-multi models edit {key}")
+    family = family if family is not None else str(entry.get("family", facts.family if facts else UNKNOWN_FAMILY))
+    known = known_families if known_families is not None else (facts.t1_families if facts else ())
+    if not recognized_family(family, known):
+        warn("family-unknown", f"family {family!r}: review independence unknown")
     context = entry.get("context") or {}
     selector = binding_agent_selector(entry, effort)
-    window = agent_window_problem(selector, int(context.get("provider_tokens", 0)), policy=policy,
-                                  client_tokens=context.get("client_tokens"))
-    if window is not None:
-        reasons.append(window)
-        remedies.append("bind another model")
-    attention: str | None = None
-    gaps = ", ".join(facts.evidence_gaps) if facts.evidence_gaps else "agent"
-    if facts.evidence == "missing":
-        reasons.append(f"no current {gaps} evidence")
-        remedies.append(remedy)
-    elif facts.evidence == "failed":
-        reasons.append(f"failed {gaps} qualification")
-        remedies.append(remedy)
-    elif facts.evidence == "definition-stale":
-        reasons.append("its qualification is for an earlier definition")
-        remedies.append(remedy)
-    elif facts.evidence == "contract-stale":
-        attention = AGENT_ATTENTION_CONTRACT.format(key=key)
-    if use == WORKFLOW_USE and facts.evidence in ("current", "contract-stale") and "forced" not in facts.tools_variants:
-        reasons.append("a workflow default needs the forced named-tool variant; only the automatic-tool variant passed")
-        remedies.append(f"claude-multi models qualify {key} --tools --tool-choice forced")
-    if facts.pool:
-        if facts.exact_client == "unavailable":
-            reasons.append("exact-client proof unavailable on this platform")
-            remedies.append("bind another model")
-        elif facts.exact_client == "failed":
-            reasons.append("the exact-client check failed")
-            remedies.append(remedy)
-        elif facts.exact_client == "missing":
-            reasons.append("no exact-client proof")
-            remedies.append(remedy)
-        elif facts.exact_client == "contract-stale" and attention is None:
-            attention = AGENT_ATTENTION_CONTRACT.format(key=key)
-    if reasons:
-        return AgentEligibility(False, tuple(reasons), remedies[0], None, facts.evidence)
-    return AgentEligibility(True, (), "", attention, facts.evidence)
+    if not selector:
+        reasons.append("no selector for the requested effort")
+        remedies.append("bind an effort with an existing selector mapping")
+    else:
+        window = agent_window_problem(selector, int(context.get("provider_tokens", 0)), policy=policy,
+                                      client_tokens=context.get("client_tokens"))
+        if window is not None:
+            warn("context-risk", window)
+    warnings.extend(qualification_warnings(key, facts, slot=slot, use=use))
+    evidence = facts.evidence if facts is not None else "missing"
+    attention = warnings[0].message if warnings else None
+    return AgentEligibility(not reasons, tuple(reasons), remedies[0] if remedies else "", attention,
+                            evidence, tuple(warnings))
 
 
 def binding_agent_selector(entry: Mapping[str, Any], effort: str) -> str:
@@ -869,9 +934,10 @@ class LineupCatalog:
     # and the conservative T2 secret-name scrub set, from the merged view.
     operator: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     extra_secret_names: frozenset[str] = frozenset()
-    # The operator agent gate (None: no facts; an operator agent
-    # slot then fails closed).
+    # Operator diagnostics and route facts (None: qualification unknown,
+    # not a denial; callers carry current route availability in Effective).
     agent_gate: AgentGate | None = None
+    known_families: frozenset[str] = frozenset()
 
     def with_gate(self, gate: AgentGate | None) -> "LineupCatalog":
         import dataclasses
@@ -912,6 +978,14 @@ class LineupCatalog:
         models = docs["models-v2"] if "models-v2" in docs else docs["models"]
         roles = docs["roles-v2"] if "roles-v2" in docs else docs["roles"]
         contract = docs["native-contract"]
+        # Merged operator docs carry this set from the unmerged trusted input.
+        # Without metadata this is a raw catalog (or legacy-custom merge).
+        known = docs.get(OPERATOR_KNOWN_FAMILIES_KEY)
+        if known is None:
+            known = [provider.get("independence_family", "")
+                     for provider in docs["providers"]["providers"].values()]
+            known += [entry.get("family", "") for entry in models["models"].values()
+                      if not catalog.is_legacy_custom_entry(entry)]
         return cls(
             lines=models["models"],
             retired=docs.get("retired", {"retired": {}})["retired"],
@@ -923,21 +997,17 @@ class LineupCatalog:
             operator=dict(docs.get(OPERATOR_LINES_KEY) or {}),
             extra_secret_names=frozenset(docs.get(OPERATOR_SECRET_NAMES_KEY) or ()),
             agent_gate=agent_gate,
+            known_families=frozenset(
+                family.strip().casefold() for family in known
+                if isinstance(family, str) and family.strip().casefold() not in ("", UNKNOWN_FAMILY, "custom")
+            ),
         )
 
     @classmethod
     def from_catalog(cls, cat: "catalog.Catalog | LineupCatalog") -> "LineupCatalog":
         if isinstance(cat, LineupCatalog):
             return cat
-        return cls(
-            lines=cat.lines,
-            retired=cat.retired,
-            providers=cat.providers,
-            roles=cat.roles_v2,
-            agent_efforts=cat.agent_efforts,
-            lead_efforts=cat.lead_efforts,
-            catalog_version=cat.docs["version"]["catalog_version"],
-        )
+        return cls.from_docs(cat.docs)
 
     def resolve_key(self, key: str) -> catalog.KeyResolution:
         if key not in self.lines and key not in self.retired:
@@ -1026,6 +1096,7 @@ class RouteCell:
     same_family: bool
     only_other_family: bool  # the preferred reviewer is bound but excluded by family
     reason: str | None  # "its check" | "no reviewer bound" | None
+    independence_unknown: bool = False
 
 
 @dataclass(frozen=True)
@@ -1041,6 +1112,8 @@ class Routing:
     rows: tuple[RouteRow, ...]  # bound writer grades in AUTHOR_ORDER, then the lead
     same_family_authors: tuple[str, ...]
     single_family: bool
+    independence_unknown: bool = False
+    independence_unknown_authors: tuple[str, ...] = ()
 
     @property
     def authors(self) -> int:
@@ -1231,7 +1304,7 @@ class _Slot:
     unbound: bool = False  # an agent unbound by a retired key with no successor
     entry: Mapping[str, Any] | None = None
     provider: str | None = None  # the line's provider once the entry is usable
-    attention: str | None = None  # operator agent gate Attention (contract-stale)
+    warnings: tuple[Finding, ...] = ()
 
 
 def _entry_problem(entry: Any, provider: Any, mode_hint: str | None) -> str | None:
@@ -1309,12 +1382,11 @@ def evaluate(
     """Validate ``document`` and resolve it; never raises for content problems.
 
     ``bindings`` is the inner ``"bindings"`` map of ``bindings.json`` (None:
-    no named bindings exist). ``effective`` None admits no ``status: new``
-    line and enables every provider (the pure default ``validate_catalog``
-    uses); otherwise New lines need admission (E8) and a disabled provider
-    refuses (E9). Errors are collected in §6.5 order, never short-circuited
-    except after :func:`parse`. With ``ad_hoc`` the lineup name is None and
-    a custom model may lead (E7 applies to saved profiles only).
+    no named bindings exist). ``effective`` None enables every provider
+    and has no admission badges; missing badges warn rather than deny use.
+    Disabled providers and unavailable routes still refuse. Errors are
+    collected in slot order, never short-circuited except after
+    :func:`parse`. With ``ad_hoc`` the lineup name is None.
 
     The lead resolves first; its lead class, ``lead_providers`` and the
     effective window ceiling give the session's window/percent policy
@@ -1346,28 +1418,11 @@ def evaluate(
     unbound_by_retirement = {s.slot: s for s in agent_slots if s.unbound}
     effective_ids = [rid for rid in bound_ids if rid not in unbound_by_retirement]
 
-    # Structure, on the effective agent set (fail closed with a hint).
-    def hint(required: str) -> str:
-        gone = unbound_by_retirement.get(required)
-        if gone is None:
-            return ""
-        return f" ({required} was unbound: {gone.requested!r} was removed)"
-
+    # Role identities and prompt/isolation data are structural, companions advisory.
     roles = lcat.roles
     for rid in effective_ids:
-        role = roles.get(rid)
-        if not isinstance(role, Mapping):
+        if not isinstance(roles.get(rid), Mapping):
             errors.append(f"agents.{rid}: role {rid!r} is not in the catalog roles")
-            continue
-        requires = role.get("requires")
-        for required in requires if isinstance(requires, (list, tuple)) else ():
-            if required not in effective_ids:
-                errors.append(f"agents.{rid}: requires {required}{hint(required)}")
-    native_agents = doc["native_agents"]
-    if native_agents["explore"] == "replace" and "cm-explorer" not in effective_ids:
-        errors.append(
-            f"native_agents.explore: 'replace' requires cm-explorer{hint('cm-explorer')}"
-        )
 
     # Profile fields.
     providers = lcat.providers
@@ -1529,72 +1584,54 @@ def _resolve_slot(
     assert isinstance(entry, Mapping) and isinstance(provider, Mapping)
     slot.entry = entry
     slot.provider = provider_id
-    # Origin mapping: only legacy-custom is direct-only; operator origins
-    # bind as Direct, profile and named-binding leads like catalog lines.
-    if lcat.origin(key) == "legacy-custom" and (not ad_hoc or not is_lead):
-        err("model", f"custom model {key!r} cannot be bound in a profile (use ad-hoc direct)")
-    # An operator line in an agent slot goes through the agent gate.
-    # A slot the record proves (record mode, unchanged key and effort) keeps
-    # the snapshot admission; any other operator agent slot takes its
-    # admission from the gate's current facts.
-    operator_agent = not is_lead and lcat.origin(key) in OPERATOR_ORIGINS
+    operator_line = lcat.origin(key) in OPERATOR_ORIGINS
     gate = lcat.agent_gate
-    recorded = bool(
-        operator_agent and gate is not None and gate.mode == AGENT_MODE_RECORD
-        and gate.recorded.get(slot.slot) == (key, effort)
-    )
-    gate_admits = operator_agent and gate is not None and not recorded
-    if (
-        entry.get("status", "active") == "new"
-        and (effective is None or key not in effective.admitted_lines)
-        and not gate_admits
-    ):
-        err("model", f"model {key!r} is New · Off (status new) until admitted")
+    facts = gate.facts.get(key) if gate is not None and operator_line else None
+    recorded = bool(operator_line and not is_lead and gate is not None and gate.mode == AGENT_MODE_RECORD
+                    and gate.recorded.get(slot.slot) == (key, effort))
+    family = lcat.line_family(key, entry)
     if effective is not None and not settings.provider_enabled(effective, provider_id):
         err("model", f"provider {provider_id!r} is disabled in Settings")
+    unavailable = getattr(effective, "unavailable_lines", {}).get(key)
+    if unavailable:
+        err("model", unavailable)
+    if facts is not None and facts.route not in ("approved", "keyless", "catalog") and not recorded:
+        err("model", f"the route of provider {provider_id} is {facts.route} — "
+                     f"claude-multi providers approve {provider_id}")
+    if is_lead and (not isinstance(entry.get("lead"), Mapping)
+                    or not isinstance(entry["context"].get("ordinary_profile"), str)):
+        err("model", f"{key!r} lacks the lead/context fields required for compilation")
+        return
 
-    # 2.5 capability (E10/E11 end this slot's checks)
-    capabilities = entry["capabilities"]
-    if is_lead:
-        if "lead" not in capabilities or not isinstance(entry.get("lead"), Mapping):
-            err("model", f"{key!r} lacks the lead capability")
-            return
-    else:
-        if "agents" not in capabilities:
-            err("model", f"{key!r} lacks the agents capability")
-            return
-        roles = entry["roles"]
-        if roles != "all" and slot.slot not in roles:
-            err("model", f"{key!r} does not admit {slot.slot}")
-
-    # 2.6 effort
-    declared = declared_efforts(entry)
+    native = lcat.lead_efforts if is_lead else lcat.agent_efforts
+    allowed = available_efforts(entry, native, lead=is_lead)
     if not is_lead and effort == ULTRACODE:
         err("effort", "'ultracode' is lead-only")
-    else:
-        allowed = declared + ((ULTRACODE,) if is_lead else ())
-        if effort not in allowed:
-            err(
-                "effort",
-                f"{effort!r} is not declared by {key!r} (declared: {', '.join(allowed)})",
-            )
-
+    elif effort not in allowed:
+        err("effort", f"{effort!r} is not supported by {key!r} (available: {', '.join(allowed)})")
     if len(errors) != start:
         return
 
-    # The operator agent gate: the only T2 agent authority.
-    if operator_agent:
+    if operator_line and not is_lead:
         verdict = agent_eligibility(
-            entry, key=key, slot=slot.slot, effort=effort,
-            facts=gate.facts.get(key) if gate is not None else None,
+            entry, key=key, slot=slot.slot, effort=effort, facts=facts,
             agent_efforts=lcat.agent_efforts,
             mode=gate.mode if gate is not None else AGENT_MODE_CURRENT,
-            recorded=recorded, policy=policy,
+            recorded=recorded, policy=policy, family=family, known_families=lcat.known_families,
         )
         if not verdict.eligible:
             errors.append(verdict.refusal(key=key, slot=slot.slot, profile_name=profile_name))
             return
-        slot.attention = verdict.attention
+        # Context warnings are derived below from the actual bound selector,
+        # including when record authority keeps its launch-time class.
+        slot.warnings = tuple(w for w in verdict.warnings if w.code != "context-risk")
+    else:
+        admitted = operator_line or entry.get("status", "active") != "new" or (
+            effective is not None and key in effective.admitted_lines)
+        slot.warnings = binding_warnings(entry, key=key, slot=slot.slot, effort=effort,
+                                         family=family, known_families=lcat.known_families, admitted=admitted)
+        if operator_line:
+            slot.warnings += qualification_warnings(key, facts, slot=slot.slot)
 
     # 2.8 selector; an agent's context class follows the session window.
     selector, contract = binding_selector(entry, provider, effort, lead=is_lead)
@@ -1603,8 +1640,7 @@ def _resolve_slot(
     if not is_lead:
         role = role_window(selector, client_tokens=client_tokens, provider_tokens=context["provider_tokens"],
                            policy=policy or default_policy(effective), decide=True)
-        if role.narrowed:
-            selector, client_tokens = role.selector, role.client_class
+        selector, client_tokens = role.selector, role.client_class
     slot.binding = ResolvedBinding(
         slot=slot.slot,
         requested=model,
@@ -1671,7 +1707,7 @@ def _build(
     reviewer_families = {
         rid: agents[rid].binding.family for rid in REVIEWER_IDS if rid in agents
     }
-    routing = derive_routing(author_families, reviewer_families)
+    routing = derive_routing(author_families, reviewer_families, lcat.known_families)
 
     counts: dict[str, int] = {}
     for agent in agents.values():
@@ -1680,12 +1716,11 @@ def _build(
 
     primary = doc.get("primary_provider")
     lead_providers = doc.get("lead_providers")
-    warnings = _warnings(lead, agents, routing, lcat, primary)
-    attention = tuple(
-        Finding("operator-agent-attention", slot.slot, slot.attention, f"{label(slot.slot)}: re-qualify")
-        for slot in agent_slots if slot.attention and slot.slot in agents
-    )
-    warnings = warnings + attention
+    warnings = _warnings(lead, agents, routing, lcat, primary, policy)
+    warnings += tuple(w for slot in (lead_slot, *agent_slots) if slot.binding for w in slot.warnings)
+    if doc["native_agents"]["explore"] == "replace" and "cm-explorer" not in agents:
+        message = "Explore remains disabled: its configured replacement cm-explorer is unbound"
+        warnings += (Finding("explore-replacement-unbound", None, message, message),)
 
     notices: list[Finding] = []
     for slot in [lead_slot, *agent_slots]:
@@ -1746,6 +1781,7 @@ def _warnings(
     routing: Routing,
     lcat: LineupCatalog,
     primary: str | None,
+    policy: WindowPolicy | None = None,
 ) -> tuple[Finding, ...]:
     """The lineup warnings (W1..W5) plus the strict-schema route warning (W6)."""
 
@@ -1773,6 +1809,24 @@ def _warnings(
                     f"same-family review: {labels}",
                 )
             )
+
+    if routing.independence_unknown:
+        names = ", ".join(label(author) for author in routing.independence_unknown_authors)
+        message = f"review independence unknown for {names}"
+        found.append(Finding("independence-unknown", None, message, message))
+
+    for rid, agent in agents.items():
+        for required in agent.role.requires:
+            if required not in agents:
+                message = f"{label(rid)}: recommended companion {required} is unbound"
+                found.append(Finding("companion-grade", rid, message, message))
+        binding = agent.binding
+        active_policy = policy or default_policy(percent=settings.COMPACTION_PERCENT_DEFAULT)
+        role = role_window(binding.selector, client_tokens=binding.client_context_tokens,
+                           provider_tokens=binding.provider_context_tokens, policy=active_policy, decide=False)
+        if role.trigger > binding.provider_context_tokens:
+            message = f"{label(rid)}: {_window_risk_text(role, binding.provider_context_tokens, active_policy)}"
+            found.append(Finding("context-risk", rid, message, f"{label(rid)}: context overflow risk"))
 
     # W2 lead + every -strong slot on one provider
     strong = [agents[rid] for rid in AGENT_ROLE_IDS if rid.endswith("-strong") and rid in agents]
@@ -1887,26 +1941,38 @@ def resolve(document: Any, cat: "LineupCatalog | catalog.Catalog", **kw: Any) ->
 # ----------------------------------------------------------------- routing
 
 
-def independent_families(a: str, b: str) -> bool:
-    """Cross-family review independence: two known, different families
-    (``unknown`` never counts)."""
+def recognized_family(value: str, known_families: Iterable[str]) -> str | None:
+    """Normalized trusted family identity, never certification by an operator."""
 
-    return a != UNKNOWN_FAMILY and b != UNKNOWN_FAMILY and a != b
+    normalized = value.strip().casefold()
+    known = {family.strip().casefold() for family in known_families}
+    return normalized if normalized and normalized != UNKNOWN_FAMILY and normalized in known else None
+
+
+def independent_families(a: str, b: str, known_families: Iterable[str] = ()) -> bool:
+    """Only two recognized, different families establish independence."""
+
+    first, second = recognized_family(a, known_families), recognized_family(b, known_families)
+    return first is not None and second is not None and first != second
 
 
 def derive_routing(
-    author_families: Mapping[str, str], reviewer_families: Mapping[str, str]
+    author_families: Mapping[str, str], reviewer_families: Mapping[str, str],
+    known_families: Iterable[str] = (),
 ) -> Routing:
     """Review routing: a pure function of families.
 
     ``author_families`` holds ``cm-lead`` plus every bound writer grade;
     ``reviewer_families`` every bound reviewer id. Candidates are the
-    reviewers of another family (all bound reviewers when none is, then
-    same-family); the normal column prefers ``cm-reviewer-strong`` for the
+    reviewers of a recognized different family, or all bound reviewers
+    when none is independent. A recognized equal pair is same-family;
+    every unrecognized pair has unknown independence. The normal column
+    prefers ``cm-reviewer-strong`` for the
     strong writer and the lead and ``cm-reviewer`` otherwise, the
     high-stakes column always prefers ``cm-reviewer-strong``.
     """
 
+    known_families = frozenset(known_families)
     reviewers = {rid: reviewer_families[rid] for rid in REVIEWER_IDS if rid in reviewer_families}
     rows: list[RouteRow] = []
     for author in AUTHOR_ORDER:
@@ -1918,11 +1984,10 @@ def derive_routing(
             rows.append(RouteRow(author, family, none, none))
             continue
         # ``unknown`` is never evidence of independence.
-        candidates = [rid for rid in reviewers if independent_families(reviewers[rid], family)]
-        same = False
+        candidates = [rid for rid in reviewers if independent_families(reviewers[rid], family, known_families)]
+        cross_family = bool(candidates)
         if not candidates:
             candidates = list(reviewers)
-            same = True
 
         def pick(preferred: str) -> RouteCell:
             if preferred in candidates:
@@ -1930,12 +1995,16 @@ def derive_routing(
             else:
                 chosen = next((rid for rid in candidates if rid != preferred), None)
             only_other = (
-                not same
+                cross_family
                 and preferred in reviewers
                 and preferred not in candidates
                 and chosen is not None
             )
-            return RouteCell(chosen, same and chosen is not None, only_other, None)
+            first = recognized_family(family, known_families)
+            second = recognized_family(reviewers[chosen], known_families) if chosen is not None else None
+            unknown = chosen is not None and (first is None or second is None)
+            same = chosen is not None and not unknown and first == second
+            return RouteCell(chosen, same, only_other, None, unknown)
 
         if author == "cm-implementer-light":
             normal = RouteCell(None, False, False, "its check")
@@ -1947,11 +2016,16 @@ def derive_routing(
     same_family_authors = tuple(
         row.author for row in rows if row.normal.same_family or row.high.same_family
     )
-    families = set(author_families.values()) | set(reviewers.values())
+    unknown_authors = tuple(row.author for row in rows
+                            if row.normal.independence_unknown or row.high.independence_unknown)
+    families = {recognized_family(family, known_families)
+                for family in (*author_families.values(), *reviewers.values())}
     return Routing(
         rows=tuple(rows),
         same_family_authors=same_family_authors,
-        single_family=bool(reviewers) and len(families) == 1,
+        single_family=bool(reviewers) and None not in families and len(families) == 1,
+        independence_unknown=bool(unknown_authors),
+        independence_unknown_authors=unknown_authors,
     )
 
 
@@ -2079,31 +2153,30 @@ def _binding_errors(
     if not isinstance(entry, Mapping):
         errors.append(f"bindings.{name}.model: line {model!r} is malformed")
         return errors
-    if lcat.origin(model) == "legacy-custom":
-        # A custom synthetic line (only in custom-merged docs): never bound (E7).
-        errors.append(
-            f"bindings.{name}.model: custom model {model!r} cannot be bound "
-            "(use ad-hoc direct)"
-        )
+    provider_id = entry.get("provider")
+    provider = lcat.providers.get(provider_id)
+    if provider is None:
+        errors.append(f"bindings.{name}.model: unknown provider {provider_id!r}")
         return errors
-    if entry.get("status", "active") == "new" and (
-        effective is None or model not in effective.admitted_lines
-    ):
-        errors.append(
-            f"bindings.{name}.model: model {model!r} is New · Off (status new) until admitted"
-        )
-    capabilities = entry.get("capabilities")
-    lead_capable = (
-        isinstance(capabilities, (list, tuple))
-        and "lead" in capabilities
-        and isinstance(entry.get("lead"), Mapping)
-    )
-    allowed = declared_efforts(entry) + ((ULTRACODE,) if lead_capable else ())
+    problem = _entry_problem(entry, provider, _line_mode(entry, provider))
+    if problem:
+        errors.append(f"bindings.{name}.model: line {model!r} is malformed ({problem})")
+        return errors
+    # Saving metadata does not require enabling a provider. Operator routes
+    # still need their existing safety approval; use checks every route again.
+    operator_line = lcat.origin(model) in OPERATOR_ORIGINS
+    unavailable = getattr(effective, "unavailable_lines", {}).get(model) if operator_line else None
+    if unavailable:
+        errors.append(f"bindings.{name}.model: {unavailable}")
+    facts = lcat.agent_gate.facts.get(model) if lcat.agent_gate and operator_line else None
+    if facts is not None and facts.route not in ("approved", "keyless", "catalog"):
+        errors.append(f"bindings.{name}.model: the route of provider {provider_id} is {facts.route}")
+    lead_capable = isinstance(entry.get("lead"), Mapping)
+    native = tuple(dict.fromkeys((*lcat.agent_efforts, *lcat.lead_efforts)))
+    allowed = available_efforts(entry, native, lead=lead_capable)
     if effort not in allowed:
-        errors.append(
-            f"bindings.{name}.effort: {effort!r} is not declared by {model!r} "
-            f"(declared: {', '.join(allowed)})"
-        )
+        errors.append(f"bindings.{name}.effort: {effort!r} is not supported by {model!r} "
+                      f"(available: {', '.join(allowed)})")
     return errors
 
 
@@ -2257,7 +2330,7 @@ class BindingStore:
         tolerated, as on load); with ``profiles`` every profile that uses a
         changed name is re-evaluated with the new bindings and an edit that
         introduces an error refuses (B9). ``effective`` as in
-        :func:`evaluate` (None: no New line admitted). An unreadable
+        :func:`evaluate` (None: providers enabled, badges absent). An unreadable
         existing file refuses (``cannot load named bindings: …``) like every
         other writer; it is never silently replaced.
         """

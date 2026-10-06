@@ -8,6 +8,7 @@ catalog is the frozen fixture or a private copy of it with test-local
 from __future__ import annotations
 
 import copy
+import dataclasses
 import inspect
 import json
 import os
@@ -175,7 +176,7 @@ class SettingsStoreTests(SettingsCase):
             self.store.load()
 
     def test_admit_line_only_for_new_lines_and_sorted(self) -> None:
-        with self.assertRaisesRegex(settings.SettingsError, "not New · Off"):
+        with self.assertRaisesRegex(settings.SettingsError, "not New"):
             self.store.admit_line("sol", catalog=self.bundle)
         with self.assertRaisesRegex(settings.SettingsError, "unknown catalog line"):
             self.store.admit_line("nope", catalog=self.bundle)
@@ -226,6 +227,17 @@ class ResolverTests(SettingsCase):
             "profile_overrides", inspect.signature(settings.effective).parameters
         )
 
+    def test_route_unavailability_is_memory_only(self) -> None:
+        eff = self._eff({"version": 1})
+        self.assertEqual(eff.unavailable_lines, {})
+        blocked = dataclasses.replace(eff, unavailable_lines={"grok46": "route approval required"})
+        self.assertEqual(settings.snapshot(blocked), settings.snapshot(eff))
+        self.assertEqual(settings.effective_from_snapshot(settings.snapshot(blocked)).unavailable_lines, {})
+        self.assertEqual(settings.drift(settings.snapshot(eff), blocked), [])
+        self.assertFalse(settings.line_offered("grok46", self.bundle.lines["grok46"], blocked))
+        with self.assertRaises(settings.SettingsError):
+            self.store.save({"version": 1, "unavailable_lines": dict(blocked.unavailable_lines)}, catalog=self.bundle)
+
     def test_line_offered_truth_table(self) -> None:
         active = {"provider": "kimi", "status": "active"}
         new = {"provider": "kimi", "status": "new"}
@@ -239,9 +251,11 @@ class ResolverTests(SettingsCase):
                 eff = settings.effective(document, provider_ids=["kimi"], line_keys=["x"])
                 with self.subTest(enabled=enabled, admitted=admitted):
                     self.assertEqual(settings.line_offered("x", active, eff), enabled)
-                    self.assertEqual(settings.line_offered("x", new, eff), enabled and admitted)
-                    # admission of ANOTHER key never offers this New line
-                    self.assertFalse(settings.line_offered("y", new, eff))
+                    self.assertEqual(settings.line_offered("x", new, eff), enabled)
+                    self.assertEqual(settings.line_offered("y", new, eff), enabled)
+                    unavailable = dataclasses.replace(eff, unavailable_lines={"x": "route approval required"})
+                    self.assertFalse(settings.line_offered("x", active, unavailable))
+                    self.assertFalse(settings.line_offered("x", new, unavailable))
 
     def test_snapshot_is_canonical(self) -> None:
         eff = self._eff(
@@ -605,17 +619,18 @@ class WorkflowBindingSaveTests(SettingsCase):
             self._save({"model": key, "effort": other}, catalog_obj=catalog_obj)
         self.assertEqual(self.store.path.read_bytes(), before)
 
+    def test_lead_only_recommendation_allows_a_workflow_binding(self) -> None:
+        key = self._line(lambda e: "agents" not in e["capabilities"])
+        binding = {"model": key, "effort": self.bundle.lines[key]["default_effort"]}
+        written = self._save(binding)
+        self.assertEqual(written["workflow_default_binding"], binding)
+
     def test_refusals_name_the_field_and_write_nothing(self) -> None:
-        lead_only = self._line(lambda e: "agents" not in e["capabilities"])
         null_retired = next(
             key for key, entry in sorted(self.bundle.retired.items()) if entry["successor"] is None
         )
         cases = {
             "unknown key": ({"model": "no-such-line", "effort": "high"}, r"\.model: unknown model key"),
-            "lead-only line": (
-                {"model": lead_only, "effort": self.bundle.lines[lead_only]["default_effort"]},
-                r"\.model: .*not agents-capable",
-            ),
             "retired, null successor": (
                 {"model": null_retired, "effort": "high"}, r"\.model: .*needs a model choice"
             ),

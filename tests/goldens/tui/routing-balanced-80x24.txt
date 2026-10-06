@@ -6,8 +6,8 @@
   implementer         reviewer-strong Opus 5.5 ✓°  reviewer-strong Opus 5.5 ✓
   implementer-strong  reviewer-strong Opus 5.5 ✓   reviewer-strong Opus 5.5 ✓
   lead (Opus 5.5)     reviewer GPT-5.6 Sol ✓°      reviewer GPT-5.6 Sol ✓°
-  ✓ cross-family   ≈ same-family (allowed, labelled)   ° preferred reviewer
-  shares the author's family
+  ✓ recognized cross-family   ≈ recognized same-family   ? independence
+  unknown   ° preferred reviewer shares the author's family
 
 
 

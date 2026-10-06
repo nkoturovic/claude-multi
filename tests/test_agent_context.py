@@ -212,12 +212,12 @@ class RoleWindowRuleTests(unittest.TestCase):
         kept = self.role("x-high", bound=1_000_000, client=200_000, decide=False)
         self.assertEqual((kept.selector, kept.client_class, kept.window), ("x-high", 200_000, 200_000))
 
-    def test_lines_below_the_1m_class_keep_their_own_class(self) -> None:
-        role = self.role("y-high", bound=500_000, client=500_000)
-        self.assertEqual((role.selector, role.client_class, role.window, role.narrowed),
-                         ("y-high", 500_000, 500_000, False))
-        small = self.role("z", bound=258_400, client=258_400, policy=profile.WindowPolicy(window=320_032))
-        self.assertEqual(small.window, 258_400)
+    def test_suffixless_agents_use_the_actual_200k_class_not_declared_capacity(self) -> None:
+        for declared in (128_000, 258_400, 500_000, 1_000_000):
+            with self.subTest(declared=declared):
+                role = self.role("y-high", bound=declared, client=declared)
+                self.assertEqual((role.selector, role.client_class, role.window, role.narrowed),
+                                 ("y-high", 200_000, 200_000, False))
 
     def test_an_exported_scalar_is_the_class_of_a_selector_without_1m(self) -> None:
         policy = profile.WindowPolicy(window=320_032, percent=90, scalar=320_032)
@@ -255,7 +255,9 @@ class RoleWindowRuleTests(unittest.TestCase):
         self.assertIsNone(profile.agent_window_problem("x[1m]", BELOW))
         self.assertIsNone(profile.agent_window_problem("x[1m]", 167_000))
         problem = profile.agent_window_problem("x[1m]", 150_000)
-        self.assertEqual(problem, "its agent class 200K compacts at 167000 tokens (95%), above its provider bound 150000")
+        self.assertEqual(problem, "its agent class 200K (200000 tokens), shared process window 800000, "
+                                  "effective window 200000, compacts at 167000 tokens (95%), "
+                                  "above its provider bound 150000")
         at_90 = profile.WindowPolicy(window=800_000, percent=90)
         self.assertIsNone(profile.agent_window_problem("x[1m]", 165_000, policy=at_90))
         self.assertIsNotNone(profile.agent_window_problem("x[1m]", 165_000))
@@ -408,12 +410,51 @@ class MixedBoundsTests(unittest.TestCase):
         self.assertEqual(rows["cm-lead"].window, bound)
         self.assertTrue(lineup.agents["cm-analyst"].binding.selector.endswith("[1m]"))
         self.assertEqual(rows["cm-analyst"].window, bound)
-        # A line below the 1M class behaves as before: its own class.
+        # A suffixless agent without a process scalar uses the client's 200K class.
         self.assertEqual(lineup.agents[slot].binding.selector,
                          small_entry["efforts"][small_entry["default_effort"]]["selector"])
-        self.assertEqual(rows[slot].window, min(small_entry["context"]["client_tokens"], bound))
+        self.assertEqual(rows[slot].window, min(profile.CLASS_STANDARD, bound))
         result = launch(self.bundle, self.docs, eff, lineup)
         self.assertEqual(result.env_set[WINDOW_ENV], str(bound))
+
+    def test_risky_agent_and_workflow_use_actual_shared_window_without_refusal(self) -> None:
+        docs = bounded(self.docs, self.codex, 128_000)
+        entry = docs["models"]["models"][self.codex]
+        document = agents_on(narrowed_balanced(self.bundle), self.codex, docs, "cm-analyst")
+        lcat, eff, lineup = self.resolve(
+            docs, document, workflow_default_binding={"model": self.codex, "effort": entry["default_effort"]})
+        role = windows(lineup)["cm-analyst"]
+        self.assertEqual((role.client_class, role.window, role.trigger), (200_000, 200_000, 162_000))
+        risk = next(w for w in lineup.warnings if w.code == "context-risk" and w.slot == "cm-analyst")
+        for actual in ("200000", "800000", "162000", "128000"):
+            self.assertIn(actual, risk.message)
+        result = launch(self.bundle, docs, eff, lineup)
+        self.assertIn(role.selector, result.scope_plan.settings["availableModels"])
+        workflow = scope.workflow_default_window(lcat, eff, policy=lineup.policy)
+        self.assertEqual(workflow.window, 200_000)
+        warnings = scope.workflow_default_warnings(lcat, eff, policy=lineup.policy)
+        self.assertTrue(any(w.code == "context-risk" and "128000" in w.message for w in warnings))
+        self.assertNotIn(b"context overflow", result.scope_plan.other_files["lineup.md"])
+
+    def test_legacy_suffixless_agent_never_invents_a_1m_class(self) -> None:
+        registry = {"version": 1, "providers": {}, "models": {
+            "legacy-wide": {"provider": "llm-local", "wire_model": "legacy-wide-wire", "context_tokens": 1_000_000}}}
+        docs = custom.merge_docs(self.docs, registry)
+        document = narrowed_balanced(self.bundle)
+        document["agents"]["cm-analyst"] = {"model": "legacy-wide", "effort": "high"}
+        lcat, eff, lineup = self.resolve(docs, document)
+        binding = lineup.agents["cm-analyst"].binding
+        self.assertFalse(binding.selector.endswith("[1m]"))
+        self.assertEqual(binding.provider_context_tokens, 1_000_000)
+        self.assertEqual(binding.client_context_tokens, 200_000)
+        self.assertEqual(windows(lineup)["cm-analyst"].window, 200_000)
+        result = launch(self.bundle, docs, eff, lineup)
+        self.assertIn(binding.selector, result.scope_plan.settings["availableModels"])
+
+    def test_nonpositive_compaction_triggers_remain_hard(self) -> None:
+        for bound in (0, 10_000, 20_000, 30_000):
+            with self.subTest(bound=bound), self.assertRaises(compiler.CompilerError):
+                compiler.reactive_trigger(bound, 90)
 
     def test_a_custom_lead_sets_the_window_for_the_workflow_default(self) -> None:
         registry = {

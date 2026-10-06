@@ -199,13 +199,15 @@ class LanTests(_Case):
         self.runtime.lan_probe = lambda url: probes.append(url) or gateway_facts.LanReachability(
             "unreachable", host, "nxdomain")
         target = cli_types.LaunchTarget("ad-hoc", profile.ad_hoc_direct(key), None, False, f"Direct {key}")
-        with self.assertRaises(cli_types.LaunchPlanError) as caught:
-            self.runtime.prepare(target, action="fresh", passthrough=[])
-        self.assertEqual(caught.exception.problems, (
-            f"lead: {key}: not reachable from this network: {host} does not resolve — connect to the host's "
-            "network, or bind another model",))
-        self.assertEqual(probes, [base])
-        # --print-launch (read-only) reports instead of refusing.
+        prepared = self.runtime.prepare(target, action="fresh", passthrough=[])
+        self.assertIn(f"! lead: not reachable from this network: {host} does not resolve — "
+                      "connect to the host's network, or bind another model", prepared.notices)
+        rows = self.runtime.lineup_readiness(prepared.lineup)
+        self.assertEqual(rows[0].state, readiness.BLOCKED)  # observation is not fabricated ready
+        self.assertFalse(rows[0].first.authority)
+        self.assertTrue(probes)
+        self.assertEqual(set(probes), {base})
+        # --print-launch (read-only) reports the same observation.
         prepared = self.runtime.prepare(target, action="fresh", passthrough=[], read_only=True)
         self.assertIn(f"! lead: not reachable from this network: {host} does not resolve — "
                       "connect to the host's network, or bind another model", prepared.notices)
@@ -248,11 +250,11 @@ class LanTests(_Case):
             url, timeout=0.2, resolve=lambda *_: [v6, v4], connect=drop_v6)
         prepared = self.runtime.prepare(target, action="fresh", passthrough=[])
         self.assertFalse([n for n in prepared.notices if "reachable from this network" in n], prepared.notices)
-        # The control: the same list with only the refused address refuses fast.
+        # The control: only a refused address is a truthful warning, not a launch veto.
         self.runtime.lan_probe = lambda url: gateway_facts.probe_lan(
             url, timeout=0.2, resolve=lambda *_: [v6], connect=connect)
-        with self.assertRaises(cli_types.LaunchPlanError):
-            self.runtime.prepare(target, action="fresh", passthrough=[])
+        prepared = self.runtime.prepare(target, action="fresh", passthrough=[])
+        self.assertTrue(any("reachable from this network" in n for n in prepared.notices))
 
     def test_a_reachable_lan_lead_is_ready_on_the_card_seed_and_doctor_alike(self) -> None:
         """One computation: doctor observes the LAN providers
@@ -341,16 +343,11 @@ class StarterTests(_Case):
         self.assertNotIn("starter", self.runtime.catalog.seed_profiles)
         plan, _warnings = self.runtime.starter_plan("starter")
         self.assertEqual(plan.document["lead"]["model"], key)
-        # Starter never fabricates eligibility: only slots the line's roles
-        # admit are bound; every other template slot stays unbound, named.
-        self.assertEqual(set(plan.document["agents"]) - set(entry["roles"]), set())
+        # Role recommendations do not prune technically usable ready lines.
         template = self.runtime.catalog.seed_profiles[readiness.STARTER_TEMPLATE]["agents"]
-        self.assertEqual(set(plan.unresolved), set(template) - set(plan.document["agents"]))
-        self.assertTrue(plan.unresolved)
-        for slot in plan.unresolved:
-            self.assertIn(f"{profile.label(slot)} unbound (no ready line admits it)", text)
-            self.assertIn(f"{profile.label(slot)}: {template[slot]['model']} · {template[slot]['effort']} -> unbound\n",
-                          text)
+        self.assertEqual(set(plan.document["agents"]), set(template))
+        self.assertEqual(plan.unresolved, ())
+        self.assertTrue(any("recommendation" in warning for warning in _warnings), _warnings)
 
     def test_apply_confirms_saves_once_and_refuses_an_existing_name(self) -> None:
         self.sign_in(*sorted(set(self.pools().values())))
@@ -378,6 +375,20 @@ class StarterTests(_Case):
             code, _out = self.run_cli(["profile", "starter", "--name", catalog.DEFAULT_SEED])
         self.assertEqual(code, 1)
         self.assertIn("already exists", err.getvalue())
+
+    def test_missing_companions_do_not_prune_grades_or_reenable_explore(self) -> None:
+        lcat = self.runtime.lineup_catalog()
+        template = self.runtime.catalog.seed_profiles[readiness.STARTER_TEMPLATE]
+        key = template["lead"]["model"]
+        usable = {catalog.LEAD_ROLE, "cm-analyst-strong", "cm-implementer-light", "cm-reviewer-strong"}
+        plan = readiness.plan_starter(template, lcat, name="partial", ready_keys=frozenset({key}),
+                                      slot_ok=lambda slot, _key, _effort: slot in usable)
+        self.assertEqual(set(plan.document["agents"]), usable - {catalog.LEAD_ROLE})
+        self.assertEqual(plan.document["native_agents"]["explore"], "replace")
+        self.assertTrue(any("Explore remains disabled" in warning for warning in plan.warnings))
+        self.assertTrue(any("recommended companion" in warning for warning in plan.warnings))
+        self.assertIn("Explore remains disabled", readiness.starter_preview(plan, name="partial"))
+        self.assertEqual(profile.evaluate(plan.document, lcat, effective=self.runtime.current_effective()).errors, ())
 
     def test_no_ready_lead_refuses(self) -> None:
         self.served = None

@@ -95,7 +95,8 @@ class OfflineJourneys(JourneyFixture):
         self.assertEqual(draft["context"]["source"], "listing")
         key = self.declare()
         self.assertNotEqual(self.line()["family"], self.runtime.catalog.docs["providers"]["providers"]["openrouter"]["independence_family"])
-        self.assertTrue(self.evaluation(key)[1].errors)
+        self.assertFalse(self.evaluation(key)[1].errors)
+        self.assertTrue(self.evaluation(key)[1].lineup.warnings)
         self.assertEqual(self.invoke(["models", "admit", key])[0], 0)
         code, out = self.invoke(["models", "qualify", key, "--agents", "--tool-choice", "auto"])
         self.assertEqual(code, 0, out)
@@ -117,7 +118,10 @@ class OfflineJourneys(JourneyFixture):
         code, out = self.invoke(["models", "qualify", key, "--agents"])
         self.assertEqual(code, 1, out)
         self.assertIn("exact-client proof unavailable on this platform", out)
-        self.assertTrue(self.evaluation(key)[1].errors)
+        evaluated = self.evaluation(key)[1]
+        self.assertFalse(evaluated.errors)
+        self.assertTrue(any(w.code == "exact-client" and "unavailable" in w.message
+                            for w in evaluated.lineup.warnings), evaluated.lineup.warnings)
         self.runtime.exact_client_runner = lambda request: qualify.ExactClientOutcome("pass", "ok")
         code, out = self.invoke(["models", "qualify", key, "--agents"])
         self.assertEqual(code, 0, out)
@@ -128,8 +132,9 @@ class OfflineJourneys(JourneyFixture):
         output = io.StringIO()
         with mock.patch.object(consent, "stdio_ttys", return_value=True):
             self.assertEqual(onboarding.edit_line(self.runtime, key, document, confirm=self.confirm, output=output), 0)
-        self.assertEqual(onboarding.statuses(self.runtime)[key], "changed — re-admit")
-        self.assertTrue(self.evaluation(key)[1].errors)
+        self.assertEqual(onboarding.statuses(self.runtime)[key], "changed since admission (optional re-admit)")
+        self.assertFalse(self.evaluation(key)[1].errors)
+        self.assertTrue(self.evaluation(key)[1].lineup.warnings)
 
     def test_unknown_aggregator_family_is_not_independent(self):
         key = self.declare(family="unknown")
@@ -171,17 +176,16 @@ class OfflineJourneys(JourneyFixture):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads((self.pdir / "fixture-lan.json").read_text())["provider"]["kind"], "openai-compatible-lan")
 
-    def test_ineligible_named_picker_is_not_a_bypass(self):
+    def test_unqualified_named_and_line_choices_remain_selectable(self):
         key = self.declare()
         self.assertEqual(self.invoke(["models", "admit", key])[0], 0)
         rows = views.line_rows(self.runtime.lineup_catalog(), self.runtime.current_effective(), custom_ids=frozenset())
         picker = views.picker_rows(rows, slot="cm-reviewer", bindings={"fixture": {"model": key, "effort": "high"}},
                                    lcat=self.runtime.lineup_catalog(), eff=self.runtime.current_effective(), current=None)
         line = next(row for row in picker.items if row.key == key)
-        self.assertFalse(line.selectable)
-        self.assertIn("◇", line.text)
+        self.assertTrue(line.selectable)
         self.assertTrue(line.note)
-        self.assertFalse(any(row.kind == "named" and row.selectable and row.key == "fixture" for row in picker.items))
+        self.assertTrue(any(row.kind == "named" and row.selectable and row.key == "fixture" for row in picker.items))
 
 
 class PromptContracts(unittest.TestCase):
@@ -206,18 +210,21 @@ class ActionRefusalOwners(JourneyFixture):
         self.assertEqual(discover.missing_context_text("fixture", "model-9"),
                          'discover fixture --add model-9: the listing states no context — claude-multi models add fixture model-9 --context N --source docs --source-ref "<URL, date>"')
 
-    def test_E12_admit_unserved(self):
-        import claude_multi.cli.commands.models as models
+    def test_admit_unserved_records_only_an_optional_badge(self):
         key = self.declare()
-        line = self.runtime.operator_snapshot().layer.lines[key]
-        self.assertEqual(f"admit {key}: " + models._served_check(key, line, frozenset()),
-                         f"admit {key}: 0/1 aliases served — claude-multi providers apply")
+        self.runtime.served_models_callback = lambda gateway, token: ((), 200)
+        with mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("inference")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("inference")):
+            code, out = self.invoke(["models", "admit", key])
+        self.assertEqual(code, 0, out)
+        self.assertIn(key, self.runtime.current_effective().admitted_lines)
+        self.assertEqual(self.http_calls, [])
 
-    def test_E13_ineligible_profile_slot(self):
+    def test_E13_unrepresentable_profile_slot(self):
         self.assertEqual(profile.AGENT_REFUSAL.format(prefix="profile fixture: ", slot="cm-reviewer",
-                         key="custom-fixture", reason="no current tools evidence",
-                         remedy="claude-multi models qualify custom-fixture --agents"),
-                         "profile fixture: agents.cm-reviewer: custom-fixture is not agent-eligible (no current tools evidence) — claude-multi models qualify custom-fixture --agents")
+                         key="custom-fixture", reason="no selector for effort high",
+                         remedy="choose a declared gateway-effort selector"),
+                         "profile fixture: agents.cm-reviewer: custom-fixture is not agent-eligible (no selector for effort high) — choose a declared gateway-effort selector")
 
     def test_E16_changed_route(self):
         self.assertEqual(operator.route_status_text("fixture", "changed", old="https://old.example", new="https://new.example"),
@@ -368,7 +375,7 @@ class OperatorAgentRollbackTests(JourneyFixture):
             with self.subTest(follow=follow):
                 record = dict(prepared.record, last_event_source="end", follow=follow)
                 self.runtime.session_store.save(record)
-                with mock.patch.object(type(self.runtime), "lineup_catalog", lambda _self: old):
+                with mock.patch.object(type(self.runtime), "lineup_catalog", lambda _self, **kwargs: old):
                     with self.assertRaises(types.LaunchPlanError) as caught:
                         self.runtime.prepare(cli._record_resume_target(record), action="resume", passthrough=[],
                                              session_id=record["managed_id"])
@@ -613,12 +620,12 @@ class KeyedJourneyTests(KeyedJourneyFixture):
         self.assertNotIn(key, self.runtime.current_effective().admitted_lines)
         self.assertFalse(self.keyed_picker(key).selectable)
         self.approve_keyed()
-        self.assertEqual(onboarding.statuses(self.runtime)[key], "off")
+        self.assertEqual(onboarding.statuses(self.runtime)[key], "New · not admitted")
         self.assertEqual(self.http_calls, [])
         code, out, err = self.op(["models", "admit", key], "y\n")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(len(self.http_calls), 1)
-        self.assertFalse(self.keyed_picker(key).selectable)
+        self.assertEqual(self.http_calls, [])
+        self.assertTrue(self.keyed_picker(key).selectable)
         before = self.ledger_file.read_bytes()
         code, out, err = self.op(["models", "qualify", key, "--agents"], "y\n")
         self.assertEqual(code, 0, out + err)
@@ -632,7 +639,7 @@ class KeyedJourneyTests(KeyedJourneyFixture):
         self.assertEqual(self.runtime.perform(prepared), 0)
         self.assertEqual(len(self.launches), 1)
 
-    def test_keyed_cli_changes_and_failed_qualification_remain_dimmed(self):
+    def test_keyed_cli_changes_and_failed_qualification_remain_selectable_with_warnings(self):
         key = self.declare_keyed()
         self.approve_keyed()
         self.assertEqual(self.op(["models", "admit", key], "y\n")[0], 0)
@@ -643,17 +650,20 @@ class KeyedJourneyTests(KeyedJourneyFixture):
         output = io.StringIO()
         with mock.patch.object(consent, "stdio_ttys", return_value=True):
             self.assertEqual(onboarding.edit_line(self.runtime, key, line, confirm=self.confirm, output=output), 0)
-        self.assertEqual(onboarding.statuses(self.runtime)[key], "changed — re-admit")
-        self.assertFalse(self.keyed_picker(key).selectable)
+        self.assertEqual(onboarding.statuses(self.runtime)[key], "changed since admission (optional re-admit)")
+        self.assertTrue(self.keyed_picker(key).selectable)
         self.serve_current()
         self.assertEqual(self.op(["models", "admit", key], "y\n")[0], 0)
-        self.assertFalse(self.keyed_picker(key).selectable)
+        self.assertTrue(self.keyed_picker(key).selectable)
         good = self.runtime.qualify_http
         self.runtime.qualify_http = lambda *args: qualify.HttpResult(400, b'{"error":{"message":"fixture refusal"}}')
         code, out, err = self.op(["models", "qualify", key, "--agents"], "y\n")
         self.assertEqual(code, 1, out + err)
-        self.assertFalse(self.keyed_picker(key).selectable)
-        self.assertTrue(self.evaluation(key)[1].errors)
+        self.assertTrue(self.keyed_picker(key).selectable)
+        evaluated = self.evaluation(key)[1]
+        self.assertFalse(evaluated.errors)
+        self.assertTrue(any(w.code == "qualification" and "failed" in w.message
+                            for w in evaluated.lineup.warnings), evaluated.lineup.warnings)
         self.runtime.qualify_http = good
         code, out, err = self.op(["models", "qualify", key, "--agents"], "y\n")
         self.assertEqual(code, 0, out + err)

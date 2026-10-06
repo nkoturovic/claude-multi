@@ -106,21 +106,15 @@ OPERATOR_MINIMUM_CLAUDE = "2.1.216"  # the custom.json baseline (custom.py)
 ONE_MILLION = 1_000_000
 DEFAULT_CLIENT_TOKENS = 200_000
 SELECTOR_SUFFIX = "[1m]"
-# Agent capabilities and roles are *requested* in the declaration (they
-# stay in the definition digest); the grant is the use-time gate
-# (``profile.agent_eligibility``). Only statically unsafe requests still fail
-# to load: agents on a route the gateway's retention boundary does not cover
-# (the compat audit is closed, E07).
+# Capabilities and roles are recommendations retained in the definition
+# digest. Route safety applies to leads and agents alike.
 RETENTION_AUDITED_ADAPTERS = frozenset({
     "cliproxy-claude-compatible-v1",  # the Claude executor boundary (AGENTS §2.11)
     "cliproxy-oauth-claude-v1",
     "cliproxy-oauth-codex-v1",
 })
-AGENT_ROUTE_REFUSAL = ('"agents" needs a retention-audited route; {kind} is lead-only until the compat audit')
-# An aggregator serves many families, so its
-# lines declare their own; the value is a T1-declared family or ``unknown``
-# (never an independent family for cross-family review). The list is the
-# catalog's (the same object).
+# An aggregator's omitted line family is unknown, not the aggregator's own
+# family. Explicit labels are accepted independently of trusted recognition.
 AGGREGATOR_PROVIDERS = catalog.AGGREGATOR_PROVIDERS
 UNKNOWN_FAMILY = "unknown"
 
@@ -1035,12 +1029,12 @@ def derive_core_entry(
     source = line["context"]["source"]
     if migrated:
         qualification = (
-            "operator-declared (custom.json, migrated); unverified; lead-only; "
+            "operator-declared (custom.json, migrated); unverified; "
             f"validated floor {floor}; not benchmark-verified"
         )
     else:
         qualification = (
-            f"operator-declared ({source}); lead-only; validated floor {floor} "
+            f"operator-declared ({source}); validated floor {floor} "
             "(not near-limit measured); not benchmark-verified"
         )
     entry.update({
@@ -1198,15 +1192,17 @@ def t1_families(docs: Mapping[str, Any]) -> frozenset[str]:
         family = entry.get("family") if isinstance(entry, Mapping) else None
         if isinstance(family, str) and not catalog.is_legacy_custom_entry(entry):
             found.add(family)
-    return frozenset(found) - {UNKNOWN_FAMILY}
+    return frozenset(family.strip().casefold() for family in found) - {"", UNKNOWN_FAMILY, "custom"}
 
 
 def agent_route_kind(provider: Mapping[str, Any], kind: str | None = None, *,
                      gateway: Mapping[str, Any] | None = None) -> str | None:
-    """None when the provider's adapter is retention-audited for agents, else the
-    route kind the E07 refusal names."""
+    """Compatibility fact for supported generation routes, not an agent gate."""
 
     if provider.get("adapter") in RETENTION_AUDITED_ADAPTERS:
+        return None
+    if (provider.get("adapter") == KINDS[LAN_KIND][0]
+            and provider.get("transport", {}).get("auth", {}).get("kind") == "none"):
         return None
     if catalog.is_keyed_compat(provider) and catalog.keyed_compat_problem(provider, gateway) is None:
         return None
@@ -1241,25 +1237,12 @@ def _line_semantics(
             problems.append(_problem("key", file, path, f"invalid migrated key (must match {MIGRATED_KEY.pattern})"))
     elif not NEW_KEY.fullmatch(key):
         problems.append(_problem("key", file, path, 'operator keys start with "custom-"', f"rename to custom-{key.removeprefix('custom-')}"))
-    capabilities = line.get("capabilities", ["lead"])
     roles = line.get("roles", [])
-    if "agents" in capabilities or roles:
-        # Staged agent intent: accepted and inert until the use-time
-        # gate passes; only the static route and shape rules refuse here.
-        route_kind = agent_route_kind(provider, kind, gateway=gateway)
-        if route_kind is not None:
-            problems.append(_problem("agents", file, f"{path}.capabilities",
-                                     AGENT_ROUTE_REFUSAL.format(kind=route_kind)))
-        if roles and "agents" not in capabilities:
+    if isinstance(roles, list) and role_ids is not None:
+        unknown = sorted(set(roles) - set(role_ids))
+        if unknown:
             problems.append(_problem("agents", file, f"{path}.roles",
-                                     'roles need the "agents" capability'))
-        if isinstance(roles, list) and role_ids is not None:
-            unknown = sorted(set(roles) - set(role_ids))
-            if unknown:
-                problems.append(_problem("agents", file, f"{path}.roles",
-                                         f"unknown agent role(s) {', '.join(unknown)}"))
-    if "lead" not in capabilities:
-        problems.append(_problem("agents", file, f"{path}.capabilities", "an operator line is lead-capable"))
+                                     f"unknown agent role(s) {', '.join(unknown)}"))
     for block_name in ("context", "output"):
         block = line.get(block_name)
         if block is not None and block["source"] != "operator" and "source_ref" not in block:
@@ -1277,16 +1260,6 @@ def _line_semantics(
     if line["default_effort"] not in levels:
         problems.append(_problem("effort", file, f"{path}.default_effort", "the default effort is one of the declared efforts"))
     transport = provider["transport"]
-    if catalog_provider:
-        family = line.get("family")
-        if provider_id in AGGREGATOR_PROVIDERS:
-            if family is not None and family != UNKNOWN_FAMILY and family not in families:
-                problems.append(_problem("family", file, f"{path}.family",
-                                         f"a line on aggregator {provider_id} declares a catalog family "
-                                         f"({', '.join(sorted(families))}) or unknown"))
-        elif family is not None and family != provider["independence_family"]:
-            problems.append(_problem("family", file, f"{path}.family",
-                                     f"a line on catalog provider {provider_id} has its family {provider['independence_family']}"))
     if transport["kind"] == "oauth-pool":
         if migrated:
             problems.append(_problem("pool", file, path, "a migrated legacy line never rides an OAuth pool"))
@@ -1335,6 +1308,18 @@ def _schema_problems(document: Any, schema: Mapping[str, Any], file: str) -> tup
                 shown = format(value, "g") if isinstance(value, (float, int)) and not isinstance(value, bool) else repr(value)
                 problems[i] = dataclasses.replace(problem, subject=f"must be an integer 8192..2097152 (got {shown})")
     block = document.get("provider")
+    if isinstance(block, dict):
+        family = block.get("independence_family")
+        if isinstance(family, str) and not family.isprintable():
+            file_level.append(_problem("family", file, "$.provider.independence_family",
+                                       "family must be nonempty, single-line printable text (at most 64 characters)"))
+    if isinstance(lines, dict):
+        for key, line in lines.items():
+            family = line.get("family") if isinstance(line, dict) else None
+            if isinstance(family, str) and not family.isprintable():
+                per_line.setdefault(key, []).append(_problem(
+                    "family", file, f"$.lines.{key}.family",
+                    "family must be nonempty, single-line printable text (at most 64 characters)"))
     if isinstance(block, dict) and isinstance(block.get("auth"), dict) and block["auth"].get("kind") == "header":
         file_level = [dataclasses.replace(problem, subject="only x-api-key is honoured for header auth",
                                          remedy='use kind "bearer"')
@@ -1840,9 +1825,10 @@ def merge_docs(
                        if v.get("provider") not in layer.legacy_dropped},
         }
         base = custom.merge_docs(dict(docs), filtered)
-    if not layer.providers and not layer.lines and not layer.secret_names:
-        return dict(base)
     merged = dict(base)
+    # Capture recognition before operator providers or legacy entries are merged.
+    # This metadata is not an operator-extensible family registry.
+    merged["_operator_known_families"] = sorted(t1_families(docs))
     if layer.secret_names:
         # The conservative scrub set (every declared T2 secret name,
         # rendered or not) travels with the merged view to env_unset.
@@ -2765,25 +2751,41 @@ def prepared_fingerprint(environ: Mapping[str, str]) -> dict[str, Any]:
 ROUTE_USABLE = frozenset({"approved", "keyless", "catalog"})
 
 
-def operator_line_offered(
+def operator_line_admitted(
     key: str, *, layer: OperatorLayer, ledger: OperatorLedger | None,
-    admitted_lines: Iterable[str], provider_enabled: bool,
+    admitted_lines: Iterable[str],
 ) -> bool:
-    """The current-authority predicate (launch and resume).
+    """A current, digest-bound local badge, independent of route usability."""
 
-    valid AND key admitted in settings AND the ledger grant's digest equals
-    the current definition digest AND provider enabled AND (keyed route
-    approved). Record-authority compiles use the record snapshot instead.
+    line = layer.lines.get(key)
+    if line is None or ledger is None or key not in admitted_lines:
+        return False
+    grant = ledger.admissions.get(key)
+    return grant is not None and grant["digest"] == line.definition_digest
+
+
+def operator_line_offered(
+    key: str, *, layer: OperatorLayer, ledger: OperatorLedger | None = None,
+    admitted_lines: Iterable[str] = (), provider_enabled: bool,
+) -> bool:
+    """Valid definition, enabled provider and usable route; no admission veto.
+
+    ``admitted_lines`` is accepted for older callers but conveys no use
+    authority. A missing ledger is harmless on catalog/keyless routes, never
+    an approval of a keyed operator route. Credential presence and selected
+    catalog transport problems are checked by the runtime separately.
     """
 
     line = layer.lines.get(key)
-    if line is None or ledger is None or key not in set(admitted_lines) or not provider_enabled:
+    if line is None or not provider_enabled:
         return False
-    grant = ledger.admissions.get(key)
-    if grant is None or grant["digest"] != line.definition_digest:
+    if layer.route_status.get(line.provider_id, "catalog") not in ROUTE_USABLE:
         return False
-    status = layer.route_status.get(line.provider_id, "catalog")
-    return status in ROUTE_USABLE
+    provider = layer.providers.get(line.provider_id)
+    if provider is not None and provider.auth_kind != "none":
+        grant = ledger.routes.get(line.provider_id) if ledger is not None else None
+        return grant is not None and grant["rd"] == provider.route_digest
+    return True
 
 
 # ------------------------------------------------------------ displacement
@@ -3584,8 +3586,7 @@ def agent_fact_fields(
     return {
         "key": key,
         "provider": line.provider_id,
-        "admitted": operator_line_offered(key, layer=layer, ledger=ledger, admitted_lines=admitted_lines,
-                                          provider_enabled=provider_enabled),
+        "admitted": operator_line_admitted(key, layer=layer, ledger=ledger, admitted_lines=admitted_lines),
         "route": route,
         "d60": agent_route_kind(provider, kind, gateway=trusted_docs["gateway"]) is None,
         "route_kind": agent_route_kind(provider, kind, gateway=trusted_docs["gateway"]) or "",
@@ -3940,6 +3941,8 @@ def doctor_findings(
     overlay_conflicts: Iterable[str] = (),
     unset_secrets: Iterable[str] = (),
     agent_eligible: int = 0,
+    agent_qualified: int = 0,
+    agent_usable: int | None = None,
 ) -> DoctorFindings:
     """B01-B05 / A01-A08 / I01-I02 for the operator layer (pure).
 
@@ -4119,14 +4122,12 @@ def doctor_findings(
     present = bool(layer.providers or layer.lines or layer.problems or layer.displaced or layer.pending
                    or snapshot.ledger_present)
     if present:
-        offered = sum(
-            1 for key, line in layer.lines.items()
-            if key in admitted_set and ledger is not None and key in ledger.admissions
-            and ledger.admissions[key]["digest"] == line.definition_digest
-            and layer.route_status.get(line.provider_id, "catalog") in ROUTE_USABLE
-        )
+        badges = sum(operator_line_admitted(key, layer=layer, ledger=ledger, admitted_lines=admitted_set)
+                     for key in layer.lines)
+        usable = agent_eligible if agent_usable is None else agent_usable
         info.append(f"operator: {len(layer.providers)} providers · {len(layer.lines)} lines "
-                    f"({offered} admitted, {len(layer.lines) - offered} New·Off, {agent_eligible} agent-eligible)")
+                    f"({badges} admitted, {len(layer.lines) - badges} not admitted, "
+                    f"{agent_qualified} qualified, {usable} usable for agents)")
     # A selected transport alternative (never a fallback to the pool).
     missing_secrets = set(unset_secrets)
     for pid, selection in sorted((plan.transports if plan is not None else {}).items()):

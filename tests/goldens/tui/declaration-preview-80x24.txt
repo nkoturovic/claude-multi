@@ -1,7 +1,8 @@
 
   Declaration preview
   ─────────────────────────────────────────────────────────────────────────────
-  Declaration preview — off until admitted; requested roles are not grants.
+  Declaration preview — admission and diagnostics are optional; route approval
+  is separate.
   {
     "custom-fixture-reviewer": {
       "capabilities": [
@@ -19,6 +20,5 @@
       },
       "family": "openai",
       "roles": [
-        "cm-reviewer"
   More below — arrows/PgDn scroll; Home/End
   Enter declare · Esc cancel

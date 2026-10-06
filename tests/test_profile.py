@@ -12,6 +12,7 @@ import builtins
 import copy
 import os
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -286,17 +287,33 @@ class ProfileValidationTests(ProfileTestCase):
     def test_e5_agent_effort(self) -> None:
         self.assertInvalid(
             doc(agents_over={"cm-analyst": b("sol", "medium")}),
-            ["agents.cm-analyst.effort: 'medium' is not declared by 'sol' (declared: high, xhigh)"],
+            ["agents.cm-analyst.effort: 'medium' is not supported by 'sol' (available: high, xhigh)"],
         )
         self.assertValid(doc(agents_over={"cm-analyst": b("sol", "high")}))
 
-    def test_e5_lead_effort(self) -> None:
+    def test_native_undeclared_effort_warns_for_lead_and_agent(self) -> None:
+        for slot, document in (
+            ("cm-lead", doc(lead=b("opus55", "high"))),
+            ("cm-analyst", doc(agents_over={"cm-analyst": b("opus55", "high")})),
+        ):
+            with self.subTest(slot=slot):
+                lineup = self.assertValid(document)
+                self.assertEqual(
+                    [(f.slot, f.message) for f in lineup.warnings if f.code == "effort-unverified"],
+                    [(slot, "effort 'high' unverified for this line (not declared)")],
+                )
+                binding = lineup.lead.binding if slot == "cm-lead" else lineup.agents[slot].binding
+                self.assertEqual(binding.effort, "high")
+                self.assertEqual(binding.selector, _BUNDLE.lines["opus55"]["selector"])
+        for effort in ("xhigh", "ultracode"):
+            lineup = self.assertValid(doc(lead=b("opus55", effort)))
+            self.assertNotIn("effort-unverified", self.codes(lineup))
+
+    def test_gateway_lead_effort_needs_an_existing_mapping(self) -> None:
         self.assertInvalid(
-            doc(lead=b("opus55", "high")),
-            ["lead.effort: 'high' is not declared by 'opus55' (declared: xhigh, ultracode)"],
+            doc(lead=b("sol", "medium")),
+            ["lead.effort: 'medium' is not supported by 'sol' (available: high, xhigh, ultracode)"],
         )
-        self.assertValid(doc(lead=b("opus55", "xhigh")))
-        self.assertValid(doc(lead=b("opus55", "ultracode")))
 
     def test_e6_ultracode_is_lead_only(self) -> None:
         self.assertInvalid(
@@ -322,15 +339,22 @@ class ProfileValidationTests(ProfileTestCase):
         }
         return custom.merge_docs(_BUNDLE.docs, registry)
 
-    def test_e7_custom_model_in_a_saved_profile(self) -> None:
+    def test_legacy_custom_line_can_lead_and_bind_every_agent_grade(self) -> None:
         cat = profile.LineupCatalog.from_docs(self._custom_docs())
-        self.assertInvalid(
-            direct(b("c1", "ultracode")),
-            ["lead.model: custom model 'c1' cannot be bound in a profile (use ad-hoc direct)"],
-            cat,
+        lineup = self.assertValid(
+            doc(lead=b("c1", "ultracode"),
+                agents={rid: b("c1", "high") for rid in profile.AGENT_ROLE_IDS}), cat,
         )
-        # Passing: the same slot on a non-custom line.
-        self.assertValid(direct(b("kimi-k3", "ultracode")), cat)
+        self.assertEqual(lineup.lead.binding.key, "c1")
+        self.assertEqual(lineup.lead.binding.selector, "custom-c1")
+        self.assertEqual(set(lineup.agents), set(profile.AGENT_ROLE_IDS))
+        for rid, agent in lineup.agents.items():
+            with self.subTest(slot=rid):
+                self.assertEqual((agent.binding.key, agent.binding.selector), ("c1", "custom-c1"))
+                codes = {f.code for f in lineup.warnings if f.slot == rid}
+                self.assertTrue({"capability-recommendation", "role-recommendation", "family-unknown"} <= codes)
+        self.assertTrue(lineup.routing.independence_unknown)
+        self.assertFalse(lineup.routing.same_family_authors)
 
     def test_e7_ad_hoc_direct_custom_lead_resolves(self) -> None:
         # A merged docs map (models-v2/roles-v2 win) builds a
@@ -344,22 +368,89 @@ class ProfileValidationTests(ProfileTestCase):
         self.assertEqual(lineup.lead.binding.selector, "custom-c1")
         self.assertIsNone(lineup.name)
 
-    def test_e8_new_line_until_admitted(self) -> None:
+    def test_new_line_admission_is_optional_for_lead_and_agent(self) -> None:
         docs = _docs()
         docs["models"]["models"]["grok46"]["status"] = "new"
+        before = copy.deepcopy(docs)
         cat = _lcat(docs)
-        document = doc(agents_over={"cm-analyst": b("grok46", "high")})
-        self.assertInvalid(
-            document,
-            ["agents.cm-analyst.model: model 'grok46' is New · Off (status new) until admitted"],
-            cat,
+        document = doc(lead=b("grok46", "ultracode"),
+                       agents_over={"cm-analyst": b("grok46", "high")})
+        lineup = self.assertValid(document, cat)
+        self.assertEqual(
+            [(f.slot, f.message) for f in lineup.warnings if f.code == "admission"],
+            [(slot, "grok46: not admitted with its current definition (optional attestation)")
+             for slot in ("cm-lead", "cm-analyst")],
         )
         eff = settings.effective(
             {"version": 1, "admitted_lines": ["grok46"]},
             provider_ids=cat.providers,
             line_keys=cat.lines,
         )
-        self.assertValid(document, cat, effective=eff)
+        admitted = self.assertValid(document, cat, effective=eff)
+        self.assertNotIn("admission", self.codes(admitted))
+        self.assertEqual(lineup.applied_bindings(), admitted.applied_bindings())
+        self.assertEqual(docs, before)
+
+    def test_operator_lead_and_every_grade_bind_without_admission_or_evidence(self) -> None:
+        docs = _docs()
+        entry = copy.deepcopy(docs["models"]["models"]["opus55"])
+        entry.update(status="new", selector="custom-unverified[1m]", capabilities=["lead"], roles=[])
+        docs["models"]["models"]["custom-unverified"] = entry
+        docs[profile.OPERATOR_LINES_KEY] = {"custom-unverified": {"origin": "operator", "family": "mistral"}}
+        cat = _lcat(docs)
+        document = doc(lead=b("custom-unverified", "high"),
+                       agents={rid: b("custom-unverified", "high") for rid in profile.AGENT_ROLE_IDS})
+        before = copy.deepcopy(document)
+        lineup = self.assertValid(document, cat)
+        for slot in ("cm-lead", *profile.AGENT_ROLE_IDS):
+            with self.subTest(slot=slot):
+                warnings = {f.code: f.message for f in lineup.warnings if f.slot == slot}
+                self.assertIn("not admitted", warnings["admission"])
+                self.assertIn("not qualified", warnings["qualification"])
+                self.assertIn("effort-unverified", warnings)
+                self.assertIn("mistral", warnings["family-unknown"])
+                if slot != "cm-lead":
+                    self.assertTrue({"capability-recommendation", "role-recommendation"} <= warnings.keys())
+        self.assertEqual(lineup.lead.binding.selector, "custom-unverified[1m]")
+        self.assertTrue(all(a.binding.key == "custom-unverified" for a in lineup.agents.values()))
+        self.assertEqual(document, before)
+
+    def test_unavailable_operator_route_still_refuses_lead_and_agent(self) -> None:
+        docs = _docs()
+        docs[profile.OPERATOR_LINES_KEY] = {"opus55": {"origin": "operator"}}
+        cat = _lcat(docs)
+        for admitted in (frozenset(), frozenset({"opus55"})):
+            effective = settings.Effective(
+                providers_enabled={}, admitted_lines=admitted, unknown=(),
+                unavailable_lines={"opus55": "route approval required for anthropic"},
+            )
+            for document, field in ((direct(b("opus55", "high")), "lead"),
+                                    (doc(lead=b("sol", "high"),
+                                         agents={"cm-reviewer": b("opus55", "xhigh")},
+                                         native_agents={"explore": "off", "general_purpose": "off", "plan": "native"}),
+                                     "agents.cm-reviewer")):
+                with self.subTest(admitted=bool(admitted), slot=field):
+                    self.assertInvalid(document, [f"{field}.model: route approval required for anthropic"],
+                                       cat, effective=effective)
+
+    def test_native_vocabulary_still_bounds_single_selector_efforts(self) -> None:
+        cat = replace(_lcat(), agent_efforts=("high",), lead_efforts=("high", "ultracode"))
+        self.assertInvalid(
+            direct(b("opus55", "max")),
+            ["lead.effort: 'max' is not supported by 'opus55' (available: high, ultracode)"], cat,
+        )
+        self.assertInvalid(
+            doc(lead=b("opus55", "high"), agents={"cm-reviewer": b("opus55", "max")},
+                native_agents={"explore": "off", "general_purpose": "off", "plan": "native"}),
+            ["agents.cm-reviewer.effort: 'max' is not supported by 'opus55' (available: high)"], cat,
+        )
+
+    def test_malformed_named_bindings_still_refuse(self) -> None:
+        for value in (None, [], {"model": "sol"}, {"model": "sol", "effort": 1}):
+            with self.subTest(value=value):
+                self.assertInvalid(doc(lead={"use": "broken"}),
+                                   ["lead.use: named binding 'broken' is malformed"],
+                                   bindings={"broken": value})
 
     def test_e9_disabled_provider(self) -> None:
         cat = _lcat()
@@ -373,65 +464,89 @@ class ProfileValidationTests(ProfileTestCase):
             document, ["agents.cm-analyst.model: provider 'kimi' is disabled in Settings"],
             cat, effective=eff,
         )
+        self.assertInvalid(
+            direct(b("kimi-k3", "max")), ["lead.model: provider 'kimi' is disabled in Settings"],
+            cat, effective=eff,
+        )
         self.assertValid(document, cat, effective=None)
 
-    def test_e10_lead_capability(self) -> None:
-        self.assertInvalid(doc(lead=b("gpt55", "high")), ["lead.model: 'gpt55' lacks the lead capability"])
-        # Passing: a lead-capable gateway line.
-        self.assertValid(doc(lead=b("sol", "ultracode")))
+    def test_lead_still_needs_compile_fields(self) -> None:
+        self.assertInvalid(
+            doc(lead=b("gpt55", "high")),
+            ["lead.model: 'gpt55' lacks the lead/context fields required for compilation"],
+        )
+        for missing in ("lead", "ordinary_profile"):
+            with self.subTest(missing=missing):
+                docs = _docs()
+                entry = docs["models"]["models"]["opus55"]
+                if missing == "lead":
+                    entry["lead"] = None
+                else:
+                    entry["context"]["ordinary_profile"] = None
+                self.assertInvalid(
+                    doc(), ["lead.model: 'opus55' lacks the lead/context fields required for compilation"],
+                    _lcat(docs),
+                )
 
-    def test_e11_agents_capability_ends_the_slot_checks(self) -> None:
-        # Exactly E11 (no E12/E5 for the same slot).
-        self.assertInvalid(
-            doc(agents_over={"cm-analyst": b("qwen-flash-next", "high")}),
-            ["agents.cm-analyst.model: 'qwen-flash-next' lacks the agents capability"],
+    def test_explicit_lead_overrides_capability_recommendation(self) -> None:
+        docs = _docs()
+        docs["models"]["models"]["opus55"]["capabilities"] = ["agents"]
+        lineup = self.assertValid(doc(), _lcat(docs))
+        self.assertEqual(
+            [(f.slot, f.message) for f in lineup.warnings if f.code == "capability-recommendation"],
+            [("cm-lead", 'opus55: explicit binding overrides the missing "lead" recommendation')],
         )
-        self.assertInvalid(
-            doc(agents_over={"cm-analyst": b("qwen-flash-next", "max")}),
-            ["agents.cm-analyst.model: 'qwen-flash-next' lacks the agents capability"],
-        )
-        # Passing.
-        self.assertValid(doc(agents_over={"cm-analyst": b("sol", "high")}))
+        self.assertEqual(lineup.lead.binding.selector, _BUNDLE.lines["opus55"]["selector"])
 
-    def test_e12_admission_is_per_id(self) -> None:
-        self.assertInvalid(
-            doc(agents_over={"cm-explorer": b("opus", "xhigh")}),
-            ["agents.cm-explorer.model: 'opus' does not admit cm-explorer"],
-        )
-        self.assertInvalid(
-            doc(agents_over={"cm-reviewer-strong": b("gpt55", "high")}),
-            ["agents.cm-reviewer-strong.model: 'gpt55' does not admit cm-reviewer-strong"],
-        )
-        self.assertValid(doc(agents_over={"cm-reviewer": b("gpt55", "high")}))
-        self.assertValid(doc(agents_over={"cm-reviewer": b("opus", "xhigh")}))
+    def test_explicit_agent_overrides_capability_recommendation(self) -> None:
+        for effort in ("high", "max"):
+            with self.subTest(effort=effort):
+                lineup = self.assertValid(doc(agents_over={"cm-analyst": b("qwen-flash-next", effort)}))
+                codes = {f.code for f in lineup.warnings if f.slot == "cm-analyst"}
+                self.assertTrue({"capability-recommendation", "role-recommendation"} <= codes)
+                self.assertEqual("effort-unverified" in codes, effort == "max")
+                self.assertEqual(lineup.agents["cm-analyst"].binding.effort, effort)
 
-    def test_e13_requires(self) -> None:
-        self.assertInvalid(
-            doc(agents_over={"cm-analyst-strong": b("sol", "xhigh")}, drop=("cm-analyst",)),
-            ["agents.cm-analyst-strong: requires cm-analyst"],
-        )
-        self.assertInvalid(
-            doc(agents_over={"cm-implementer-light": b("sol", "high")}, drop=("cm-implementer",)),
-            ["agents.cm-implementer-light: requires cm-implementer"],
-        )
-        self.assertInvalid(
-            doc(drop=("cm-reviewer",)),
-            ["agents.cm-reviewer-strong: requires cm-reviewer"],
-        )
+    def test_explicit_role_overrides_recommendation_per_id(self) -> None:
+        for rid, binding in (("cm-explorer", b("opus", "xhigh")),
+                             ("cm-reviewer-strong", b("gpt55", "high"))):
+            with self.subTest(slot=rid):
+                lineup = self.assertValid(doc(agents_over={rid: binding}))
+                self.assertEqual(
+                    [(f.slot, f.message) for f in lineup.warnings if f.code == "role-recommendation"],
+                    [(rid, f"{binding['model']}: explicit binding overrides the recommendation against {rid}")],
+                )
+        for binding in (b("gpt55", "high"), b("opus", "xhigh")):
+            lineup = self.assertValid(doc(agents_over={"cm-reviewer": binding}))
+            self.assertNotIn("role-recommendation", self.codes(lineup))
 
-    def test_e13_hint_names_the_unbound_dependency(self) -> None:
-        self.assertInvalid(
-            doc(
-                agents_over={
-                    "cm-analyst": b("muse-spark", "high"),
-                    "cm-analyst-strong": b("sol", "xhigh"),
-                }
-            ),
-            [
-                "agents.cm-analyst-strong: requires cm-analyst "
-                "(cm-analyst was unbound: 'muse-spark' was removed)"
-            ],
+    def test_missing_companion_grade_warns_without_dropping_the_binding(self) -> None:
+        for rid, required in (
+            ("cm-analyst-strong", "cm-analyst"),
+            ("cm-implementer-light", "cm-implementer"),
+            ("cm-implementer-strong", "cm-implementer"),
+            ("cm-reviewer-strong", "cm-reviewer"),
+        ):
+            with self.subTest(slot=rid):
+                lineup = self.assertValid(doc(agents_over={rid: b("sol", "high")}, drop=(required,)))
+                self.assertIn(rid, lineup.agents)
+                self.assertNotIn(required, lineup.agents)
+                self.assertEqual(
+                    [(f.slot, f.message) for f in lineup.warnings if f.code == "companion-grade"],
+                    [(rid, f"{profile.label(rid)}: recommended companion {required} is unbound")],
+                )
+
+    def test_retired_companion_warns_and_keeps_retirement_notice(self) -> None:
+        lineup = self.assertValid(doc(agents_over={
+            "cm-analyst": b("muse-spark", "high"), "cm-analyst-strong": b("sol", "xhigh"),
+        }))
+        self.assertIn("cm-analyst-strong", lineup.agents)
+        self.assertIn("cm-analyst", lineup.unbound)
+        self.assertEqual(
+            [(f.slot, f.message) for f in lineup.warnings if f.code == "companion-grade"],
+            [("cm-analyst-strong", "analyst-strong: recommended companion cm-analyst is unbound")],
         )
+        self.assertEqual([n.message for n in lineup.notices], ["analyst: 'muse-spark' was removed — unbound"])
 
     def test_e13_passing_retired_agent_alone_is_unbound_with_notice(self) -> None:
         lineup = self.assertValid(doc(agents_over={"cm-analyst": b("muse-spark", "high")}))
@@ -449,20 +564,21 @@ class ProfileValidationTests(ProfileTestCase):
             ],
         )
 
-    def test_e16_explore_replace_requires_explorer(self) -> None:
-        self.assertInvalid(
-            doc(drop=("cm-explorer",)),
-            ["native_agents.explore: 'replace' requires cm-explorer"],
-        )
-        self.assertInvalid(
-            doc(agents_over={"cm-explorer": b("muse-spark", "high")}),
-            [
-                "native_agents.explore: 'replace' requires cm-explorer "
-                "(cm-explorer was unbound: 'muse-spark' was removed)"
-            ],
-        )
+    def test_unbound_explore_replacement_warns_without_reenabling_explore(self) -> None:
+        for document in (doc(drop=("cm-explorer",)),
+                         doc(agents_over={"cm-explorer": b("muse-spark", "high")})):
+            with self.subTest(document=document):
+                lineup = self.assertValid(document)
+                self.assertEqual(lineup.native_agents["explore"], "replace")
+                self.assertNotIn("cm-explorer", lineup.agents)
+                self.assertIn("cm-analyst", lineup.agents)
+                self.assertEqual(
+                    [f.message for f in lineup.warnings if f.code == "explore-replacement-unbound"],
+                    ["Explore remains disabled: its configured replacement cm-explorer is unbound"],
+                )
         lineup = self.assertValid(direct(b("opus55", "ultracode")))
         self.assertTrue(lineup.is_direct)
+        self.assertNotIn("explore-replacement-unbound", self.codes(lineup))
 
     def test_e14_e15_named_bindings(self) -> None:
         self.assertInvalid(
@@ -488,14 +604,14 @@ class ProfileValidationTests(ProfileTestCase):
     def test_named_binding_error_form(self) -> None:
         self.assertInvalid(
             doc(lead={"use": "x"}),
-            ["lead.use: named binding 'x': 'gpt55' lacks the lead capability"],
+            ["lead.use: named binding 'x': 'gpt55' lacks the lead/context fields required for compilation"],
             bindings={"x": b("gpt55", "high")},
         )
         self.assertInvalid(
             doc(agents_over={"cm-analyst": {"use": "fast"}}),
             [
-                "agents.cm-analyst.use: named binding 'fast': 'medium' is not declared "
-                "by 'sol' (declared: high, xhigh)"
+                "agents.cm-analyst.use: named binding 'fast': 'medium' is not supported "
+                "by 'sol' (available: high, xhigh)"
             ],
             bindings={"fast": b("sol", "medium")},
         )
@@ -571,7 +687,7 @@ class ProfileValidationTests(ProfileTestCase):
         self.assertInvalid(
             doc(agents_over={"cm-analyst": b("sol", "medium")}, lead_providers=["nope", "anthropic"]),
             [
-                "agents.cm-analyst.effort: 'medium' is not declared by 'sol' (declared: high, xhigh)",
+                "agents.cm-analyst.effort: 'medium' is not supported by 'sol' (available: high, xhigh)",
                 "lead_providers: unknown provider 'nope'",
             ],
         )
@@ -622,6 +738,16 @@ class WarningTests(ProfileTestCase):
         return [
             (f.slot, f.message, f.compact) for f in lineup.warnings if f.code == code
         ]
+
+    def test_lead_only_environment_warns_for_agents_without_changing_the_lead(self) -> None:
+        docs = _docs()
+        docs["models"]["models"]["qwen-flash-next"]["lead"]["env"] = {"FIXTURE_LEAD_ONLY": "1"}
+        lineup = self.assertValid(doc(agents_over={"cm-analyst": b("qwen-flash-next", "high")}), _lcat(docs))
+        self.assertEqual(dict(lineup.lead.env), {})
+        self.assertEqual(
+            [(f.slot, f.message) for f in lineup.warnings if f.code == "lead-env-ignored"],
+            [("cm-analyst", "qwen-flash-next: its lead-only environment is not applied to an agent")],
+        )
 
     def test_w1_single_family(self) -> None:
         lineup = self.assertValid(claude_shaped())
@@ -916,33 +1042,54 @@ def _cells(routing: profile.Routing) -> list[tuple]:
 
 
 class RoutingTests(ProfileTestCase):
-    def test_unknown_family_never_counts_cross_family(self) -> None:
-        """``unknown`` is never evidence of independence,
-        on either side; two known different families stay independent."""
-
-        self.assertFalse(profile.independent_families("unknown", "anthropic"))
-        self.assertFalse(profile.independent_families("anthropic", "unknown"))
-        self.assertFalse(profile.independent_families("unknown", "unknown"))
-        self.assertTrue(profile.independent_families("anthropic", "openai"))
-        # The unknown reviewer is not chosen as cross-family while a known
-        # other family is bound.
+    def test_unknown_family_never_counts_cross_family_or_same_family(self) -> None:
+        known = {"anthropic", "openai"}
+        for left, right in (("unknown", "anthropic"), ("anthropic", "unknown"),
+                            ("unknown", "unknown"), ("mistral", "openai"),
+                            ("custom", "custom"), ("mistral", "mistral")):
+            with self.subTest(left=left, right=right):
+                self.assertFalse(profile.independent_families(left, right, known))
+                routing = profile.derive_routing({"cm-lead": left}, {"cm-reviewer": right}, known)
+                self.assertEqual(routing.rows[0].normal.reviewer, "cm-reviewer")
+                self.assertFalse(routing.rows[0].normal.same_family)
+                self.assertTrue(routing.rows[0].normal.independence_unknown)
+                self.assertEqual(routing.same_family_authors, ())
+                self.assertEqual(routing.independence_unknown_authors, ("cm-lead",))
+                self.assertTrue(routing.independence_unknown)
+                self.assertFalse(routing.single_family)
+        self.assertTrue(profile.independent_families("anthropic", "openai", known))
+        # Recognized cross-family review outranks an unrecognized label.
         routing = profile.derive_routing(
-            {"cm-lead": "anthropic"}, {"cm-reviewer": "unknown", "cm-reviewer-strong": "openai"},
+            {"cm-lead": "anthropic"}, {"cm-reviewer": "unknown", "cm-reviewer-strong": "openai"}, known,
         )
         lead = routing.rows[0]
-        self.assertEqual((lead.normal.reviewer, lead.normal.same_family), ("cm-reviewer-strong", False))
-        # Only an unknown reviewer: no independent route (reduced independence).
-        routing = profile.derive_routing({"cm-lead": "anthropic"}, {"cm-reviewer": "unknown"})
-        self.assertEqual((routing.rows[0].normal.reviewer, routing.rows[0].normal.same_family),
-                         ("cm-reviewer", True))
-        self.assertEqual(routing.same_family_authors, ("cm-lead",))
-        routing = profile.derive_routing({"cm-lead": "unknown"}, {"cm-reviewer": "openai"})
+        self.assertEqual(lead.normal.reviewer, "cm-reviewer-strong")
+        self.assertFalse(lead.normal.same_family or lead.normal.independence_unknown)
+
+    def test_family_labels_cannot_certify_themselves_without_a_trusted_set(self) -> None:
+        self.assertFalse(profile.independent_families("anthropic", "openai"))
+        routing = profile.derive_routing(
+            {"cm-lead": "anthropic"}, {"cm-reviewer": "openai", "cm-reviewer-strong": "anthropic"},
+        )
+        self.assertEqual(routing.rows[0].normal.reviewer, "cm-reviewer-strong")
+        self.assertTrue(routing.rows[0].normal.independence_unknown)
+        self.assertFalse(routing.rows[0].normal.same_family)
+
+    def test_known_family_comparison_is_normalized_without_changing_labels(self) -> None:
+        known = {"anthropic", "openai"}
+        routing = profile.derive_routing(
+            {"cm-lead": " Anthropic "}, {"cm-reviewer": "ANTHROPIC"}, known,
+        )
+        self.assertEqual(routing.rows[0].family, " Anthropic ")
+        self.assertTrue(routing.single_family)
         self.assertTrue(routing.rows[0].normal.same_family)
+        self.assertFalse(routing.independence_unknown)
+        self.assertTrue(profile.independent_families(" Anthropic ", "OPENAI", known))
 
     def test_single_family(self) -> None:
         routing = profile.derive_routing(
             {"cm-lead": "a", "cm-implementer": "a"},
-            {"cm-reviewer": "a", "cm-reviewer-strong": "a"},
+            {"cm-reviewer": "a", "cm-reviewer-strong": "a"}, {"a"},
         )
         self.assertEqual(
             _cells(routing),
@@ -965,6 +1112,7 @@ class RoutingTests(ProfileTestCase):
                 "cm-implementer-strong": "openai",
             },
             {"cm-reviewer": "openai", "cm-reviewer-strong": "anthropic"},
+            {"anthropic", "openai", "moonshot"},
         )
         self.assertEqual(
             _cells(routing),
@@ -987,6 +1135,7 @@ class RoutingTests(ProfileTestCase):
         routing = profile.derive_routing(
             {"cm-implementer": "moonshot", "cm-lead": "anthropic"},
             {"cm-reviewer": "openai", "cm-reviewer-strong": "anthropic"},
+            {"anthropic", "openai", "moonshot"},
         )
         row = routing.rows[0]
         self.assertEqual((row.normal.reviewer, row.high.reviewer),
@@ -996,7 +1145,7 @@ class RoutingTests(ProfileTestCase):
 
     def test_reviewer_missing(self) -> None:
         routing = profile.derive_routing(
-            {"cm-implementer": "openai", "cm-lead": "anthropic"}, {}
+            {"cm-implementer": "openai", "cm-lead": "anthropic"}, {}, {"anthropic", "openai"},
         )
         for row in routing.rows:
             for cell in (row.normal, row.high):
@@ -1010,7 +1159,7 @@ class RoutingTests(ProfileTestCase):
     def test_only_cm_reviewer_bound(self) -> None:
         routing = profile.derive_routing(
             {"cm-implementer-strong": "openai", "cm-implementer": "openai", "cm-lead": "anthropic"},
-            {"cm-reviewer": "anthropic"},
+            {"cm-reviewer": "anthropic"}, {"anthropic", "openai"},
         )
         for row in routing.rows:
             self.assertEqual(row.normal.reviewer, "cm-reviewer")
@@ -1021,16 +1170,18 @@ class RoutingTests(ProfileTestCase):
         routing = profile.derive_routing(
             {"cm-implementer-light": "openai", "cm-lead": "anthropic"},
             {"cm-reviewer": "openai", "cm-reviewer-strong": "anthropic"},
+            {"anthropic", "openai", "moonshot"},
         )
         light = routing.rows[0]
         self.assertEqual(light.author, "cm-implementer-light")
         self.assertEqual(light.normal, profile.RouteCell(None, False, False, "its check"))
         self.assertEqual(light.high, profile.RouteCell("cm-reviewer-strong", False, False, None))
-        self.assertInvalid(
+        lineup = self.assertValid(
             doc(agents={"cm-implementer-light": b("sol", "high")},
                 native_agents={"explore": "native", "general_purpose": "off", "plan": "native"}),
-            ["agents.cm-implementer-light: requires cm-implementer"],
         )
+        self.assertIn("companion-grade", self.codes(lineup))
+        self.assertIn("cm-implementer-light", lineup.agents)
 
     def test_row_order_and_non_authors(self) -> None:
         lineup = self.assertValid(
@@ -1274,6 +1425,23 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(
             profile.declared_efforts({"efforts": ["max", "low", "high"]}), ("low", "high", "max")
         )
+
+    def test_available_efforts_separates_native_and_gateway_representability(self) -> None:
+        cat = _lcat()
+        client = cat.lines["opus55"]
+        gateway = cat.lines["sol"]
+        self.assertEqual(set(profile.available_efforts(client, cat.agent_efforts)), set(cat.agent_efforts))
+        self.assertEqual(set(profile.available_efforts(client, cat.lead_efforts, lead=True)), set(cat.lead_efforts))
+        self.assertEqual(profile.available_efforts(client, cat.agent_efforts, workflow=True),
+                         (client["default_effort"],))
+        self.assertEqual(profile.available_efforts(gateway, cat.agent_efforts), ("high", "xhigh"))
+        self.assertEqual(profile.available_efforts(gateway, cat.agent_efforts, workflow=True), ("high", "xhigh"))
+        self.assertEqual(profile.available_efforts(dict(client, selector=""), cat.agent_efforts), ())
+        for missing in ("selector", "proxy_contract"):
+            with self.subTest(missing=missing):
+                broken = copy.deepcopy(gateway)
+                del broken["efforts"]["xhigh"][missing]
+                self.assertEqual(profile.available_efforts(broken, cat.agent_efforts), ("high",))
 
     def test_format_tokens(self) -> None:
         self.assertEqual(profile.format_tokens(1_000_000), "1M")

@@ -1188,10 +1188,11 @@ class ModelsAdmitPTYTests(_CardChildCase):
         child.read_until(CARD_READY, FIXTURE_TIMEOUT)
         child.send(b"M")
         child.send(DOWN_KEY * 40)  # the New rows are last; the cursor stops there
-        child.read_until(b"Enter admit")
+        child.read_until(b"admit badge")
         child.send(b"\n")
         child.read_until(f"Admit {key}?".encode())
-        child.send(b"\n")
+        # Metadata admission defaults to Cancel; choose Admit explicitly.
+        child.send(b"\x1bOD\n")
         child.read_until(f"admitted {key}".encode())
         child.send(b"\x1b")  # Models → the card
         mark = len(child.output)
@@ -1530,39 +1531,50 @@ try:
     case.serve_current()
     if {keyed!r}:
         assert key not in runtime.current_effective().admitted_lines
-        assert not case.keyed_picker(key).selectable
+        assert case.keyed_picker(key).selectable
         assert not case.http_calls
-        print('KEYED_NEW_OFF', flush=True)
+        print('KEYED_NOT_ADMITTED_SELECTABLE', flush=True)
     print('MODELS_STAGE', flush=True)
+    real_admit = providers.ConnectActions.admit
+    admission_calls = []
+    def metadata_admit(actions, selected):
+        with mock.patch.object(runtime, 'smoke', side_effect=AssertionError('admission inference')), \\
+                mock.patch.object(runtime, 'qualify_post', side_effect=AssertionError('admission inference')):
+            code = real_admit(actions, selected)
+        admission_calls.append(code)
+        return code
+    providers.ConnectActions.admit = metadata_admit
     def model_app(win):
         screen = models._ModelsScreen(runtime, palette=tui.MONO_PALETTE)
         screen.index = screen.keys.index(key)
         screen.run(win)
     tui.run_curses_on_streams(model_app, sys.stdin, sys.stdout)
+    assert admission_calls == [0], admission_calls
+    print('ADMISSION_REQUESTS=0', flush=True)
     doc, ev = case.evaluation(key)
     if {unavailable!r}:
-        assert ev.errors and any('exact-client' in e for e in ev.errors), ev.errors
-        print('INELIGIBLE_EXACT_CLIENT', flush=True)
-    else:
         assert not ev.errors, ev.errors
-        doc['agents'] = {{}}
-        model = views.picker_rows(views.line_rows(runtime.lineup_catalog(), runtime.current_effective(), custom_ids=frozenset()),
-                                  slot='cm-reviewer', bindings={{}}, lcat=runtime.lineup_catalog(),
-                                  eff=runtime.current_effective(), current=None)
-        print('BIND_INDEX=' + str(next(i for i,row in enumerate(model.items) if row.key == key)), flush=True)
-        def edit_app(win):
-            st = tui.ProfileEditorState(doc, cat=runtime.lineup_catalog(), bindings={{}},
-                                        effective=runtime.current_effective(), origin=None, is_seed=False)
-            callbacks = editor._profile_editor_callbacks(runtime, tui.MONO_PALETTE, editor_state=st)
-            tui.ProfileEditorScreen(st, palette=tui.MONO_PALETTE, callbacks=callbacks,
-                                    environ=runtime.environ, initial_focus='cm-reviewer').run(win)
-        tui.run_curses_on_streams(edit_app, sys.stdin, sys.stdout)
-        saved = runtime.profiles.load(doc['name'])
-        assert saved['agents']['cm-reviewer']['model'] == key, saved
-        target = types.LaunchTarget('profile', saved, saved['name'], True, 'Profile fixture-onboarding')
-        prepared = runtime.prepare(target, action='fresh', passthrough=[])
-        assert runtime.perform(prepared) == 0
-        print('JOURNEY_LAUNCHED=' + str(len(case.launches)), flush=True)
+        assert any(w.code == 'exact-client' and 'unavailable' in w.message for w in ev.lineup.warnings), ev.lineup.warnings
+        print('ATTENTION_EXACT_CLIENT', flush=True)
+    assert not ev.errors, ev.errors
+    doc['agents'] = {{}}
+    model = views.picker_rows(views.line_rows(runtime.lineup_catalog(), runtime.current_effective(), custom_ids=frozenset()),
+                              slot='cm-reviewer', bindings={{}}, lcat=runtime.lineup_catalog(),
+                              eff=runtime.current_effective(), current=None)
+    print('BIND_INDEX=' + str(next(i for i,row in enumerate(model.items) if row.key == key)), flush=True)
+    def edit_app(win):
+        st = tui.ProfileEditorState(doc, cat=runtime.lineup_catalog(), bindings={{}},
+                                    effective=runtime.current_effective(), origin=None, is_seed=False)
+        callbacks = editor._profile_editor_callbacks(runtime, tui.MONO_PALETTE, editor_state=st)
+        tui.ProfileEditorScreen(st, palette=tui.MONO_PALETTE, callbacks=callbacks,
+                                environ=runtime.environ, initial_focus='cm-reviewer').run(win)
+    tui.run_curses_on_streams(edit_app, sys.stdin, sys.stdout)
+    saved = runtime.profiles.load(doc['name'])
+    assert saved['agents']['cm-reviewer']['model'] == key, saved
+    target = types.LaunchTarget('profile', saved, saved['name'], True, 'Profile fixture-onboarding')
+    prepared = runtime.prepare(target, action='fresh', passthrough=[])
+    assert runtime.perform(prepared) == 0
+    print('JOURNEY_LAUNCHED=' + str(len(case.launches)), flush=True)
     print('LISTINGS=' + str(len(case.listing_calls)), flush=True)
 finally:
     case.doCleanups()
@@ -1620,14 +1632,12 @@ finally:
         child.send(b"\x1b")  # result -> Providers
         child.send(b"\x1b")  # Providers -> next fixture stage
         child.read_until(b"MODELS_STAGE", FIXTURE_TIMEOUT)
-        child.read_until(b"Enter admit", FIXTURE_TIMEOUT)
-        child.send(b"\n")
+        child.read_until(b"admit badge", FIXTURE_TIMEOUT)
         mark = len(child.output)
-        _read_after(child, mark, b"Admission and qualification", FIXTURE_TIMEOUT)
+        child.send(b"\n")
+        _read_after(child, mark, b"Confirm explicit action", FIXTURE_TIMEOUT)
         child.send(b"y")
-        child.read_until(b"admission smoke", FIXTURE_TIMEOUT)
-        child.send(b"y")
-        child.read_until(b"Usable as a Direct lead", FIXTURE_TIMEOUT)
+        child.read_until(b"Action result", FIXTURE_TIMEOUT)
         child.send(b"\x1bq")
         child.read_until("qualify — choose checks".encode(), FIXTURE_TIMEOUT)
         child.send(b"\n\n\n")
@@ -1638,22 +1648,22 @@ finally:
         child.read_until(b"evidence recorded for", FIXTURE_TIMEOUT)
         child.send(b"\x1b\x1b")
         if unavailable:
-            child.read_until(b"INELIGIBLE_EXACT_CLIENT", FIXTURE_TIMEOUT)
-        else:
-            child.read_until(b"BIND_INDEX=", FIXTURE_TIMEOUT)
-            # The index comes from the fixture's actual picker inventory.
-            index = int(_line_of(bytes(child.output), b"BIND_INDEX="))
-            child.send(b"\n")
-            child.read_until(b"choose model", FIXTURE_TIMEOUT)
-            child.send(b"\x1bOH" + DOWN_KEY * index + b"\n\x13")
-            child.read_until(b"saved fixture-onboarding", FIXTURE_TIMEOUT)
-            child.send(b"\x1b")
-            child.read_until(b"JOURNEY_LAUNCHED=1", FIXTURE_TIMEOUT)
+            child.read_until(b"ATTENTION_EXACT_CLIENT", FIXTURE_TIMEOUT)
+        child.read_until(b"BIND_INDEX=", FIXTURE_TIMEOUT)
+        # The index comes from the fixture's actual picker inventory.
+        index = int(_line_of(bytes(child.output), b"BIND_INDEX="))
+        child.send(b"\n")
+        child.read_until(b"choose model", FIXTURE_TIMEOUT)
+        child.send(b"\x1bOH" + DOWN_KEY * index + b"\n\x13")
+        child.read_until(b"saved fixture-onboarding", FIXTURE_TIMEOUT)
+        child.send(b"\x1b")
+        child.read_until(b"JOURNEY_LAUNCHED=1", FIXTURE_TIMEOUT)
         code, output, attrs = child.finish()
         self.assertEqual(code, 0, output)
         self.assertIn(b"LISTINGS=" + (b"0" if pool or keyed else b"1"), output)
         if keyed:
-            self.assertIn(b"KEYED_NEW_OFF", output)
+            self.assertIn(b"KEYED_NOT_ADMITTED_SELECTABLE", output)
+        self.assertIn(b"ADMISSION_REQUESTS=0", output)
         self.assertNotIn(b"Traceback", output)
         _restored(self, child, attrs)
 
@@ -1663,7 +1673,7 @@ finally:
     def test_authenticated_pool_journey(self):
         self.journey(pool=True)
 
-    def test_pool_missing_exact_client_is_ineligible(self):
+    def test_pool_missing_exact_client_warns_and_launches(self):
         self.journey(pool=True, unavailable=True)
 
     def test_provider_wizard_recommended_kind_and_cancel(self):
@@ -1691,5 +1701,5 @@ print('CANCELLED_WITHOUT_DECLARATION', flush=True)
 class KeyedJourneyPTYTests(unittest.TestCase):
     child = OnboardingJourneyPTYTests.child
 
-    def test_keyed_tui_new_off_approval_qualification_and_binding(self):
+    def test_keyed_tui_optional_admission_qualification_and_binding(self):
         OnboardingJourneyPTYTests.journey(self, keyed=True)

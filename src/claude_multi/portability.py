@@ -4,8 +4,8 @@ planner and the export receipt.
 The export is a semantic projection, never an archive of files: user
 profiles (and seed *references*), named bindings, the portable Settings
 policy, the operator's ``providers.d`` declarations and **inert** trust
-requests (route approvals, admissions, transport choices the source host
-held). It never carries a secret value, a key, auth files, records, scopes,
+requests (route approvals, optional admissions, transport choices the source
+host held). It never carries a secret value, a key, auth files, records, scopes,
 transcripts, logs, qualification evidence, continuity/ledger state,
 ``native-contract.json`` or host preferences.
 
@@ -72,7 +72,6 @@ TRANSPORT_TEXT = ("Not transferred: transport choice {provider} {choice} — "
                   "claude-multi providers transport {provider} {choice}")
 _STAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 _BINDING_NAME = profile_mod.BINDING_NAME
-_PENDING_WORDS = ("New · Off", "until admitted", "unknown model", "not agent-eligible")
 
 
 class PortabilityError(errors.ClaudeMultiError, ValueError):
@@ -330,7 +329,6 @@ class ImportTarget:
     provider_refusal: Callable[[str, Mapping[str, Any]], str | None]
     propose: Callable[[Mapping[str, bytes]], operator_mod.OperatorLayer]
     approved_routes: frozenset[str]  # providers whose current route grant is valid here
-    admitted: frozenset[str]  # lines admitted here now (current grants)
     transport_choices: Mapping[str, str]
     settings_error: Callable[[Mapping[str, Any]], str | None]
     binding_errors: Callable[[str, Mapping[str, Any], Mapping[str, Mapping[str, Any]], Mapping[str, Any]], list[str]]
@@ -353,7 +351,6 @@ class ImportPlan:
     bindings: dict[str, dict[str, Any]]
     profiles: dict[str, dict[str, Any]]
     routes: tuple[str, ...]  # route approvals still needed here
-    admissions: tuple[str, ...]  # admissions still needed here
     transports: tuple[tuple[str, str], ...]  # transport choices not transferred
     target_fingerprint: str
     digest: str = ""
@@ -370,20 +367,16 @@ class ImportPlan:
         def counts(kind: str, labels: Sequence[tuple[str, str]]) -> str:
             return ", ".join(f"{self.count(kind, status)} {label}" for status, label in labels)
 
-        pending = sum(1 for item in self.items if item.kind == "profile" and item.status == BLOCKED
-                      and item.reason.startswith("pending"))
         return [
             "  providers: " + counts("provider", ((APPLY, "new"), (UNCHANGED, "unchanged"),
                                                   (CONFLICT, "conflicting"), (BLOCKED, "blocked"))),
-            f"  profiles: {self.count('profile', APPLY)} ready, {pending} blocked pending admission, "
-            + counts("profile", ((UNCHANGED, "unchanged"), (CONFLICT, "conflicting")))
-            + f", {self.count('profile', BLOCKED) - pending} invalid here, "
-            + f"{self.count('profile', REFERENCE)} seed references",
+            "  profiles: " + counts("profile", ((APPLY, "ready"), (UNCHANGED, "unchanged"),
+                                                (CONFLICT, "conflicting"), (BLOCKED, "blocked")))
+            + f", {self.count('profile', REFERENCE)} seed references",
             "  bindings: " + counts("binding", ((APPLY, "ready"), (UNCHANGED, "unchanged"),
                                                 (CONFLICT, "conflicting"), (BLOCKED, "blocked"))),
             f"  settings: {len(self.settings_changes)} changes, {self.count('setting', BLOCKED)} blocked",
             f"  route re-approvals required: {len(self.routes)}",
-            f"  model admissions required: {len(self.admissions)}",
         ]
 
     def trust_lines(self) -> list[str]:
@@ -391,7 +384,6 @@ class ImportPlan:
         lines += [TRANSPORT_TEXT.format(provider=pid, choice=choice) for pid, choice in self.transports]
         lines.append(TRUST_INACTIVE)
         lines += [f"  claude-multi providers approve {pid}" for pid in self.routes]
-        lines += [f"  claude-multi models admit {key}" for key in self.admissions]
         return lines
 
     def preview_lines(self) -> list[str]:
@@ -431,10 +423,6 @@ def reconnect_items(reconnect: Any, provider_keys: Mapping[str, tuple[str, str]]
 
 def _canonical(value: Any) -> str:
     return hashlib.sha256(strict_json.canonical_bytes(value)).hexdigest()
-
-
-def _is_pending(errors_: Iterable[str]) -> bool:
-    return any(word in error for error in errors_ for word in _PENDING_WORDS)
 
 
 def _settings_default(key: str) -> Any:
@@ -507,15 +495,13 @@ def plan_import(bundle: Bundle, target: ImportTarget, *, excluded: Iterable[str]
         provider = layer.providers.get(fid)
         if provider is not None and provider.auth_kind == "none":
             keyless.append((fid, provider.origin))
-    declared = set(layer.lines)
 
-    # -- trust: the target's own commands, never a grant.
+    # -- trust: the target's own commands, never a grant. Source admissions
+    # are optional attestations, not a prerequisite or an import remedy.
     routes = tuple(sorted(
         pid for pid, provider in layer.providers.items()
         if provider.auth_kind != "none" and pid not in target.approved_routes
         and (pid in candidates or pid in doc["providers"] or pid in bundle.trust["routes"])))
-    admissions = tuple(sorted(
-        key for key in bundle.trust["admissions"] if key not in target.admitted))
     transports = tuple(sorted(
         (pid, choice) for pid, choice in bundle.trust["transport_choices"].items()
         if target.transport_choices.get(pid) != choice))
@@ -534,8 +520,7 @@ def plan_import(bundle: Bundle, target: ImportTarget, *, excluded: Iterable[str]
         trial = {**merged, key: copy.deepcopy(wanted)}
         problem = target.settings_error(trial)
         if problem is not None:
-            items.append(Item("setting", key, BLOCKED, ("pending admission — " if _is_pending([problem]) else "")
-                              + problem))
+            items.append(Item("setting", key, BLOCKED, problem))
             continue
         merged = trial
         changes.append(key)
@@ -570,9 +555,7 @@ def plan_import(bundle: Bundle, target: ImportTarget, *, excluded: Iterable[str]
             continue
         problems = target.binding_errors(name, value, {**bindings, **added, name: dict(value)}, merged)
         if problems:
-            pending = _is_pending(problems) or value.get("model") in declared
-            items.append(Item("binding", name, BLOCKED, ("pending admission — " if pending else "invalid here — ")
-                              + problems[0]))
+            items.append(Item("binding", name, BLOCKED, "invalid here — " + problems[0]))
             continue
         added[name] = dict(value)
         items.append(Item("binding", name, APPLY))
@@ -609,9 +592,7 @@ def plan_import(bundle: Bundle, target: ImportTarget, *, excluded: Iterable[str]
             continue
         problems = target.profile_errors(document, bindings, merged)
         if problems:
-            pending = _is_pending(problems) or any(key in error for error in problems for key in declared)
-            items.append(Item("profile", name, BLOCKED, ("pending admission — " if pending else "invalid here — ")
-                              + problems[0]))
+            items.append(Item("profile", name, BLOCKED, "invalid here — " + problems[0]))
             continue
         profiles[name] = document
         items.append(Item("profile", name, APPLY))
@@ -628,7 +609,6 @@ def plan_import(bundle: Bundle, target: ImportTarget, *, excluded: Iterable[str]
         bindings=added,
         profiles=profiles,
         routes=routes,
-        admissions=admissions,
         transports=transports,
         target_fingerprint=target.fingerprint,
         reconnect=reconnect_items(bundle.document.get("reconnect"), target.provider_keys),

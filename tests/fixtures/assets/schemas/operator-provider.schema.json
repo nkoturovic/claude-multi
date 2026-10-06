@@ -68,7 +68,8 @@
         },
         "independence_family": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9-]*$",
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$",
+          "minLength": 1,
           "maxLength": 64
         },
         "payload_contracts": {
@@ -204,7 +205,8 @@
           },
           "family": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9-]*$",
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$",
+            "minLength": 1,
             "maxLength": 64
           },
           "context": {

@@ -179,6 +179,7 @@ class _DirectScreen:
         self.message_role = "accent"
         self.efforts: dict[str, str] = {}
         self.offset = 0
+        self._credential_warning_accepted = False
         self._load()
         self.selected = self._preselect()
 
@@ -209,7 +210,6 @@ class _DirectScreen:
                 oauth_records=self.oauth_records, served=self.served, lcat=lcat,
             )
             for row in line_rows
-            if row.lead_capable and row.offered
         }
         self.rows = views.direct_rows(line_rows, marks=marks)
 
@@ -285,13 +285,20 @@ class _DirectScreen:
     def _title(self) -> str:
         return cli_text.DIRECT_CHOOSE_TITLE.format(purpose=self.purpose) if self.purpose else cli_text.DIRECT_TITLE
 
+    def _detail_reserve(self, width: int) -> int:
+        wrap_width = max(20, width - 4)
+        return max(_direct_detail_reserve(self.runtime, width, [r.key for r in self.rows]),
+                   max((len(textwrap.wrap(views.direct_detail(row, self.rows), wrap_width))
+                        + len(textwrap.wrap(_direct_selector_line(self.lcat.lines[row.key]), wrap_width))
+                        for row in self.rows), default=0))
+
     def min_size(self, width: int) -> tuple[int, int]:
         """(rows, cols) floor (§3.4): top, title, rule, class note, message + list + detail + bar."""
 
         return views.ScreenFloor.compute(
             chrome=5,
             list_rows=len(self.rows),
-            detail_reserve=_direct_detail_reserve(self.runtime, width, [r.key for r in self.rows]),
+            detail_reserve=self._detail_reserve(width),
             bar_rows=tui.KeyBar(self._bindings(longest=True)).rows(width),
             cols=cli_text.DIRECT_MIN_COLS,
         ).as_tuple()
@@ -326,7 +333,7 @@ class _DirectScreen:
         tui.safe_add(win, 1, 2, views.clip(self._title(), width - 3), palette.attr("accent") | tui.curses.A_BOLD)
         tui.safe_add(win, 2, 2, views.rule(width), palette.attr("dim"))
         detail = self._detail(width)
-        reserve = _direct_detail_reserve(self.runtime, width, [r.key for r in self.rows])
+        reserve = self._detail_reserve(width)
         list_top = 3
         visible = max(1, message_row - reserve - 1 - list_top)
         if self.selected < self.offset:
@@ -374,6 +381,16 @@ class _DirectScreen:
     def _confirm_marked(self, win: Any, row: views.DirectRow) -> bool:
         """Enter's recheck: refresh the marks; a marked row asks first."""
 
+        eff = self.runtime.current_effective()
+        entry = self.lcat.lines[row.key]
+        reason = eff.unavailable_lines.get(row.key, "")
+        if not settings_mod.provider_enabled(eff, entry["provider"]):
+            reason = "provider off — G → Space enables it"
+        elif not isinstance(entry.get("lead"), Mapping) or not (entry.get("context") or {}).get("ordinary_profile"):
+            reason = "missing lead/context fields — edit the model definition"
+        if reason:
+            tui.TextView("model unavailable", [reason], palette=self.palette).run(win)
+            return False
         self.unavailable = gateway_facts._ordinary_unavailable(self.runtime)
         self.oauth_records = gateway_facts._oauth_credential_records(self.runtime)
         mark = _direct_marks(
@@ -386,12 +403,13 @@ class _DirectScreen:
         provider = self.lcat.providers.get(entry["provider"]) or {}
         lines = [f"{row.key} — {entry.get('display', row.key)} (provider {entry['provider']})"]
         if mark == cli_text._DIRECT_MARK_NO_SECRET:
-            # A missing key could never launch: Close is the only button.
             lines += screens_common.modal_lines(
                 cli_text.DIRECT_KEY_MISSING_BODY.format(display=provider.get("display", entry["provider"])), win)
-            tui.Modal(cli_text.DIRECT_KEY_MISSING_TITLE, lines, buttons=cli_text.DIRECT_KEY_MISSING_BUTTONS).run(
-                win, self.palette, background=self._draw)
-            return False
+            confirmed = tui.Modal(cli_text.DIRECT_KEY_MISSING_TITLE, lines,
+                                  buttons=cli_text.DIRECT_KEY_MISSING_BUTTONS).run(
+                                      win, self.palette, background=self._draw)
+            self._credential_warning_accepted = bool(confirmed)
+            return bool(confirmed)
         if mark == cli_text._DIRECT_MARK_SIGNIN:
             kind = _account_kind(provider["transport"]["pool"])
             lines += screens_common.modal_lines(cli_text.DIRECT_SIGNIN_BODY.format(kind=kind), win)
@@ -419,6 +437,7 @@ class _DirectScreen:
         return bool(confirmed)
 
     def _launch(self, win: Any) -> tuple | None:
+        self._credential_warning_accepted = False
         row = self.rows[self.selected]
         if not self._confirm_marked(win, row):
             return None
@@ -437,24 +456,22 @@ class _DirectScreen:
             self._say(termtext.visible_message(exc).replace("\n", " "), "error")
             return None
         if prepared.secret_problems:
-            # Perform refuses a plan with secret problems, so "Launch
-            # anyway" on a no-secret row never leaves the screen; the card's
-            # credential Modal names the problem and the G → K remedy.
-            wrap = max(20, min(60, win.getmaxyx()[1] - 8))
-            lines = [piece for problem in prepared.secret_problems for piece in textwrap.wrap(problem, wrap)]
-            lines += textwrap.wrap(cli_text.CARD_SECRET_HINT, wrap)
-            tui.Modal(cli_text.CARD_SECRET_TITLE, lines, buttons=(("Close", True),)).run(
-                win, self.palette, background=self._draw
-            )
-            self._say(cli_text.DIRECT_NOT_LAUNCHED, "warn")
-            return None
+            # Direct may launch without a credential, as on the command line.
+            # Route approval, enablement and transport safety were checked separately.
+            if not self._credential_warning_accepted:
+                wrap = max(20, min(60, win.getmaxyx()[1] - 8))
+                lines = [piece for problem in prepared.secret_problems for piece in textwrap.wrap(problem, wrap)]
+                lines += textwrap.wrap("Requests may fail. G → K sets the provider key. Launch anyway?", wrap)
+                if not tui.Modal(cli_text.DIRECT_KEY_MISSING_TITLE, lines,
+                                 buttons=cli_text.DIRECT_KEY_MISSING_BUTTONS).run(
+                                     win, self.palette, background=self._draw):
+                    self._say(cli_text.DIRECT_NOT_LAUNCHED, "warn")
+                    return None
+            prepared = dataclasses.replace(prepared, secret_problems=())
         return ("perform", prepared)
 
     def _save_as_profile(self, win: Any) -> None:
         row = self.rows[self.selected]
-        if row.source == "custom":
-            self._say(cli_text.DIRECT_CUSTOM_REFUSAL.format(key=row.key), "warn")
-            return
         if not self.runtime.allow_state_writes:
             self._say(cli_text.SETTINGS_READ_ONLY.replace("settings", "profiles"), "warn")
             return

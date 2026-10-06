@@ -13,7 +13,6 @@ the verified reload; a refusal is shown, never raised.
 from __future__ import annotations
 
 import io
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence
@@ -35,11 +34,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import claude_multi.cli.runtime as runtime_mod
-
-# An admission refused because the gateway does not serve the current setup.
-NOT_SERVED = re.compile(r"aliases served — claude-multi providers apply|is not the current render"
-                        r"|does not serve the current render")
-
 
 @dataclass(frozen=True)
 class Outcome:
@@ -410,8 +404,8 @@ class ConnectActions:
         the gateway already serves the setup.
 
         ``not_served``: the caller saw the running gateway not serving the
-        current setup (drift, a connected provider served short, an
-        admission refused for that). The plan compares the configuration
+        current setup (drift or a connected provider served short).
+        The plan compares the configuration
         on disk with the declared setup, not with what the gateway serves,
         so then the apply and its verified reload run even when the plan
         has no change."""
@@ -524,11 +518,9 @@ class ConnectActions:
             return frozenset()
         return frozenset(key for key, entry in lines.items() if entry.get("provider") == provider_id)
 
-    def admit(self, key: str, *, retried: bool = False) -> tuple[int, Outcome | None]:
-        """Admit a model you added (its own consent and test request); when
-        the gateway does not serve the current setup yet, offer Apply and
-        retry. Returns the admission's exit status and the apply's outcome
-        (None when none ran)."""
+    def admit(self, key: str) -> int:
+        """Record an optional local attestation, with its own confirmation.
+        No diagnostic request, gateway apply or retry belongs to admission."""
 
         import claude_multi.cli.onboarding as onboarding
 
@@ -541,20 +533,13 @@ class ConnectActions:
         except (cli_errors.ClaudeMultiError, ValueError, OSError) as exc:
             code = 1
             output.write(str(exc))
-        if code != 0 and not retried and NOT_SERVED.search(output.getvalue()):
-            body = screens_common.modal_lines(cli_text.ADMIT_APPLY_BODY.format(key=key), self.win)
-            if tui.Modal(cli_text.ADMIT_APPLY_TITLE, body, buttons=cli_text.ADMIT_APPLY_BUTTONS).run(
-                    self.win, self.palette, background=self.background):
-                applied = self.apply(not_served=True)
-                code, _again = self.admit(key, retried=True)
-                return code, applied
         action.show("Action result", output.getvalue().splitlines())
-        return code, None
+        return code
 
     def continue_to_models(self, provider_id: str) -> str | None:
         """After a provider is connected: when it has no model yet, add its
-        models (a listing you consent to, or by hand), then offer admitting
-        each one it added, so a profile can use it. None when the provider
+        models (a listing you consent to, or by hand), then offer an optional
+        admission badge. Profiles need no badge. None when the provider
         already has models; else the summary line."""
 
         before = self._provider_lines(provider_id)
@@ -574,7 +559,7 @@ class ConnectActions:
             body = self._body([cli_text.ADMIT_NOW_BODY.format(key=key)])
             if tui.Modal(cli_text.ADMIT_NOW_TITLE.format(key=key), body, buttons=cli_text.ADMIT_NOW_BUTTONS).run(
                     self.win, self.palette, background=self.background):
-                code, _applied = self.admit(key)
+                code = self.admit(key)
                 if code == 0:
                     admitted.append(key)
         if not admitted:
@@ -822,7 +807,6 @@ class _ProvidersScreen:
         self.message: str | None = None
         self.message_role = "accent"
         self.apply_offer = False
-        self.admit_failed = False
         self.journal_facts = gateway_facts._journal_facts(runtime, self.journal())
         self._load_facts(refresh_pool=True)
 
@@ -854,10 +838,9 @@ class _ProvidersScreen:
         self.apply_offer = self._apply_needed()
 
     def _apply_needed(self) -> bool:
-        """Drift, a connected provider served below its expected set, or an
-        admission that failed for lack of serving."""
+        """Drift or a connected provider served below its expected set."""
 
-        if self.config_drift or self.admit_failed:
+        if self.config_drift:
             return True
         # A provider with no model line serves only retained aliases: an
         # apply never changes what it serves.
@@ -1188,7 +1171,6 @@ class _ProvidersScreen:
             return
         # Offered because the running gateway does not serve the setup.
         outcome = self._actions(win).apply(not_served=True)
-        self.admit_failed = False
         self._show(outcome)
 
     def _edit(self, win: Any) -> None:

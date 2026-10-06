@@ -346,9 +346,13 @@ class LineRow:
     # catalog | legacy-custom | operator | operator-migrated.
     origin: str = "catalog"
     provider_tokens: int = 0
+    unavailable_reason: str = ""
+    lead_usable: bool = True
+    family_recognized: bool = True
+    qualification: str = "reviewed with the catalog"
 
     def admits(self, slot: str) -> bool:
-        """E12: whether the line may bind ``slot`` (an agent id or ``cm-lead``)."""
+        """Whether the declaration recommends ``slot`` (not a use restriction)."""
 
         if slot == catalog.LEAD_ROLE:
             return self.lead_capable
@@ -382,6 +386,15 @@ def line_rows(lcat: Any, eff: settings.Effective, *, custom_ids: frozenset[str])
         context = entry.get("context", {})
         client_tokens = int(context.get("client_tokens", 0))
         display = entry.get("display", key)
+        qualification = "reviewed with the catalog" if origin == "catalog" else "not run"
+        gate = getattr(lcat, "agent_gate", None)
+        facts = gate.facts.get(key) if gate is not None else None
+        if facts is not None:
+            qualification = {"missing": "not run", "current": "passed", "failed": "failed",
+                             "definition-stale": "stale definition", "contract-stale": "stale contract"}.get(
+                                 facts.evidence, facts.evidence)
+            if facts.evidence_gaps:
+                qualification += " (" + ", ".join(facts.evidence_gaps) + ")"
         rows.append(
             LineRow(
                 key=key,
@@ -406,6 +419,11 @@ def line_rows(lcat: Any, eff: settings.Effective, *, custom_ids: frozenset[str])
                 mode="client" if isinstance(entry.get("efforts"), (list, tuple)) else "gateway",
                 origin=origin,
                 provider_tokens=int(context.get("provider_tokens", 0)),
+                unavailable_reason=("provider off — G → Space enables it" if not settings.provider_enabled(eff, provider_id)
+                                    else eff.unavailable_lines.get(key, "")),
+                lead_usable=isinstance(entry.get("lead"), Mapping) and bool(context.get("ordinary_profile")),
+                family_recognized=profile.recognized_family(lcat.line_family(key, entry), lcat.known_families) is not None,
+                qualification=qualification,
             )
         )
     return tuple(rows)
@@ -511,7 +529,11 @@ def review_sentence(lineup: profile.ResolvedLineup) -> str:
     lead = rows[-1]
     parts.append(f"lead→{lbl(lead.normal.reviewer)}" if lead.normal.reviewer else "lead→—")
     routing = lineup.routing
-    if not routing.same_family_authors:
+    if routing.independence_unknown:
+        tail = "independence unknown for " + ", ".join(lbl(a) for a in routing.independence_unknown_authors)
+        if routing.same_family_authors:
+            tail += "; ≈ same-family for " + ", ".join(lbl(a) for a in routing.same_family_authors)
+    elif not routing.same_family_authors:
         tail = "all cross-family ✓"
     elif routing.single_family:
         tail = "same-family (reduced independence) ≈"
@@ -1117,8 +1139,8 @@ CARD_CONFIG_DIR_SHORT = (
     "! CLAUDE_CONFIG_DIR is ignored: settings, MCP servers, memory and resume come from ~/.claude — V details",
     "! CLAUDE_CONFIG_DIR ignored: settings, MCP, memory, resume use ~/.claude — V",
 )
-CARD_NEW_LINES = "! {n} new model line(s) available, off until admitted: {names} — M → Enter admits"
-CARD_NEW_LINES_SHORT = ("! {n} new model line(s) off until admitted — M → Enter admits",)
+CARD_NEW_LINES = "! {n} new model line(s), not admitted: {names} — M → Enter adds an optional badge"
+CARD_NEW_LINES_SHORT = ("! {n} new model line(s), not admitted — M → Enter adds an optional badge",)
 CARD_WORKTREE = ("implementer agents are unavailable here: they work in a Git worktree and this directory "
                  "is not a Git repository (git init enables them)")
 CARD_WORKTREE_SHORT = (
@@ -1468,6 +1490,7 @@ def _operator_agent_verdict(lcat: Any, key: str, slot: str, effort: str) -> Any:
         entry, key=key, slot=None if slot == "workflow" else slot, effort=effort,
         facts=gate.facts.get(key) if gate is not None else None, agent_efforts=lcat.agent_efforts,
         use=profile.WORKFLOW_USE if slot == "workflow" else profile.AGENT_USE,
+        family=lcat.line_family(key, entry), known_families=lcat.known_families,
     )
 
 
@@ -1480,14 +1503,13 @@ def picker_rows(
     eff: settings.Effective,
     current: Mapping[str, Any] | None,
 ) -> PickerModel:
-    """The binding picker (§4.3): slot admission, grouping, zero-model and named rows.
+    """The binding picker: route availability, recommendations and named rows.
 
     ``slot`` is ``cm-lead``, an agent id, ``"binding"`` (the named-binding
     editor) or ``"workflow"`` (Settings).  ``current`` is the slot's
     binding as written (``{model, effort}`` or ``{use}``) or None.
     """
 
-    del eff  # admission and enablement are already facts of ``rows``
     current_model: str | None = None
     current_effort: str | None = None
     if isinstance(current, Mapping):
@@ -1508,13 +1530,7 @@ def picker_rows(
     items: list[PickerItem] = []
     if slot == "workflow":
         items.append(PickerItem("off", "", "off", True))
-    eligible = [
-        row
-        for row in rows
-        if row.source != "custom" and (
-            _operator_origin(lcat, row.key) or (not (row.status == "new" and not row.admitted)
-                                               and _picker_admits(row, slot)))
-    ]
+    eligible = list(rows)  # Recommendations and optional attestations never hide a line.
     by_provider: dict[str, list[LineRow]] = {}
     displays: dict[str, str] = {}
     for row in eligible:
@@ -1524,38 +1540,54 @@ def picker_rows(
     selected = None
     for provider_id in sorted(by_provider, key=lambda pid: (displays[pid].lower(), pid)):
         for index, row in enumerate(by_provider[provider_id]):
-            efforts = row.efforts
-            if slot == "workflow" and row.mode == "client":
-                efforts = (row.default_effort,)
-            shown = list(efforts)
-            if lead_like and row.lead_capable and not _operator_origin(lcat, row.key):
-                shown.append(profile.ULTRACODE)
+            entry = lcat.lines[row.key]
+            shown = list(profile.available_efforts(
+                entry, lcat.lead_efforts if lead_like else lcat.agent_efforts,
+                lead=lead_like, workflow=slot == "workflow"))
             prov = provider_id if index == 0 else ""
             tag = "◇ " if _operator_origin(lcat, row.key) else ""
             text = f"{prov:<11} {tag + row.short:<16} {row.family:<9} {row.class_label:<5} efforts {' '.join(shown)}"
-            enabled = row.provider_enabled and (slot != "workflow" or row.offered)
-            note = "" if enabled else "(provider off — G)"
-            if _operator_origin(lcat, row.key) and not row.offered:
-                enabled, note = False, "off or changed — Models Enter admits"
+            note = row.unavailable_reason or eff.unavailable_lines.get(row.key, "")
+            if not row.provider_enabled:
+                note = "provider off — G → Space enables it"
+            if not note and slot == catalog.LEAD_ROLE and not row.lead_usable:
+                note = "missing lead/context fields — edit the model definition"
+            if not note and not shown:
+                note = "no representable effort/selector — edit the model definition"
+            enabled = not note
+            warnings = []
+            if row.status == "new" and not row.admitted:
+                warnings.append("not admitted (optional badge — M → Enter)")
+            if not _picker_admits(row, slot):
+                warnings.append("binding overrides capability/role recommendations")
+            if not row.family_recognized:
+                warnings.append("family independence unknown")
+            undeclared = [e for e in shown if e != profile.ULTRACODE and e not in row.efforts]
+            if undeclared:
+                warnings.append("effort unverified for this line: " + ", ".join(undeclared))
             effort_reasons = {}
             if not lead_like and _operator_origin(lcat, row.key):
                 for effort in shown:
                     verdict = _operator_agent_verdict(lcat, row.key, slot, effort)
-                    if verdict is not None and not verdict.eligible:
-                        effort_reasons[effort] = verdict.reasons[0]
-                if enabled and len(effort_reasons) == len(shown):
+                    if verdict is not None:
+                        warnings.extend(f.message for f in verdict.warnings)
+                        if not verdict.eligible:
+                            effort_reasons[effort] = "; ".join(verdict.reasons) + " — " + verdict.remedy
+                if enabled and shown and len(effort_reasons) == len(shown):
                     enabled = False
-                    note = f"(not agent-eligible: {effort_reasons[row.default_effort]})"
-            if slot == catalog.LEAD_ROLE and not _operator_origin(lcat, row.key):
+                    note = next(iter(effort_reasons.values()))
+            if slot == catalog.LEAD_ROLE and profile.ULTRACODE in shown:
                 initial = profile.ULTRACODE
             elif current_key == row.key and current_effort in shown:
                 initial = str(current_effort)
             else:
-                initial = row.default_effort
+                initial = row.default_effort if row.default_effort in shown else next(iter(shown), "")
             if enabled and initial in effort_reasons:
                 initial = next(e for e in shown if e not in effort_reasons)
             if 0 < row.provider_tokens < 200000:
-                note += ("; " if note else "") + "below-200K provider window"
+                warnings.append("provider bound below the 200K client class; no per-agent window")
+            if enabled and warnings:
+                note = "Attention: " + warnings[0] + " — V details"
             cycle = tuple(shown)
             if slot == "workflow" and row.mode == "client":
                 cycle = ()
@@ -1565,7 +1597,10 @@ def picker_rows(
                     "normal" if enabled else "dim", cycle, initial, note,
                     details=(f"provider: {row.provider_display} ({row.provider})",
                              f"family: {row.family}" + (" (operator-declared)" if tag else ""),
-                             f"client class: {row.class_label}; provider bound: {row.provider_tokens}"),
+                             f"declared client class: {row.class_label}; provider bound: {row.provider_tokens}",
+                             "admission: " + ("admitted (optional badge)" if row.admitted else "not admitted"),
+                             "qualification: " + row.qualification,
+                             *dict.fromkeys(warnings)),
                     effort_reasons=effort_reasons,
                 )
             )
@@ -1580,23 +1615,26 @@ def picker_rows(
     if zero:
         items.append(PickerItem("zero", "", f"{' · '.join(zero)}     configured · no models", False, "dim"))
     if slot not in ("binding", "workflow"):
-        admitted = {row.key: row for row in eligible if row.provider_enabled}
+        by_key = {row.key: row for row in eligible}
+        line_items = {item.key: item for item in items if item.kind == "line"}
         for name in sorted(bindings):
             spec = bindings[name]
             try:
                 key = lcat.resolve_key(str(spec.get("model"))).key
             except catalog.CatalogError:
-                continue
-            if key is None or key not in admitted:
-                continue
-            text = f"named       {name} → {admitted[key].short} · {spec.get('effort')}"
-            verdict = (_operator_agent_verdict(lcat, key, slot, str(spec.get("effort")))
-                       if not lead_like and _operator_origin(lcat, key) else None)
-            allowed = verdict is None or verdict.eligible
-            note = "" if allowed else verdict.reasons[0]
-            items.append(PickerItem("named", name, text, allowed,
+                key = None
+            row = by_key.get(key)
+            item = line_items.get(key)
+            effort = str(spec.get("effort"))
+            text = f"named       {name} → {row.short if row else spec.get('model')} · {effort}"
+            allowed = item is not None and item.selectable and effort in item.efforts and effort not in item.effort_reasons
+            note = (item.effort_reasons.get(effort) or item.note) if item else "unknown model — edit the named binding"
+            if item and item.selectable and effort not in item.efforts:
+                note = "unsupported effort/selector — edit the named binding"
+            items.append(PickerItem("named", name, text + (f"  {note}" if note else ""), allowed,
                                     "normal" if allowed else "dim",
-                                    initial_effort=str(spec.get("effort")), note=note))
+                                    initial_effort=effort, note=note,
+                                    details=item.details if item else (note,)))
             if (
                 selected is None
                 and isinstance(current, Mapping)
@@ -1628,7 +1666,7 @@ def routing_rows(lineup: profile.ResolvedLineup) -> tuple[tuple[str, str, str], 
             return f"— ({value.reason})" if value.reason else "—"
         agent = lineup.agents.get(value.reviewer)
         display = short_label(agent.binding.display) if agent is not None else "?"
-        mark = "≈" if value.same_family else "✓"
+        mark = "? independence unknown" if value.independence_unknown else "≈" if value.same_family else "✓"
         return f"{profile.label(value.reviewer)} {display} {mark}" + ("°" if value.only_other_family else "")
 
     out = []
@@ -2051,7 +2089,7 @@ def models_model(
 
     def efforts(row: LineRow) -> str:
         text = efforts_text(row.efforts)
-        return text if row.agents_capable else f"{text} (lead only)"
+        return text if row.agents_capable else f"{text} (lead recommended)"
 
     def used_text(row: LineRow) -> str:
         count = used.get(row.key, 0)
@@ -2065,15 +2103,16 @@ def models_model(
             keys.append(row.key)
     for row in rows:
         if row.source == "custom":
-            main.append((row.key, row.display, "custom", row.class_label, efforts(row), "direct only"))
+            main.append((row.key, row.display, "custom", row.class_label, efforts(row), used_text(row)))
             keys.append(row.key)
     new_rows: list[tuple[str, ...]] = []
     new_keys: list[str] = []
     for row in rows:
         if row.source == "catalog" and row.status == "new" and not row.admitted:
-            new_rows.append((row.key, row.display, row.provider, row.class_label, efforts(row), "New · Off"))
+            new_rows.append((row.key, row.display, row.provider, row.class_label, efforts(row),
+                             "New · unavailable" if row.unavailable_reason else "New · not admitted"))
             new_keys.append(row.key)
-    heading = "new (off until admitted — Enter admits; stored in Settings):" + ("" if new_rows else " —")
+    heading = "new (not admitted — Enter adds an optional badge):" + ("" if new_rows else " —")
     groups: dict[str | None, list[str]] = {}
     for key, successor in retired.items():
         groups.setdefault(successor, []).append(key)
@@ -2096,9 +2135,12 @@ def models_model(
             # The screen's own key does it (the bar names Enter's action here);
             # the command line spelling stays in V and on the command line.
             detail += " · operator line"
-        if not row.provider_enabled:
-            detail += " · provider off in Settings"
-        lines = (detail,) + ((radar[row.key],) if row.key in radar else ())
+        availability = row.unavailable_reason or ("available" if row.offered else "unavailable — check Providers (G)")
+        badge = "admitted" if row.admitted else "not admitted"
+        family = "recognized" if row.family_recognized else "independence unknown"
+        lines = (detail, f"use: {availability} · admission: {badge} (optional)",
+                 f"qualification: {row.qualification} · family: {row.family} ({family})")
+        lines += ((radar[row.key],) if row.key in radar else ())
         details[row.key] = lines
     return ModelsModel(
         title=f"models — catalog {catalog_version}",
@@ -2128,7 +2170,7 @@ def operator_admission_refusal(key: str, admitted: bool) -> str:
             f"`{operator_admission_command(key, admitted)}` in a terminal outside Claude Code sessions")
 
 
-LINE_ORIGINS = {"catalog": "shipped with claude-multi", "legacy-custom": "custom registry (direct only)",
+LINE_ORIGINS = {"catalog": "shipped with claude-multi", "legacy-custom": "custom registry",
                 "operator": "a model you added", "operator-migrated": "a model you added (migrated)"}
 
 
@@ -2168,8 +2210,8 @@ def line_inspection(
     ]
     lines += [f"  {level}: {selector}" for level, selector in line_selectors(entry)]
     roles = "all agent roles" if row.roles == "all" else ", ".join(row.roles) or "none"
-    lines.append(f"leads: {'yes' if row.lead_capable else 'no'} · agents: "
-                 + (roles if row.agents_capable else "no (lead only)"))
+    lines.append(f"recommendations — leads: {'yes' if row.lead_capable else 'no'} · agents: "
+                 + (roles if row.agents_capable else "not recommended"))
     bounds = [f"client class {row.class_label}"]
     if route is not None:
         evidence = {"provider_tokens": route["input_tokens"], "validated_tokens": catalog.key_route_floor(route),
@@ -2190,16 +2232,15 @@ def line_inspection(
         lines.append(f"efforts on the API key: {', '.join(catalog.key_route_levels(entry)) or 'none'}")
     elif context.get("qualification"):
         lines.append(f"context evidence: {context['qualification']}")
-    if row.status == "new":
-        state = "admitted (stored in Settings)" if row.admitted else "New · Off — Enter admits it"
-    else:
-        state = "offered" if row.offered else "not offered (its provider is off: G → Space)"
-    lines.append(f"admission: {state}")
+    availability = row.unavailable_reason or ("available" if row.offered else "unavailable — check Providers (G)")
+    lines.append(f"use: {availability}")
+    state = "admitted (stored in Settings)" if row.admitted else "not admitted"
+    lines.append(f"admission: {state} — optional badge; revoke keeps availability and evidence")
+    lines.append(f"qualification: {row.qualification}")
     if row.origin in profile.OPERATOR_ORIGINS:
-        lines.append("qualification: agents need a passed qualification — Q runs it "
-                     f"(claude-multi models qualify {row.key} --agents)")
-    else:
-        lines.append("qualification: reviewed with the catalog; nothing to run")
+        lines.append(f"optional diagnostics: Q (claude-multi models qualify {row.key} --agents); consent before requests")
+    lines.append("family independence: " + ("recognized family; depends on the review pair" if row.family_recognized
+                                             else "unknown — this label does not establish independence"))
     lines.append(f"used by: {_plural(used, 'profile') if used else 'no profile'}")
     if radar:
         lines.append(radar)
@@ -2240,13 +2281,16 @@ class DirectRow:
     source: str
     mark: str | None
     provider_width: int = 11
+    unavailable_reason: str = ""
+    attention: str = ""
 
     def text(self, effort: str | None = None) -> str:
         """``{provider} {short:<22} {class:<5}{  effort [e]}{  ({mark})}``; the
         provider column is as wide as the longest provider id listed."""
 
         if self.source == "custom":  # a legacy custom line
-            return f"{'custom':<{self.provider_width}} {self.short:<22} {self.class_label}   (custom)"
+            return (f"{'custom':<{self.provider_width}} {self.short:<22} {self.class_label}   (custom)"
+                    + (f"  ({self.mark})" if self.mark else ""))
         text = f"{self.provider:<{self.provider_width}} {self.short:<22} {self.class_label:<5}"
         if self.mode == "gateway":
             text += f"  effort [{effort or self.default_effort}]"
@@ -2256,15 +2300,28 @@ class DirectRow:
 
 
 def direct_rows(rows: Sequence[LineRow], *, marks: Mapping[str, str | None]) -> tuple[DirectRow, ...]:
-    """Direct's rows: the offered lead-capable catalog lines sorted by
-    provider display, then model display; then the custom lead lines."""
+    """Every valid declaration; unavailable routes stay visible with remedies."""
 
-    first_rows = sorted((r for r in rows if r.lead_capable and r.offered and r.source == "catalog"),
+    first_rows = sorted((r for r in rows if r.source == "catalog"),
                         key=lambda r: (r.provider_display.lower(), r.display.lower(), r.key))
-    custom_source = [r for r in rows if r.lead_capable and r.offered and r.source == "custom"]
+    custom_source = [r for r in rows if r.source == "custom"]
     width = max([len(r.provider) for r in first_rows] + [len("custom")] * bool(custom_source) + [1])
 
     def one(row: LineRow) -> DirectRow:
+        unavailable = row.unavailable_reason
+        if not row.provider_enabled:
+            unavailable = "provider off — G → Space enables it"
+        elif not row.lead_usable:
+            unavailable = "missing lead/context fields — edit the model definition"
+        attention = []
+        if row.status == "new" and not row.admitted:
+            attention.append("not admitted (optional badge)")
+        if not row.lead_capable:
+            attention.append("lead binding overrides capability recommendation")
+        if row.origin != "catalog":
+            attention.append("qualification: " + row.qualification)
+        if not row.family_recognized:
+            attention.append("family independence unknown")
         return DirectRow(
             key=row.key,
             short=row.short,
@@ -2275,8 +2332,10 @@ def direct_rows(rows: Sequence[LineRow], *, marks: Mapping[str, str | None]) -> 
             efforts=row.efforts,
             default_effort=row.default_effort,
             source=row.source,
-            mark=marks.get(row.key),
+            mark="unavailable" if unavailable else marks.get(row.key),
             provider_width=width,
+            unavailable_reason=unavailable,
+            attention="; ".join(attention),
         )
 
     return tuple(one(r) for r in first_rows) + tuple(one(r) for r in custom_source)
@@ -2285,10 +2344,11 @@ def direct_rows(rows: Sequence[LineRow], *, marks: Mapping[str, str | None]) -> 
 def direct_detail(row: DirectRow, rows: Sequence[DirectRow], *, reason: str | None = None) -> str:
     """The detail line: the mark reason, or ``lead class {class} · {n} models in that class``."""
 
-    if reason:
-        return reason
+    if row.unavailable_reason:
+        return row.unavailable_reason
     count = sum(1 for other in rows if other.lead_class == row.lead_class)
-    return f"lead class {row.lead_class} · {_plural(count, 'model')} in that class"
+    detail = reason or f"lead class {row.lead_class} · {_plural(count, 'model')} in that class"
+    return detail + (f" · Attention: {row.attention}" if row.attention else "")
 
 
 # ================================================================ providers (§4.10)
@@ -2619,7 +2679,8 @@ def settings_rows(
     readonly = doc is None
     if readonly:
         eff = settings.Effective(
-            providers_enabled=dict(eff.providers_enabled), admitted_lines=frozenset(), unknown=()
+            providers_enabled=dict(eff.providers_enabled), admitted_lines=frozenset(), unknown=(),
+            unavailable_lines=eff.unavailable_lines
         )
     rows: list[SettingsRow] = []
     sec = SETTINGS_SECTIONS
@@ -2736,9 +2797,9 @@ def settings_rows(
     )
     rows.append(
         SettingsRow(
-            sec[3], "admitted", "New lines admitted", str(len(eff.admitted_lines)),
-            "M opens models", "next", "models",
-            "New catalog lines are off until admitted in M (models).", True,
+            sec[3], "admitted", "Optional admission badges", str(len(eff.admitted_lines)),
+            "M opens models", "now", "models",
+            "Admission is an optional badge, not availability. M → Enter adds or removes it; evidence is unchanged.", True,
         )
     )
     mtime, rotating = token_state
@@ -2820,7 +2881,7 @@ def provider_form_fields(*, kind="anthropic-compatible", keyed_audited: bool = T
         ("auth", "Authentication", "none" if kind == "openai-compatible-lan" else "bearer",
          endpoint_auth_choices(kind)),
         ("secret", "Logical secret name (NAME, not a key value)", "", ()),
-        ("family", "Independence family (T1 family or unknown)", "unknown", ()),
+        ("family", "Model family label (unknown if unsure)", "unknown", ()),
         ("contracts", "Payload contracts (comma-separated, optional)", "", ()),
         ("listing", "Listing URL (optional; no protocol autodetection)", "", ()),
         ("listing_auth", "Listing authentication", "provider", (("provider", "provider credential (same origin)"), ("none", "none (public listing)"))),
@@ -2907,13 +2968,13 @@ def model_form_fields(line, *, key="", family="unknown"):
         ("source", "Context source", line.get("context", {}).get("source", "docs"),
          tuple((x, x) for x in ("docs", "listing", "registry", "operator"))),
         ("ref", "Context source reference (URL, date)", line.get("context", {}).get("source_ref", ""), ()),
-        ("family", "Model family (aggregators require this)", line.get("family", family), ()),
+        ("family", "Model family label (unknown if unsure)", line.get("family", family), ()),
         ("efforts", "Efforts: level or level=contract, comma-separated", effort_text, ()),
         ("default", "Default effort", line.get("default_effort", "high"), ()),
         ("output", "Max output tokens (optional; edits are operator-stated)", str(line.get("output", {}).get("declared_tokens", "")), ()),
-        ("capabilities", "Requested capabilities", "agents" if "agents" in line.get("capabilities", []) else "lead",
-         (("lead", "lead only"), ("agents", "lead + agents (qualification required)"))),
-        ("roles", "Requested agent roles: all or comma-separated cm-* ids", roles if isinstance(roles, str) else ",".join(roles), ()),
+        ("capabilities", "Recommended uses (bindings may override)", "agents" if "agents" in line.get("capabilities", []) else "lead",
+         (("lead", "lead recommended"), ("agents", "lead + agents recommended"))),
+        ("roles", "Recommended agent roles: all or comma-separated cm-* ids", roles if isinstance(roles, str) else ",".join(roles), ()),
     )
 
 

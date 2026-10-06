@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_cli  # module import: no test classes re-exported
-from claude_multi import catalog, lineup, paths, profile, readiness, sessions, state, strict_json
+from claude_multi import catalog, lineup, paths, profile, readiness, sessions, settings, state, strict_json
 from claude_multi.setup import model, profiles as setup_profiles
 
 from _catalog import FIXTURE_ROOT
@@ -211,6 +211,66 @@ class DigestSaveTests(StoreCase):
         self.assertNotIn("seed", self.store.load("copy"))
         kept = self.store.duplicate("claude", "fallback", keep_primary=True)
         self.assertEqual(kept["primary_provider"], "anthropic")
+
+
+class PermissiveProfileSafetyTests(StoreCase):
+    def test_warning_only_profile_stays_byte_exact_across_admission_changes(self) -> None:
+        docs = copy.deepcopy(_BUNDLE.docs)
+        entry = docs["models"]["models"]["opus55"]
+        entry.update(status="new", capabilities=["agents"], roles=["cm-reviewer"])
+        cat = profile.LineupCatalog.from_docs(docs)
+        document = self.mine(
+            lead={"model": "opus55", "effort": "high"},
+            agents={"cm-reviewer-strong": {"model": "opus55", "effort": "high"}},
+        )
+        path = self.store.save(document)
+        before = path.read_bytes()
+        digest = self.store.digest("mine")
+        lineups = []
+        for admitted in (frozenset(), frozenset({"opus55"}), frozenset()):
+            with self.subTest(admitted=bool(admitted)):
+                effective = settings.Effective(providers_enabled={}, admitted_lines=admitted, unknown=())
+                resolved = profile.resolve(self.store.load("mine"), cat, effective=effective)
+                codes = {f.code for f in resolved.warnings}
+                self.assertTrue({"capability-recommendation", "role-recommendation", "effort-unverified",
+                                 "companion-grade", "explore-replacement-unbound"} <= codes)
+                self.assertEqual("admission" in codes, not admitted)
+                self.assertEqual(resolved.native_agents["explore"], "replace")
+                self.assertEqual(set(resolved.agents), {"cm-reviewer-strong"})
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(self.store.digest("mine"), digest)
+                lineups.append(resolved.applied_bindings())
+        self.assertEqual(lineups[0], lineups[1])
+        self.assertEqual(lineups[0], lineups[2])
+        self.assertEqual(self.store.load("mine"), document)
+        self.assertFalse((self.store.root.parent / "settings.json").exists())
+        self.assertFalse((self.store.root / profile.SEED_DIGESTS_FILE).exists())
+
+    def test_unusable_saved_operator_binding_refuses_without_rewriting_the_profile(self) -> None:
+        docs = copy.deepcopy(_BUNDLE.docs)
+        docs["models"]["models"]["opus55"]["status"] = "new"
+        docs[profile.OPERATOR_LINES_KEY] = {"opus55": {"origin": "operator"}}
+        cat = profile.LineupCatalog.from_docs(docs)
+        document = self.mine(agents={})
+        path = self.store.save(document)
+        before = path.read_bytes()
+        for effective, error in (
+            (settings.Effective(providers_enabled={"anthropic": False}, admitted_lines=frozenset(), unknown=()),
+             "provider 'anthropic' is disabled in Settings"),
+            (settings.Effective(providers_enabled={}, admitted_lines=frozenset({"opus55"}), unknown=(),
+                                unavailable_lines={"opus55": "selected transport is unusable"}),
+             "selected transport is unusable"),
+        ):
+            with self.subTest(error=error):
+                result = profile.evaluate(self.store.load("mine"), cat, effective=effective)
+                self.assertEqual(result.errors, (f"lead.model: {error}",))
+                self.assertIsNone(result.lineup)
+                self.assertEqual(path.read_bytes(), before)
+        # The route can be restored without editing or migrating the profile.
+        resolved = profile.resolve(self.store.load("mine"), cat)
+        self.assertIn("admission", {f.code for f in resolved.warnings})
+        self.assertEqual(resolved.lead.binding.key, "opus55")
+        self.assertEqual(path.read_bytes(), before)
 
 
 class LoadErrorTests(StoreCase):

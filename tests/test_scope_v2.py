@@ -134,8 +134,7 @@ def _selectors(entry: dict[str, Any]) -> list[tuple[str | None, str]]:
 
 
 def _offered(lcat, eff, key, entry) -> bool:
-    status_ok = entry.get("status", "active") == "active" or key in eff.admitted_lines
-    return status_ok and eff.providers_enabled.get(entry["provider"], True)
+    return key not in eff.unavailable_lines and eff.providers_enabled.get(entry["provider"], True)
 
 
 def _oracle_lead_rows(lcat, eff, lead_class, lead_providers):
@@ -396,7 +395,7 @@ class FenceTests(unittest.TestCase):
         wide = scope.compile_fence(unnarrowed, lcat, eff)
         self.assertLess(len(fence.lead_set), len(wide.lead_set))
 
-    def test_new_line_absent_until_admitted(self) -> None:
+    def test_new_line_offered_without_admission_and_badge_keeps_fence(self) -> None:
         bundle = _bundle()
         docs = copy.deepcopy(bundle.docs)
         # A lead- and agents-capable line of the balanced lead class that
@@ -416,9 +415,9 @@ class FenceTests(unittest.TestCase):
         eff = _eff(lcat)
         lineup = profile.resolve(bundle.seed_profiles["balanced"], lcat, effective=eff)
         fence = scope.compile_fence(lineup, lcat, eff)
-        self.assertFalse(selectors & set(fence.available_models))
+        self.assertLessEqual(selectors, set(fence.available_models))
         admitted = _eff(lcat, {"version": 1, "admitted_lines": [key]})
-        fence = scope.compile_fence(lineup, lcat, admitted)
+        self.assertEqual(fence, scope.compile_fence(lineup, lcat, admitted))
         self.assertLessEqual(selectors, set(fence.available_models))
         self.assertLessEqual(selectors, fence.lead_selectors)
 
@@ -605,15 +604,11 @@ class FenceAssertionTests(unittest.TestCase):
 
     def test_workflow_default_refusals_name_the_setting(self) -> None:
         bundle, lcat, eff, lineup = _seed("balanced")
-        lead_only = next(
-            key for key, entry in lcat.lines.items() if "agents" not in entry["capabilities"]
-        )
         gateway_key, gateway = self._agents_line(lcat, client=False)
         undeclared = next(e for e in profile.EFFORT_ORDER if e not in gateway["efforts"])
         retired_null = next(k for k, v in lcat.retired.items() if v["successor"] is None)
         disabled_provider = gateway["provider"]
         cases = [
-            ({"model": lead_only, "effort": "high"}, eff, ".model"),
             ({"model": gateway_key, "effort": undeclared}, eff, ".effort"),
             ({"model": gateway_key, "effort": "ultracode"}, eff, ".effort"),
             ({"model": retired_null, "effort": "high"}, eff, ".model"),
@@ -774,7 +769,7 @@ class SettingsTests(unittest.TestCase):
         env = plan.settings["env"]
         self.assertEqual({k: env[k] for k in env if k.startswith("ANTHROPIC_DEFAULT_")}, expected)
         self.assertTrue(expected)
-        # A New·Off family line is not offered: its variable is omitted.
+        # A New family line is usable without its optional admission badge.
         docs = copy.deepcopy(bundle.docs)
         family_key = next(key for key, _var in compiler.FAMILY_DEFAULT_LINES if key in lcat.lines)
         variable = dict(compiler.FAMILY_DEFAULT_LINES)[family_key]
@@ -783,7 +778,7 @@ class SettingsTests(unittest.TestCase):
         eff2 = _eff(lcat2)
         lineup2 = profile.resolve(bundle.seed_profiles["openai"], lcat2, effective=eff2)
         plan2 = _compile(lineup2, lcat2, eff2, bundle)
-        self.assertNotIn(variable, plan2.settings["env"])
+        self.assertEqual(plan2.settings["env"][variable], plan.settings["env"][variable])
 
     def test_no_subagents_turns_workflows_off(self) -> None:
         for name in catalog.SEED_PROFILE_NAMES:

@@ -849,7 +849,7 @@ def _collect_doctor_report_lines(
     keep_attention, keep_info = _doctor_env_keep_report(runtime)
     scope_attention.extend(keep_attention)
     info_lines.extend(keep_info)
-    info_lines.extend(_doctor_new_lines_report(runtime))
+    scope_attention.extend(_doctor_new_lines_report(runtime))
     scope_attention.extend(_doctor_retirement_radar(runtime))
     scope_attention.extend(_doctor_hook_errors(runtime, records))
     # User/project settings are merged after process-environment cleanup, so
@@ -973,12 +973,15 @@ def _doctor_operator_report(
             except secret_store.SecretStoreError:
                 unset.append(selection.alternative.secret_name)
     agent_attention, agent_eligible = runtime.operator_agent_findings(snapshot, scan.live)
+    gate = runtime.agent_gate(snapshot)
+    agent_qualified = sum(facts.evidence == "current" and (not facts.pool or facts.exact_client == "current")
+                          for facts in gate.facts.values())
     findings = operator_mod.doctor_findings(
         runtime.catalog.docs, snapshot, plan=plan, admitted=admitted, refs=scan.refs, live=scan.live,
         unreadable=(*scan.unreadable, *(("sessions directory",) if scan.directory_error else ())),
         key_refs=runtime.operator_key_references(), served=served, evidence=evidence, legacy=legacy,
         legacy_sha=legacy_sha, marker_doc=marker_doc, marker_error=marker_error, overlay_conflicts=conflicts,
-        unset_secrets=unset, agent_eligible=agent_eligible,
+        unset_secrets=unset, agent_eligible=agent_eligible, agent_qualified=agent_qualified,
     )
     return list(findings.blocks), [*findings.attention, *agent_attention], list(findings.info)
 
@@ -1149,6 +1152,15 @@ def _doctor_profile_report(runtime: runtime_mod.Runtime) -> tuple[list[str], lis
         for finding in evaluation.lineup.notices:
             if finding.code in {"retired-successor", "retired-unbound"}:
                 attention.append(f"profile {name}: {finding.message}")
+        attention.extend(f"profile {name}: {finding.message}" for finding in evaluation.lineup.warnings
+                         if finding.code in profile_mod.MODEL_WARNING_CODES)
+        try:
+            workflow_warnings = scope_mod.workflow_default_warnings(
+                lcat, eff, policy=evaluation.lineup.policy or profile_mod.default_policy(eff))
+        except scope_mod.ScopeError as exc:
+            problems.append(f"profile {name}: {exc}")
+        else:
+            attention.extend(f"profile {name}: {finding.message}" for finding in workflow_warnings)
         gaps = _provider_credential_gaps(runtime, evaluation.lineup)
         # A shipped profile for providers not set up at all is simply not
         # connected here, not a credential gap to fix.
@@ -2352,8 +2364,7 @@ def _doctor_env_keep_report(runtime: runtime_mod.Runtime) -> tuple[list[str], li
 
 
 def _doctor_new_lines_report(runtime: runtime_mod.Runtime) -> list[str]:
-    """Info for each shipped model that is new and not admitted yet, with the
-    admission path."""
+    """Attention for each New model lacking the optional admission badge."""
 
     try:
         lines = runtime.lineup_catalog().lines
@@ -2366,8 +2377,8 @@ def _doctor_new_lines_report(runtime: runtime_mod.Runtime) -> list[str]:
         if line.get("status") != "new" or key in admitted:
             continue
         found.append(gateway_facts.Finding(
-            f"New model available: {line.get('display', key)} ({key}) — off until admitted: "
-            f"claude-multi models admit {key} (or Models, then Enter on its row)",
+            f"New model: {line.get('display', key)} ({key}) — not admitted (optional badge): "
+            f"claude-multi models admit {key} (or Models, then Enter; use does not require it)",
             code="model-newly-available", subject_id=key if observations.identifier(key) else None,
             public="a new model is available and not admitted", remedy=f"claude-multi models admit {key}",
         ))

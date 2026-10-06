@@ -275,7 +275,7 @@ def import_target(runtime: runtime_mod.Runtime) -> portability.ImportTarget:
         profiles=profiles, unreadable_profiles=unreadable, seeds=runtime.catalog.seed_profiles,
         bindings=bindings, settings=settings_document, provider_files=files,
         provider_refusal=provider_refusal, propose=lambda changes: providers_cmd.proposed(ctx, changes),
-        approved_routes=approved, admitted=admitted, transport_choices=transports,
+        approved_routes=approved, transport_choices=transports,
         settings_error=settings_error, binding_errors=binding_errors, profile_errors=profile_errors,
         fingerprint=fingerprint, provider_keys=_provider_keys(runtime),
     )
@@ -579,7 +579,7 @@ def import_command(runtime: runtime_mod.Runtime, args: argparse.Namespace, *, in
         "", portability.APPLIED_HEADER,
         "Not applied: " + ("; ".join(skipped) if skipped else "nothing") + ".",
         portability.APPLIED_TRUST,
-        portability.APPLIED_RERUN,
+        *([portability.APPLIED_RERUN] if skipped or plan.routes or plan.transports else []),
         *plan.trust_lines(),
     ])
     return 0

@@ -16,7 +16,7 @@
   kept environment            none       default none                                                            next
   Providers & models
   providers enabled           8 of 8     G opens providers                                                       next
-  New lines admitted          0          M opens models                                                          next
+  Optional admission badges   0          M opens models                                                           now
   Gateway
   token                       rotate…    last rotated 2026-09-01                                                 live
   The effective window is the smaller of this ceiling and the lead set's smallest provider bound; agent lines below it

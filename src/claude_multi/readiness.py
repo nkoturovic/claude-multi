@@ -7,8 +7,8 @@ verdicts from here.
 
 Two kinds of facts, kept apart:
 
-* **Authority** (fail closed): evaluation errors (admission, route,
-  capability/role/effort, the agent gate) and the selected-transport
+* **Authority** (fail closed): structural routing/effort evaluation errors
+  and the selected-transport
   direct-provider credential. They are reported here with ``authority=True``
   but they are enforced where they always were (``profile.evaluate``,
   ``Runtime.lineup_secret_problems``); readiness never adds a block.
@@ -16,8 +16,8 @@ Two kinds of facts, kept apart:
   credential records, LAN reachability, passive quota. An unavailable
   observation (gateway down, management disabled, no journal, no quota
   data, an unreadable or absent auth directory) is ``unknown``, never a
-  failure. The one exception is a slot bound to a known-unreachable LAN
-  line refuses a launch fast (``lan_refusals``), with the network-scoped text.
+  failure. A known-unreachable LAN line is not locally ready, but that
+  observation only warns; it is not an additional launch veto.
 
 Ready means locally configured and served, never upstream verification.
 """
@@ -202,8 +202,8 @@ def unready_texts(rows: Sequence[SlotReadiness]) -> list[str]:
 
 
 def lan_refusals(rows: Sequence[SlotReadiness]) -> list[str]:
-    """The fast pre-launch refusal of a bound slot on a known-unreachable
-    LAN line (the one readiness fact that refuses a launch)."""
+    """Legacy text helper for known-unreachable LAN slots. These are
+    observations for Attention, not authorization to refuse a launch."""
 
     return [f"{profile.label(row.slot)}: {row.key}: {reason.text} — {reason.remedy}"
             for row in rows for reason in row.reasons if reason.code == "lan" and reason.blocking]
@@ -261,9 +261,9 @@ def plan_starter(
     ``ready_keys`` are the offered lines whose readiness (credential,
     served, reachability) is ``ready``; ``slot_ok(slot, key, effort)`` is
     the authority check for one binding (``profile.evaluate`` of a one-slot
-    document: capability, role, effort, the agent gate). Per slot: keep the
-    exact template binding when it is ready and allowed; otherwise choose
-    among ready lines that admit that exact slot, preferring the template
+    document: routing, required compile fields and representable effort).
+    Per slot: keep the exact template binding when it is ready and usable;
+    otherwise choose among ready usable lines, preferring the template
     binding's family, then the effort nearest the template's, then a
     stable key order. Model quality is never inferred from names. An
     agent slot with no candidate stays unbound and is named; no ready lead
@@ -287,7 +287,8 @@ def plan_starter(
 
         if slot_is_reviewer[0] and lead_family:
             family = families.get(key)
-            return 0 if family not in (None, profile.UNKNOWN_FAMILY, lead_family[0]) else 1
+            return 0 if family is not None and profile.independent_families(
+                family, lead_family[0], lcat.known_families) else 1
         return 0
 
     slot_is_reviewer = [False]
@@ -303,7 +304,8 @@ def plan_starter(
             entry = lcat.lines.get(key)
             if not isinstance(entry, Mapping):
                 continue
-            efforts = [level for level in profile.declared_efforts(entry)]
+            native = lcat.lead_efforts if slot == catalog.LEAD_ROLE else lcat.agent_efforts
+            efforts = profile.available_efforts(entry, native, lead=slot == catalog.LEAD_ROLE)
             if slot == catalog.LEAD_ROLE and want_effort == profile.ULTRACODE:
                 efforts = [profile.ULTRACODE] if isinstance(entry.get("lead"), Mapping) else []
             ranked = sorted(efforts, key=lambda level: (_effort_distance(level, want_effort), level))
@@ -340,25 +342,18 @@ def plan_starter(
             unresolved.append(rid)
         else:
             agents[rid] = chosen
-    # A grade whose ``requires`` is unbound cannot stand alone (R-R rules):
-    # unbind it too and name it.
-    changed = True
-    while changed:
-        changed = False
-        for rid in list(agents):
-            role = lcat.roles.get(rid) if isinstance(lcat.roles, Mapping) else None
-            requires = role.get("requires", ()) if isinstance(role, Mapping) else ()
-            if any(required not in agents for required in requires or ()):
-                del agents[rid]
-                unresolved.append(rid)
-                rows = [StarterRow(row.slot, row.template, "unbound") if row.slot == rid else row for row in rows]
-                changed = True
     document["agents"] = agents
+    warnings = []
+    for rid in agents:
+        role = lcat.roles.get(rid) or {}
+        for required in role.get("requires", ()):
+            if required not in agents:
+                warnings.append(f"{profile.label(rid)}: recommended companion {required} is unbound")
     native = document.get("native_agents")
     if isinstance(native, dict) and native.get("explore") == "replace" and "cm-explorer" not in agents:
-        native["explore"] = "native"  # 'replace' requires cm-explorer
+        warnings.append("Explore remains disabled: its configured replacement cm-explorer is unbound")
     order = {rid: index for index, rid in enumerate(catalog.AGENT_ROLE_IDS)}
-    return StarterPlan(document, tuple(rows), (), tuple(sorted(set(unresolved), key=order.get)))
+    return StarterPlan(document, tuple(rows), tuple(warnings), tuple(sorted(set(unresolved), key=order.get)))
 
 
 def starter_preview(plan: StarterPlan, *, name: str, warnings: Sequence[str] = ()) -> str:
@@ -367,7 +362,8 @@ def starter_preview(plan: StarterPlan, *, name: str, warnings: Sequence[str] = (
 
     lines = [STARTER_HEADER]
     lines += [f"{profile.label(row.slot)}: {row.template} -> {row.proposed}" for row in plan.rows]
-    notes = list(warnings) + [f"{profile.label(slot)} unbound (no ready line admits it)" for slot in plan.unresolved]
+    notes = list(dict.fromkeys((*plan.warnings, *warnings))) + [
+        f"{profile.label(slot)} unbound (no ready line supports it)" for slot in plan.unresolved]
     lines.append("Warnings: " + ("; ".join(notes) if notes else "none"))
     lines.append(STARTER_FOOTER)
     return "\n".join(lines) + "\n"

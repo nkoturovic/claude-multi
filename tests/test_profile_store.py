@@ -16,9 +16,10 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
-from claude_multi import catalog, paths, profile, sessions, settings, state, strict_json
+from claude_multi import catalog, custom, paths, profile, sessions, settings, state, strict_json
 
 from _catalog import FIXTURE_ROOT
 
@@ -290,30 +291,141 @@ class BindingStoreTests(StoreCase):
         self.assertTrue(message.endswith("-> sol; bind the live line"))
         self.bstore.set("x", "sol", "high", cat=lcat)  # passing counterpart
 
-    def test_b6_status_new_until_admitted(self) -> None:
+    def test_new_line_named_binding_needs_no_admission(self) -> None:
         lcat = _lcat_with(lambda docs: docs["models"]["models"]["grok46"].update(status="new"))
-        self.assertEqual(
-            self.binding_error(lambda: self.bstore.set("x", "grok46", "high", cat=lcat)),
-            "bindings.x.model: model 'grok46' is New · Off (status new) until admitted",
-        )
+        self.bstore.set("x", "grok46", "high", cat=lcat)
+        self.assertEqual(self.bstore.bindings()["x"], b("grok46", "high"))
+        document = pdoc("new-line", use("x"), {"cm-reviewer": use("x")})
+        before = self.bstore.path.read_bytes()
+        lineup = profile.resolve(document, lcat, bindings=self.bstore.bindings())
+        self.assertEqual({f.slot for f in lineup.warnings if f.code == "admission"},
+                         {"cm-lead", "cm-reviewer"})
         admitted = settings.Effective(
             providers_enabled={}, admitted_lines=frozenset({"grok46"}), unknown=()
         )
-        self.bstore.set("x", "grok46", "high", cat=lcat, effective=admitted)
-        self.assertEqual(self.bstore.bindings()["x"], b("grok46", "high"))
+        after = profile.resolve(document, lcat, bindings=self.bstore.bindings(), effective=admitted)
+        self.assertNotIn("admission", [f.code for f in after.warnings])
+        self.assertEqual(after.applied_bindings(), lineup.applied_bindings())
+        self.assertEqual(self.bstore.path.read_bytes(), before)
 
-    def test_b7_effort_must_be_declared(self) -> None:
+    def test_b7_gateway_effort_needs_a_mapping(self) -> None:
         self.assertEqual(
             self.binding_error(lambda: self.bstore.set("x", "sol", "medium", cat=_BUNDLE)),
-            "bindings.x.effort: 'medium' is not declared by 'sol' (declared: high, xhigh, ultracode)",
+            "bindings.x.effort: 'medium' is not supported by 'sol' (available: high, xhigh, ultracode)",
         )
         self.assertEqual(
             self.binding_error(lambda: self.bstore.set("x", "gpt55", "ultracode", cat=_BUNDLE)),
-            "bindings.x.effort: 'ultracode' is not declared by 'gpt55' (declared: high)",
+            "bindings.x.effort: 'ultracode' is not supported by 'gpt55' (available: high)",
         )
         # passing counterparts: ultracode on a lead-capable line, a declared agent effort
         self.bstore.set("x", "sol", "ultracode", cat=_BUNDLE)
         self.bstore.set("y", "gpt55", "high", cat=_BUNDLE)
+
+    def test_single_selector_named_effort_warns_when_used_not_when_saved(self) -> None:
+        self.bstore.set("native", "opus55", "high", cat=_BUNDLE)
+        document = pdoc("native", use("native"), {"cm-reviewer": use("native")})
+        lineup = profile.resolve(document, _BUNDLE, bindings=self.bstore.bindings())
+        self.assertEqual(
+            [(f.slot, f.message) for f in lineup.warnings if f.code == "effort-unverified"],
+            [(slot, "effort 'high' unverified for this line (not declared)")
+             for slot in ("cm-lead", "cm-reviewer")],
+        )
+        self.assertEqual(lineup.lead.binding.effort, "high")
+        self.assertEqual(lineup.agents["cm-reviewer"].binding.effort, "high")
+        cat = replace(profile.LineupCatalog.from_catalog(_BUNDLE),
+                      agent_efforts=("high",), lead_efforts=("high", "ultracode"))
+        before = self.bstore.path.read_bytes()
+        self.assertEqual(
+            self.binding_error(lambda: self.bstore.set("native", "opus55", "max", cat=cat)),
+            "bindings.native.effort: 'max' is not supported by 'opus55' (available: high, ultracode)",
+        )
+        self.assertEqual(self.bstore.path.read_bytes(), before)
+
+    def test_legacy_custom_named_binding_keeps_its_key_and_selector(self) -> None:
+        docs = custom.merge_docs(_BUNDLE.docs, {
+            "version": 1, "providers": {}, "models": {
+                "c1": {"wire_model": "some-wire", "provider": "kimi",
+                       "context_tokens": 262144, "created_via": "manual"},
+            },
+        })
+        cat = profile.LineupCatalog.from_docs(docs)
+        self.bstore.set("legacy", "c1", "high", cat=cat)
+        document = pdoc("legacy", use("legacy"), {rid: use("legacy") for rid in profile.AGENT_ROLE_IDS})
+        self.pstore.new(document)
+        lineup = profile.resolve(self.pstore.load("legacy"), cat, bindings=self.bstore.bindings())
+        self.assertEqual(self.bstore.bindings()["legacy"], b("c1", "high"))
+        self.assertEqual(lineup.lead.binding.selector, "custom-c1")
+        self.assertEqual(set(lineup.agents), set(profile.AGENT_ROLE_IDS))
+        for rid, agent in lineup.agents.items():
+            with self.subTest(slot=rid):
+                self.assertEqual((agent.binding.key, agent.binding.selector), ("c1", "custom-c1"))
+                codes = {f.code for f in lineup.warnings if f.slot == rid}
+                self.assertTrue({"capability-recommendation", "role-recommendation"} <= codes)
+
+    def test_unadmitted_operator_named_binding_is_usable_but_route_blocks_still_refuse(self) -> None:
+        def operator_line(docs):
+            entry = copy.deepcopy(docs["models"]["models"]["opus55"])
+            entry.update(status="new", selector="custom-unverified[1m]", capabilities=["lead"], roles=[])
+            docs["models"]["models"]["custom-unverified"] = entry
+            docs[profile.OPERATOR_LINES_KEY] = {"custom-unverified": {"origin": "operator", "family": "mistral"}}
+
+        cat = _lcat_with(operator_line)
+        self.bstore.set("operator", "custom-unverified", "high", cat=cat)
+        document = pdoc("operator", use("operator"), {"cm-reviewer-strong": use("operator")})
+        lineup = profile.resolve(document, cat, bindings=self.bstore.bindings())
+        for slot in ("cm-lead", "cm-reviewer-strong"):
+            with self.subTest(slot=slot):
+                codes = {f.code for f in lineup.warnings if f.slot == slot}
+                self.assertTrue({"admission", "qualification", "family-unknown", "effort-unverified"} <= codes)
+        self.assertIn("companion-grade", {f.code for f in lineup.warnings})
+        before = self.bstore.path.read_bytes()
+        for admitted in (frozenset(), frozenset({"custom-unverified"})):
+            effective = settings.Effective(
+                providers_enabled={}, admitted_lines=admitted, unknown=(),
+                unavailable_lines={"custom-unverified": "route approval required"},
+            )
+            with self.subTest(admitted=bool(admitted)):
+                self.assertEqual(
+                    self.binding_error(lambda: self.bstore.set("operator", "custom-unverified", "xhigh",
+                                                              cat=cat, effective=effective)),
+                    "bindings.operator.model: route approval required",
+                )
+                self.assertEqual(self.bstore.path.read_bytes(), before)
+
+    def test_named_metadata_can_be_saved_while_provider_is_disabled_but_use_refuses(self) -> None:
+        effective = settings.Effective(providers_enabled={"anthropic": False}, admitted_lines=frozenset(), unknown=())
+        self.bstore.set("disabled", "opus55", "xhigh", cat=_BUNDLE, effective=effective)
+        document = pdoc("disabled", use("disabled"), {})
+        result = profile.evaluate(document, _BUNDLE, bindings=self.bstore.bindings(), effective=effective)
+        self.assertEqual(result.errors,
+                         ("lead.use: named binding 'disabled': provider 'anthropic' is disabled in Settings",))
+        self.assertIsNone(result.lineup)
+
+    def test_malformed_named_line_or_unknown_provider_still_refuses_before_write(self) -> None:
+        for mutate, reason in (
+            (lambda docs: docs["models"]["models"]["sol"].update(provider="nope"), "unknown provider 'nope'"),
+            (lambda docs: docs["models"]["models"]["sol"]["efforts"]["high"].pop("proxy_contract"),
+             "line 'sol' is malformed (efforts.high lacks selector/proxy_contract)"),
+        ):
+            with self.subTest(reason=reason):
+                cat = _lcat_with(mutate)
+                self.assertEqual(self.binding_error(lambda: self.bstore.set("broken", "sol", "high", cat=cat)),
+                                 f"bindings.broken.model: {reason}")
+                self.assertFalse(self.bstore.path.exists())
+
+    def test_edit_may_add_recommendation_warnings_without_invalidating_profiles(self) -> None:
+        self.base_bindings()
+        self.pstore.new(p1())
+        self.pstore.new(p2())
+        before = {name: self.pstore.load(name) for name in ("p1", "p2")}
+        self.bstore.set("frontier", "qwen-flash-next", "max", cat=_BUNDLE, profiles=self.pstore)
+        for name, slot in (("p1", "cm-analyst-strong"), ("p2", "cm-reviewer-strong")):
+            with self.subTest(profile=name):
+                self.assertEqual(self.pstore.load(name), before[name])
+                lineup = profile.resolve(self.pstore.load(name), _BUNDLE, bindings=self.bstore.bindings())
+                self.assertEqual(lineup.agents[slot].binding.key, "qwen-flash-next")
+                codes = {f.code for f in lineup.warnings if f.slot == slot}
+                self.assertTrue({"capability-recommendation", "role-recommendation", "effort-unverified"} <= codes)
 
     def test_every_name_is_reported_sorted(self) -> None:
         document = {
@@ -322,7 +434,7 @@ class BindingStoreTests(StoreCase):
         }
         self.assertEqual(
             self.binding_error(lambda: self.bstore.save(document, cat=_BUNDLE)),
-            "bindings.aa.effort: 'medium' is not declared by 'sol' (declared: high, xhigh, ultracode); "
+            "bindings.aa.effort: 'medium' is not supported by 'sol' (available: high, xhigh, ultracode); "
             "bindings.zz.model: unknown model 'nope'",
         )
         self.assertFalse((self.tmp / "home").exists())  # a refused save creates nothing
@@ -366,9 +478,9 @@ class BindingStoreTests(StoreCase):
             message.split("; "),
             [
                 "named binding 'anthropic-lead' would invalidate profile 'p1': "
-                "lead.use: named binding 'anthropic-lead': 'gpt55' lacks the lead capability",
+                "lead.use: named binding 'anthropic-lead': 'gpt55' lacks the lead/context fields required for compilation",
                 "named binding 'anthropic-lead' would invalidate profile 'p2': "
-                "lead.use: named binding 'anthropic-lead': 'gpt55' lacks the lead capability",
+                "lead.use: named binding 'anthropic-lead': 'gpt55' lacks the lead/context fields required for compilation",
             ],
         )
         self.assertEqual(self.bstore.path.read_bytes(), before)
@@ -394,11 +506,12 @@ class BindingStoreTests(StoreCase):
 
     def test_b9_ignores_errors_the_old_bindings_already_had(self) -> None:
         self.base_bindings()
-        # cm-analyst-strong requires cm-analyst: invalid before and after the edit.
-        broken = pdoc("broken", b("opus55", "ultracode"), {"cm-analyst-strong": use("frontier")})
+        # An unrelated unresolved model stays invalid before and after the edit.
+        broken = pdoc("broken", b("nope", "ultracode"), {"cm-analyst-strong": use("frontier")})
         self.pstore.new(broken)
-        self.assertTrue(
-            profile.evaluate(broken, _BUNDLE, bindings=self.bstore.bindings()).errors
+        self.assertEqual(
+            profile.evaluate(broken, _BUNDLE, bindings=self.bstore.bindings()).errors,
+            ("lead.model: unknown model 'nope'",),
         )
         self.bstore.set("frontier", "fable", "max", cat=_BUNDLE, profiles=self.pstore)
         self.assertEqual(self.bstore.bindings()["frontier"], b("fable", "max"))

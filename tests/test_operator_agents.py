@@ -149,11 +149,11 @@ class StagingTests(AgentCase):
         self.assertNotEqual(self.digest(), lead_only)
         self.assertEqual(operator_mod.line_aliases(layer.lines[AGENT_KEY].core_entry), (AGENT_SELECTOR,))
         self.assertNotIn(AGENT_KEY, self.runtime.current_effective().admitted_lines)
-        # 3. Qualify before admission: evidence only — still not eligible.
+        # Qualification and admission are independent optional attestations.
         record_passes(self.env, AGENT_KEY, self.digest())
-        errors = self.evaluate(agent_document()).errors
-        self.assertEqual(errors, ("profile t2: agents.cm-reviewer: custom-acme-agent is not agent-eligible (not "
-                                  "admitted with its current definition) — claude-multi models admit custom-acme-agent",))
+        evaluation = self.evaluate(agent_document())
+        self.assertEqual(evaluation.errors, ())
+        self.assertIn("admission", {w.code for w in evaluation.lineup.warnings})
         # 4. Re-admit the changed definition: eligible, no deadlock.
         self.install(self.runtime, requested, keys=(AGENT_KEY,))
         evaluation = self.evaluate(agent_document())
@@ -183,76 +183,71 @@ class GateTests(unittest.TestCase):
                                              facts=self.FACTS if facts is self._DEFAULT else facts,
                                              agent_efforts=self.EFFORTS, **kw)
 
-    def test_each_condition_fails_closed(self) -> None:
+    def test_recommendations_and_evidence_warn_but_route_and_effort_stay_hard(self) -> None:
         self.assertTrue(self.verdict().eligible)
         replace = __import__("dataclasses").replace
         entry_cases = {
-            "the line does not request": dict(self.ENTRY, capabilities=["lead"]),
-            "its roles do not request cm-reviewer": dict(self.ENTRY, roles=["cm-explorer"]),
-            "its lead env is not empty": dict(self.ENTRY, lead={"effort": "high", "env": {"X": "1"}}),
-            "compacts at 167000 tokens (95%), above its provider bound 131072": dict(
-                self.ENTRY, context={"client_tokens": 200000, "provider_tokens": 131072}),
+            "capability-recommendation": dict(self.ENTRY, capabilities=["lead"]),
+            "role-recommendation": dict(self.ENTRY, roles=["cm-explorer"]),
+            "lead-env-ignored": dict(self.ENTRY, lead={"effort": "high", "env": {"X": "1"}}),
+            "context-risk": dict(self.ENTRY, context={"client_tokens": 200000, "provider_tokens": 131072}),
         }
-        for reason, entry in entry_cases.items():
-            with self.subTest(reason=reason):
+        for code, entry in entry_cases.items():
+            with self.subTest(code=code):
                 verdict = self.verdict(entry=entry)
-                self.assertFalse(verdict.eligible)
-                self.assertTrue(any(reason in text for text in verdict.reasons), verdict.reasons)
-        fact_cases = {
-            "not admitted with its current definition": (replace(self.FACTS, admitted=False),
-                                                         "claude-multi models admit custom-x"),
-            "the route of provider acme is changed": (replace(self.FACTS, route="changed"),
-                                                      "claude-multi providers approve acme"),
-            '"agents" needs a retention-audited route; openai-compatible-lan is lead-only': (
-                replace(self.FACTS, d60=False, route_kind="openai-compatible-lan"), "bind another model"),
-            "family acme is not a catalog-declared family": (replace(self.FACTS, family="acme"),
-                                                              "claude-multi models edit custom-x"),
-            "no current tools evidence": (replace(self.FACTS, evidence="missing", evidence_gaps=("tools",)),
-                                          "claude-multi models qualify custom-x --agents"),
-            "failed stream qualification": (replace(self.FACTS, evidence="failed", evidence_gaps=("stream",)),
-                                            "claude-multi models qualify custom-x --agents"),
-            "its qualification is for an earlier definition": (replace(self.FACTS, evidence="definition-stale"),
-                                                               "claude-multi models qualify custom-x --agents"),
-            "exact-client proof unavailable on this platform": (
-                replace(self.FACTS, pool=True, exact_client="unavailable"), "bind another model"),
-            "no exact-client proof": (replace(self.FACTS, pool=True, exact_client="missing"),
-                                      "claude-multi models qualify custom-x --agents"),
-            "the exact-client check failed": (replace(self.FACTS, pool=True, exact_client="failed"),
-                                              "claude-multi models qualify custom-x --agents"),
-        }
-        for reason, (facts, remedy) in fact_cases.items():
-            with self.subTest(reason=reason):
+                self.assertTrue(verdict.eligible, verdict.reasons)
+                self.assertIn(code, {w.code for w in verdict.warnings})
+        fact_cases = (
+            ("admission", "not admitted", replace(self.FACTS, admitted=False)),
+            ("family-unknown", "independence unknown", replace(self.FACTS, family="acme")),
+            ("qualification", "no current tools evidence", replace(self.FACTS, evidence="missing", evidence_gaps=("tools",))),
+            ("qualification", "failed stream", replace(self.FACTS, evidence="failed", evidence_gaps=("stream",))),
+            ("qualification", "stale for the current definition", replace(self.FACTS, evidence="definition-stale")),
+            ("exact-client", "unavailable", replace(self.FACTS, pool=True, exact_client="unavailable")),
+            ("exact-client", "missing", replace(self.FACTS, pool=True, exact_client="missing")),
+            ("exact-client", "failed", replace(self.FACTS, pool=True, exact_client="failed")),
+        )
+        for code, text, facts in fact_cases:
+            with self.subTest(code=code, text=text):
                 verdict = self.verdict(facts=facts)
-                self.assertFalse(verdict.eligible)
-                self.assertTrue(verdict.reasons[0].startswith(reason) or reason in verdict.reasons[0], verdict.reasons)
-                self.assertEqual(verdict.remedy, remedy)
-        for effort in ("ultracode", "max"):
-            with self.subTest(effort=effort):
-                self.assertFalse(self.verdict(effort=effort).eligible)
-        self.assertFalse(self.verdict(facts=None).eligible)  # no facts: fail closed
+                self.assertTrue(verdict.eligible, verdict.reasons)
+                self.assertEqual(verdict.evidence, facts.evidence)
+                self.assertTrue(any(w.code == code and text in w.message for w in verdict.warnings))
+        lan = self.verdict(facts=replace(self.FACTS, d60=False, route="keyless", route_kind="openai-compatible-lan"))
+        self.assertTrue(lan.eligible)
+        self.assertFalse(lan.reasons)
+        for route in ("changed", "unapproved"):
+            verdict = self.verdict(facts=replace(self.FACTS, route=route, admitted=False))
+            self.assertFalse(verdict.eligible)
+            self.assertIn(route, verdict.reasons[0])
+            self.assertEqual(verdict.remedy, "claude-multi providers approve acme")
+        for effort in ("ultracode", "max", "impossible"):
+            self.assertFalse(self.verdict(effort=effort).eligible)
+        missing = self.verdict(facts=None)
+        self.assertTrue(missing.eligible)
+        self.assertEqual(missing.evidence, "missing")
+        self.assertTrue(any("not qualified" in w.message for w in missing.warnings))
 
     def test_contract_stale_is_eligible_with_attention_and_workflow_needs_forced(self) -> None:
         replace = __import__("dataclasses").replace
         verdict = self.verdict(facts=replace(self.FACTS, evidence="contract-stale"))
         self.assertTrue(verdict.eligible)
-        self.assertEqual(verdict.attention, "operator agent custom-x: qualification predates the current pins — "
-                                            "re-qualify with claude-multi models qualify custom-x --agents")
+        self.assertTrue(verdict.attention)
+        self.assertTrue(any(w.code == "qualification" and "predates the current pins" in w.message
+                            for w in verdict.warnings))
         auto_only = replace(self.FACTS, tools_variants=frozenset({"auto"}))
         self.assertTrue(self.verdict(facts=auto_only).eligible)  # an agent role: auto suffices
         workflow = self.verdict(facts=auto_only, slot=None, use=profile_mod.WORKFLOW_USE)
-        self.assertFalse(workflow.eligible)
-        self.assertEqual(workflow.reasons[0], "a workflow default needs the forced named-tool variant; only the "
-                                              "automatic-tool variant passed")
-        self.assertEqual(workflow.remedy, "claude-multi models qualify custom-x --tools --tool-choice forced")
+        self.assertTrue(workflow.eligible, workflow.reasons)
+        self.assertIn("tool-evidence", {w.code for w in workflow.warnings})
 
     def test_record_mode_keeps_a_proven_grant_and_never_grants_a_changed_slot(self) -> None:
         replace = __import__("dataclasses").replace
         stale = replace(self.FACTS, evidence="missing", admitted=False)
         kept = self.verdict(facts=stale, mode=profile_mod.AGENT_MODE_RECORD, recorded=True)
         self.assertTrue(kept.eligible)
-        self.assertEqual(kept.attention, "operator agent custom-x: qualification is stale for the current pins; "
-                                         "running binding retained — re-qualify before the next launch or resume")
-        self.assertFalse(self.verdict(facts=stale, mode=profile_mod.AGENT_MODE_RECORD, recorded=False).eligible)
+        self.assertEqual(kept.warnings, self.verdict(facts=stale).warnings)
+        self.assertTrue(self.verdict(facts=stale, mode=profile_mod.AGENT_MODE_RECORD, recorded=False).eligible)
         with self.assertRaises(ValueError):
             self.verdict(mode="whatever")
 
@@ -280,46 +275,48 @@ class GateWiringTests(AgentCase):
         super().setUp()
         self.install(self.runtime, self.acme_files(), keys=(AGENT_KEY,))
 
-    def test_e13_at_launch_and_no_fence_entry(self) -> None:
-        with self.assertRaises(cli_types.LaunchPlanError) as raised:
-            self.prepare(agent_document())
-        self.assertIn("- profile t2: agents.cm-reviewer: custom-acme-agent is not agent-eligible (no current smoke, "
-                      "efforts, tools, stream evidence) — claude-multi models qualify custom-acme-agent --agents",
-                      str(raised.exception))
-        self.assertEqual(self.launches, [])
-        record_passes(self.env, AGENT_KEY, self.digest())
+    @test_lineup._fixed_id()
+    def test_unqualified_launch_keeps_exact_selector_in_fence(self) -> None:
         prepared = self.prepare(agent_document())
+        self.assertTrue(any(w.code == "qualification" and "not qualified" in w.message
+                            for w in prepared.lineup.warnings))
+        self.assertEqual(self.launches, [])
         self.assertIn(AGENT_SELECTOR, prepared.result.fence.agent_set)
         self.assertIn(AGENT_SELECTOR, prepared.result.scope_plan.settings["availableModels"])
         self.assertEqual(prepared.lineup.agents["cm-reviewer"].binding.family, "unknown")
+        before = prepared.result.scope_plan
+        record_passes(self.env, AGENT_KEY, self.digest())
+        after = self.prepare(agent_document()).result.scope_plan
+        self.assertEqual(before.agent_files, after.agent_files)
+        self.assertEqual(before.settings, after.settings)
+        self.assertEqual(before.other_files, after.other_files)
 
     def test_contract_stale_is_attention_definition_change_fails_closed(self) -> None:
         record_passes(self.env, AGENT_KEY, self.digest(), contracts=OTHER_CONTRACTS)
         prepared = self.prepare(agent_document())
         warnings = {finding.code: finding.message for finding in prepared.lineup.warnings}
-        self.assertEqual(warnings["operator-agent-attention"],
-                         "operator agent custom-acme-agent: qualification predates the current pins — re-qualify with "
-                         "claude-multi models qualify custom-acme-agent --agents")
-        # A definition change is definition-stale: an authority failure.
+        self.assertIn("predates the current pins", warnings["qualification"])
+        # A definition change invalidates evidence, not the usable route.
         files = self.acme_files()
         files["acme"]["lines"][AGENT_KEY]["context"]["declared_tokens"] = 190000
         self.install(self.runtime, files, keys=(AGENT_KEY,))
-        with self.assertRaisesRegex(cli_types.LaunchPlanError, "its qualification is for an earlier definition"):
-            self.prepare(agent_document())
+        prepared = self.prepare(agent_document())
+        self.assertTrue(any(w.code == "qualification" and "stale for the current definition" in w.message
+                            for w in prepared.lineup.warnings))
 
     def test_workflow_default_on_an_operator_line_needs_the_forced_variant(self) -> None:
         record_passes(self.env, AGENT_KEY, self.digest(), variant="auto")
         self.runtime.settings_store.update(
             lambda doc: doc.__setitem__("workflow_default_binding", {"model": AGENT_KEY, "effort": "high"}),
             catalog=self.runtime.lineup_catalog())
-        with self.assertRaisesRegex(Exception, "Settings workflow_default_binding.model: custom-acme-agent is not "
-                                               "agent-eligible \\(a workflow default needs the forced named-tool "
-                                               "variant"):
-            self.prepare(agent_document("cm-analyst", *t1_agent()))
+        prepared = self.prepare(agent_document("cm-analyst", *t1_agent()))
+        self.assertTrue(any("forced named-tool" in notice for notice in prepared.notices), prepared.notices)
+        before = prepared.result.scope_plan
         record_passes(self.env, AGENT_KEY, self.digest(), variant="forced")
         prepared = self.prepare(agent_document("cm-analyst", *t1_agent()))
         self.assertIn(AGENT_SELECTOR, prepared.result.scope_plan.settings["availableModels"])
         self.assertEqual(prepared.result.scope_plan.settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], AGENT_SELECTOR)
+        self.assertEqual(before.other_files, prepared.result.scope_plan.other_files)
 
     def test_picker_facts_come_from_the_gate(self) -> None:
         from claude_multi import views
@@ -331,9 +328,8 @@ class GateWiringTests(AgentCase):
             picker = views.picker_rows(rows, slot="cm-reviewer", bindings={}, lcat=lcat, eff=eff, current=None)
             return next(entry for entry in picker.items if entry.kind == "line" and entry.key == AGENT_KEY)
 
-        dimmed = item()
-        self.assertFalse(dimmed.selectable)
-        self.assertIn("(not agent-eligible: no current smoke, efforts, tools, stream evidence)", dimmed.text)
+        unqualified = item()
+        self.assertTrue(unqualified.selectable)
         record_passes(self.env, AGENT_KEY, self.digest())
         self.assertTrue(item().selectable)
 
@@ -356,12 +352,11 @@ class T2FamilyTests(AgentCase):
         self.assertNotIn("acme", trusted)
         facts = self.runtime.lineup_catalog().agent_gate.facts[AGENT_KEY]
         self.assertEqual(facts.t1_families, trusted)
-        errors = self.evaluate(agent_document()).errors
-        self.assertEqual(len(errors), 1)
-        self.assertIn("custom-acme-agent is not agent-eligible (family acme is not a catalog-declared family "
-                      "(declare one, or unknown))", errors[0])
-        with self.assertRaises(cli_types.LaunchPlanError):
-            self.prepare(agent_document())
+        evaluation = self.evaluate(agent_document())
+        self.assertEqual(evaluation.errors, ())
+        self.assertTrue(any(w.code == "family-unknown" for w in evaluation.lineup.warnings))
+        self.assertNotIn("acme", self.runtime.lineup_catalog().known_families)
+        self.assertTrue(self.prepare(agent_document()).lineup.routing.independence_unknown)
         # Declared unknown: eligible (never independent); T1-family declarations
         # on an aggregator stay eligible (AggregatorFamilyTests).
         self.install(self.runtime, self.acme_files(), keys=(AGENT_KEY,))
@@ -388,6 +383,72 @@ class FenceTests(AgentCase):
         self.assertLessEqual(t1 & set(after), set(after))
         bound = self.prepare(agent_document()).result.scope_plan.settings["availableModels"]
         self.assertEqual(set(bound) - set(after), {AGENT_SELECTOR})
+
+
+class PermissiveDeclarationsTests(AgentCase):
+    def test_unadmitted_lead_only_recommendations_allow_every_agent_grade(self) -> None:
+        fixtures = operator_fixtures._fixture_files()
+        messages = self.acme_files(capabilities=["lead"], roles=[], family="Mistral")
+        keyed = copy.deepcopy(messages)
+        keyed["acme"]["provider"]["kind"] = "openai-compatible"
+        keyed["acme"]["provider"].pop("payload_contracts", None)
+        keyed["acme"]["lines"][AGENT_KEY]["efforts"] = ["high"]
+        lan = copy.deepcopy(fixtures["lanbox"])
+        lan["lines"]["custom-lan-model"]["context"]["declared_tokens"] = 128000
+        router = {"version": 1, "lines": {"custom-router-free": {
+            "wire_model": "mistral/fixture-model", "display": "Router fixture", "family": "Mistral",
+            "efforts": ["high"], "default_effort": "high",
+            "context": {"declared_tokens": 200000, "source": "operator"}}}}
+        cases = ((messages, AGENT_KEY, ("acme",)), (keyed, AGENT_KEY, ("acme",)),
+                 ({"lanbox": lan}, "custom-lan-model", ()),
+                 ({"kimi": fixtures["kimi"]}, "custom-kimi-next", ()),
+                 ({"anthropic": fixtures["anthropic"]}, "custom-claude-fixture", ()),
+                 ({"openrouter": router}, "custom-router-free", ()))
+        with mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("automatic smoke")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("automatic qualification")):
+            for files, key, routes in cases:
+                with self.subTest(key=key, kind=files.get("acme", {}).get("provider", {}).get("kind")):
+                    self.install(self.runtime, files, routes=routes)
+                    entry = self.runtime.lineup_catalog().lines[key]
+                    document = agent_document(key=key, effort=entry["default_effort"], lead=key)
+                    document["agents"] = {rid: {"model": key, "effort": entry["default_effort"]}
+                                          for rid in profile_mod.AGENT_ROLE_IDS}
+                    prepared = self.prepare(document)
+                    self.assertNotIn(key, self.runtime.current_effective().admitted_lines)
+                    self.assertEqual(set(prepared.lineup.agents), set(profile_mod.AGENT_ROLE_IDS))
+                    codes = {w.code for w in prepared.lineup.warnings}
+                    self.assertTrue({"admission", "qualification", "capability-recommendation", "role-recommendation"}
+                                    <= codes, codes)
+                    self.assertTrue(any(w.slot == profile_mod.LEAD_ROLE and w.code == "qualification"
+                                        for w in prepared.lineup.warnings))
+                    for rid, agent in prepared.lineup.agents.items():
+                        self.assertIn(agent.binding.selector, prepared.result.scope_plan.settings["availableModels"])
+                        body = prepared.result.scope_plan.agent_files[f".claude/agents/{rid}.md"].decode()
+                        self.assertIn(f"model: {agent.binding.selector}\n", body)
+
+    def test_keyless_lan_agent_keeps_the_same_rendered_route(self) -> None:
+        from claude_multi import render
+
+        lan = copy.deepcopy(operator_fixtures._fixture_files()["lanbox"])
+        lan["lines"]["custom-lan-model"]["context"]["declared_tokens"] = 128000
+        self.install(self.runtime, {"lanbox": lan}, routes=())
+        prepared = self.prepare(agent_document(key="custom-lan-model"))
+        agent = prepared.lineup.agents["cm-reviewer"].binding
+        self.assertEqual(agent.selector, "custom-lan-model")
+        self.assertEqual(agent.client_context_tokens, 200000)
+        self.assertIn("context-risk", {w.code for w in prepared.lineup.warnings})
+        snapshot = self.runtime.operator_snapshot()
+        plan = operator_mod.render_plan(self.runtime.catalog.docs, snapshot.layer, snapshot.ledger)
+        config, _available, _unavailable, _info = render.build_config_document(
+            plan.docs["gateway"], plan.docs["providers"]["providers"], plan.docs["models"]["models"],
+            home=self.runtime.home, gateway_token="fixture", resolve_secret=lambda _ref: None,
+            continuity={}, captures=plan.captures, provider_headers=plan.headers, oauth_overlay=plan.overlay)
+        route = next(row for row in config["openai-compatibility"] if row["name"] == "lanbox")
+        self.assertEqual(route["base-url"], "http://box.lan:8010/v1")
+        self.assertNotIn("api-key-entries", route)
+        self.assertEqual([(row["name"], row["alias"], row["force-mapping"]) for row in route["models"]],
+                         [("lan-model", agent.selector, True)])
+        self.assertEqual(snapshot.layer.lines["custom-lan-model"].core_entry["capabilities"], ["lead"])
 
 
 # ------------------------------------------------------------ context class of an operator agent
@@ -438,16 +499,15 @@ class RecordAuthorityTests(AgentCase):
     def test_record_authority_keeps_a_recorded_binding_and_never_grants_a_new_one(self) -> None:
         eff = self.runtime.current_effective()
         gate = transition.record_agent_gate(self._record(), eff, self.runtime.lineup_catalog().agent_gate.facts)
-        # No evidence at all: the recorded grant stays (Attention), current refuses.
+        # Missing evidence is a warning in both modes, never mutable authority.
         kept = self.evaluate(agent_document(), gate=gate)
         self.assertEqual(kept.errors, ())
-        self.assertIn("running binding retained", {f.code: f.message for f in kept.lineup.warnings}
-                      ["operator-agent-attention"])
-        self.assertTrue(self.evaluate(agent_document()).errors)
-        # A new slot, or the same slot at a changed effort, is never granted by the record.
-        self.assertTrue(self.evaluate(agent_document("cm-analyst"), gate=gate).errors)
+        self.assertIn("qualification", {f.code for f in kept.lineup.warnings})
+        self.assertEqual(self.evaluate(agent_document()).errors, ())
+        self.assertEqual(self.evaluate(agent_document("cm-analyst"), gate=gate).errors, ())
         empty = transition.record_agent_gate(self._record(), eff, {})
-        self.assertTrue(self.evaluate(agent_document("cm-analyst"), gate=empty).errors)
+        self.assertEqual(self.evaluate(agent_document("cm-analyst"), gate=empty).errors, ())
+        self.assertTrue(self.evaluate(agent_document(effort="max"), gate=empty).errors)
 
 
 class InSessionTests(OperatorState, test_lineup.LineupCase):
@@ -490,25 +550,23 @@ class InSessionTests(OperatorState, test_lineup.LineupCase):
                       "(the model fence is fixed at launch); it applies at the next resume", out + err)
         pending = self.store.load(self.mid)["pending"]
         self.assertEqual(pending["document"]["agents"]["cm-reviewer"]["model"], AGENT_KEY)
-        # A pending change that fails the current gate by the resume is
-        # dropped with a notice (evidence gone meanwhile).
+        # Missing optional evidence never drops the pending binding.
         state.remove_private(evidence)
         prepared = self.prepare_resume(self.mid)
-        self.assertTrue(any("pending relaunch change dropped" in n and "not agent-eligible" in n
-                            for n in prepared.notices), prepared.notices)
+        self.assertFalse(any("pending relaunch change dropped" in n for n in prepared.notices), prepared.notices)
+        self.assertTrue(any("not qualified" in n for n in prepared.notices), prepared.notices)
         # With current evidence, resume applies it and the fence carries it.
         state.atomic_write(evidence, saved)
         record = self.resume(self.mid)
         self.assertEqual(record["applied"]["agents"]["cm-reviewer"]["selector"], AGENT_SELECTOR)
         settings = strict_json.loads((self.live(self.mid) / "settings.json").read_bytes())
         self.assertIn(AGENT_SELECTOR, settings["availableModels"])
-        # A new in-session binding the current gate refuses is refused (E13).
+        # An already-fenced selector can be assigned live without evidence.
         state.remove_private(evidence)
         code, out, err = self.request(f"set analyst={AGENT_KEY}:high")
-        self.assertIn("the requested lineup is invalid:\n- profile balanced: agents.cm-analyst: custom-acme-agent is "
-                      "not agent-eligible (no current smoke, efforts, tools, stream evidence) — claude-multi models "
-                      "qualify custom-acme-agent --agents", out + err)
-        self.assertNotIn(AGENT_KEY, str(self.store.load(self.mid)["applied"]["agents"].get("cm-analyst")))
+        self.assertIn("/reload-plugins", out + err)
+        self.assertIn("spawn it fresh", out + err)
+        self.assertEqual(self.store.load(self.mid)["applied"]["agents"]["cm-analyst"]["key"], AGENT_KEY)
         # The running reviewer is a recorded grant: record authority keeps
         # it with no evidence at all (doctor/converge never revoke).
         plan = transition.expected_plan(
@@ -538,13 +596,12 @@ class InSessionTests(OperatorState, test_lineup.LineupCase):
         self.assertEqual(record["applied"]["agents"]["cm-reviewer"]["selector"], AGENT_SELECTOR)
         generation = record["lineup_generation"]
         code, out, err = self.request(f"set analyst={AGENT_KEY}:high")
-        self.assertIn("analyst → custom-acme-agent-high: an operator agent binding is relaunch-class "
-                      "(the model fence is fixed at launch); it applies at the next resume", out + err)
+        self.assertIn("/reload-plugins", out + err)
         self.assertNotIn("reviewer → custom-acme-agent-high", out + err)  # the unchanged slot stays
         after = self.store.load(self.mid)
-        self.assertEqual(after["lineup_generation"], generation)
-        self.assertNotEqual((after["applied"]["agents"].get("cm-analyst") or {}).get("key"), AGENT_KEY)
-        self.assertEqual(after["pending"]["document"]["agents"]["cm-analyst"]["model"], AGENT_KEY)
+        self.assertEqual(after["lineup_generation"], generation + 1)
+        self.assertEqual(after["applied"]["agents"]["cm-analyst"]["key"], AGENT_KEY)
+        self.assertIsNone(after.get("pending"))
 
 
 # ------------------------------------------------------------ readiness vs authority, effective transport
@@ -603,8 +660,9 @@ class AggregatorFamilyTests(AgentCase):
         lineup = self.evaluate(document).lineup
         self.assertEqual(lineup.agents["cm-reviewer"].binding.family, "unknown")
         lead_row = next(row for row in lineup.routing.rows if row.author == "cm-lead")
-        self.assertTrue(lead_row.normal.same_family)  # no independent reviewer
-        self.assertIn("same-family-review", {f.code for f in lineup.warnings})
+        self.assertFalse(lead_row.normal.same_family)
+        self.assertTrue(lead_row.normal.independence_unknown)
+        self.assertIn("independence-unknown", {f.code for f in lineup.warnings})
         # An aggregator's own family is unknown: no family is ever assumed for
         # an undeclared line (its catalog lines declare theirs).
         self.assertEqual(self.runtime.catalog.docs["providers"]["providers"]["openrouter"]["independence_family"],
@@ -616,9 +674,9 @@ class AggregatorFamilyTests(AgentCase):
         layer = operator_mod.validate_layer(
             self.runtime.catalog.docs, {k: strict_json.pretty_file_bytes(v) for k, v in files.items()},
             schemas=operator_mod.load_schemas(FIXTURE_ROOT))
-        self.assertNotIn("custom-or-bad", layer.lines)
-        self.assertTrue(any("a line on aggregator openrouter declares a catalog family" in p.text()
-                            for p in layer.problems))
+        self.assertIn("custom-or-bad", layer.lines)
+        self.assertFalse(layer.problems)
+        self.assertEqual(layer.lines["custom-or-bad"].family, "madeup")
 
 
 # ------------------------------------------------------------ doctor gate side (A06, I01)
@@ -627,21 +685,22 @@ class DoctorGateTests(AgentCase):
         self.install(self.runtime, self.acme_files(), keys=(AGENT_KEY,))
         snapshot = self.runtime.operator_snapshot()
         attention, eligible = self.runtime.operator_agent_findings(snapshot, frozenset())
-        self.assertEqual((attention, eligible), ([], 0))
+        self.assertEqual(eligible, 1)
+        self.assertTrue(any("not qualified" in item for item in attention), attention)
         record_passes(self.env, AGENT_KEY, self.digest(), contracts=OTHER_CONTRACTS)
         attention, eligible = self.runtime.operator_agent_findings(snapshot, frozenset())
-        self.assertEqual((attention, eligible), ([], 1))
+        self.assertEqual(eligible, 1)
+        self.assertTrue(any("predates the current pins" in item for item in attention), attention)
         with mock.patch.object(self.runtime.session_store, "scan_uuid_records",
                                return_value=[__import__("pathlib").Path("m" * 8 + ".json")]), \
                 mock.patch.object(self.runtime.session_store, "load_raw", return_value=(
                     {"version": sessions.RECORD_VERSION,
                      "applied": {"agents": {"cm-reviewer": {"key": AGENT_KEY, "effort": "high"}}}}, b"")):
             attention, _ = self.runtime.operator_agent_findings(snapshot, frozenset({"m" * 8}))
-        self.assertEqual(attention, ["operator agent custom-acme-agent: qualification predates the current pins — "
-                                     "re-qualify with claude-multi models qualify custom-acme-agent --agents"])
+        self.assertTrue(any("predates the current pins" in item for item in attention), attention)
         findings = operator_mod.doctor_findings(self.runtime.catalog.docs, snapshot, plan=None,
                                                 admitted=(AGENT_KEY,), refs={}, live=frozenset(), agent_eligible=1)
-        self.assertTrue(any("1 agent-eligible" in line for line in findings.info), findings.info)
+        self.assertTrue(any("1 usable for agents" in line for line in findings.info), findings.info)
 
 
 if __name__ == "__main__":

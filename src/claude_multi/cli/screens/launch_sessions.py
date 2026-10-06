@@ -1934,8 +1934,7 @@ def _claude_card_staleness(runtime: Any) -> str | None:
 
 
 def _card_new_lines(runtime: Any, eff: Any) -> tuple[str, ...]:
-    """Short names of the catalog's new lines on an enabled provider that are
-    still off (not admitted)."""
+    """Short names of New lines without an optional admission badge."""
 
     if eff is None:
         return ()

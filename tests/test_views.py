@@ -277,12 +277,13 @@ class LineRowsTests(unittest.TestCase):
         modes = {row.mode for row in rows}
         self.assertEqual(modes, {"client", "gateway"}, f"{SPEC} §7.1: the fixture has both shapes")
 
-    def test_new_line_offered_only_once_admitted(self) -> None:
+    def test_new_line_offered_independently_of_optional_admission(self) -> None:
         key = next(iter(self.lcat.lines))
         entry = {**self.lcat.lines[key], "status": "new"}
         lcat = _with_lines(self.lcat, **{key: entry})
         row = self.rows(lcat)[key]
-        self.assertEqual((row.status, row.admitted, row.offered), ("new", False, False))
+        self.assertEqual((row.status, row.admitted, row.offered), ("new", False, True))
+        self.assertEqual(row.unavailable_reason, "")
         admitted = self.rows(lcat, _eff(lcat, admitted_lines=frozenset({key})))[key]
         self.assertEqual((admitted.status, admitted.admitted, admitted.offered), ("new", True, True))
 
@@ -499,6 +500,39 @@ class ReviewSentenceTests(_RuntimeCase):
             profile.label(a) for a in lineup.routing.same_family_authors
         )
         self.assertTrue(text.endswith("   " + expected_tail), text)
+
+    def test_review_independence_has_known_same_different_and_unknown_labels(self) -> None:
+        lcat = self.runtime.lineup_catalog()
+        same, other = self._two_families()
+        lead_family = self.prepared().lineup.lead.binding.family
+        other_family = lcat.line_family(other, lcat.lines[other])
+        reviewer = "custom-views-reviewer"
+        entry = {**copy.deepcopy(lcat.lines[other]), "status": "new"}
+        for family, expected in ((lead_family, "same-family"), (other_family, "all cross-family"),
+                                 ("unknown", "independence unknown"), ("mistral", "independence unknown"),
+                                 ("custom", "independence unknown")):
+            with self.subTest(family=family):
+                local = _with_lines(lcat, **{reviewer: entry})
+                local = dataclasses.replace(local, operator={reviewer: {"origin": "operator", "family": family}})
+                document = self._doc({"cm-implementer": same})
+                document["agents"]["cm-reviewer"] = {"model": reviewer, "effort": entry["default_effort"]}
+                evaluation = profile.evaluate(document, local, bindings={}, effective=_eff(local))
+                self.assertEqual(evaluation.errors, ())
+                sentence = views.review_sentence(evaluation.lineup)
+                self.assertIn(expected, sentence)
+                rendered = " ".join(" ".join(row) for row in views.routing_rows(evaluation.lineup))
+                if expected == "independence unknown":
+                    self.assertNotIn("same-family", sentence)
+                    self.assertNotIn("cross-family", sentence)
+                    self.assertIn("independence unknown", rendered)
+                    self.assertNotIn("✓", rendered)
+                    self.assertNotIn("≈", rendered)
+                elif expected == "same-family":
+                    self.assertIn("≈", rendered)
+                    self.assertNotIn("independence unknown", rendered)
+                else:
+                    self.assertIn("✓", rendered)
+                    self.assertNotIn("independence unknown", rendered)
 
     def test_no_reviewer_bound(self) -> None:
         same, _other = self._two_families()
@@ -958,7 +992,7 @@ class ResumeCardRegressionTests(V4Case):
                 retired = _retired_entry(key, since=33, wire=wire, provider=entry["provider"],
                                          selectors={"former-selector": None})
                 local = dataclasses.replace(lcat, retired={**lcat.retired, "former-name": retired})
-                with mock.patch.object(type(self.runtime), "lineup_catalog", lambda _self: local):
+                with mock.patch.object(type(self.runtime), "lineup_catalog", lambda _self, **_kwargs: local):
                     prepared = self.prepare_resume(mid)
                 text = views.card_text(self.card(prepared), 180)
                 if wire == entry["wire_model"]:
@@ -984,7 +1018,7 @@ class ResumeCardRegressionTests(V4Case):
         document["lead"] = {"use": "lead-choice"}
         expected = (f"lead former-name renamed → {key} (same model; applies at this resume) "
                     "(named binding 'lead-choice')")
-        with mock.patch.object(type(self.runtime), "lineup_catalog", lambda _self: local), \
+        with mock.patch.object(type(self.runtime), "lineup_catalog", lambda _self, **_kwargs: local), \
                 mock.patch.object(profile.ProfileStore, "load", return_value=document), \
                 mock.patch.object(self.runtime, "_bindings_map", return_value={
                     "lead-choice": {"model": "former-name", "effort": record["applied"]["lead"]["effort"]},
@@ -1024,27 +1058,30 @@ class PickerRowsTests(unittest.TestCase):
     def keys(self, model):
         return [item.key for item in model.items if item.kind == "line"]
 
-    def test_slot_admission(self) -> None:
+    def test_all_valid_lines_visible_despite_capability_and_role_recommendations(self) -> None:
         by_key = {row.key: row for row in self.rows}
-        lead = views.picker_rows(self.rows, slot=catalog.LEAD_ROLE, bindings={}, lcat=self.lcat, eff=self.eff, current=None)
-        self.assertEqual(set(self.keys(lead)), {k for k, r in by_key.items() if r.lead_capable})
-        for rid in catalog.AGENT_ROLE_IDS:
-            model = views.picker_rows(self.rows, slot=rid, bindings={}, lcat=self.lcat, eff=self.eff, current=None)
-            self.assertEqual(set(self.keys(model)), {k for k, r in by_key.items() if r.admits(rid)}, rid)
-        both = views.picker_rows(self.rows, slot="binding", bindings={}, lcat=self.lcat, eff=self.eff, current=None)
-        self.assertEqual(
-            set(self.keys(both)), {k for k, r in by_key.items() if r.lead_capable or r.agents_capable}
-        )
-        wf = views.picker_rows(self.rows, slot="workflow", bindings={}, lcat=self.lcat, eff=self.eff, current=None)
-        self.assertEqual(wf.items[0].kind, "off")
-        for item in wf.items:
-            if item.kind == "line":
-                row = by_key[item.key]
-                self.assertTrue(row.agents_capable)
-                self.assertNotIn(profile.ULTRACODE, item.text)
-                if row.mode == "client":
-                    self.assertEqual(item.efforts, ())
-                    self.assertTrue(item.text.endswith(f"efforts {row.default_effort}"))
+        for slot in (catalog.LEAD_ROLE, *catalog.AGENT_ROLE_IDS, "binding", "workflow"):
+            with self.subTest(slot=slot):
+                model = views.picker_rows(self.rows, slot=slot, bindings={}, lcat=self.lcat,
+                                          eff=self.eff, current=None)
+                self.assertEqual(set(self.keys(model)), set(by_key))
+                if slot == "workflow":
+                    self.assertEqual(model.items[0].kind, "off")
+                for item in model.items:
+                    if item.kind != "line":
+                        continue
+                    row = by_key[item.key]
+                    self.assertEqual(item.selectable, slot != catalog.LEAD_ROLE or row.lead_usable,
+                                     (slot, row.key, item.note))
+                    if slot == catalog.LEAD_ROLE and not row.lead_usable:
+                        self.assertIn("missing lead/context fields", item.note)
+                        self.assertIn("edit the model definition", item.note)
+                    if slot in catalog.AGENT_ROLE_IDS and not row.admits(slot):
+                        self.assertIn("binding overrides capability/role recommendations", item.details)
+                    if slot == "workflow" and row.mode == "client":
+                        self.assertEqual(item.efforts, ())
+                        self.assertEqual(item.initial_effort, row.default_effort)
+                        self.assertNotIn(profile.ULTRACODE, item.text)
 
     def test_lead_ultracode_zero_model_and_disabled(self) -> None:
         provider = self.rows[0].provider
@@ -1052,25 +1089,29 @@ class PickerRowsTests(unittest.TestCase):
         rows = views.line_rows(self.lcat, eff, custom_ids=frozenset())
         model = views.picker_rows(rows, slot=catalog.LEAD_ROLE, bindings={}, lcat=self.lcat, eff=eff, current=None)
         lines = [i for i in model.items if i.kind == "line"]
-        self.assertTrue(all(i.text.rstrip().split("  (")[0].endswith(profile.ULTRACODE) for i in lines))
-        self.assertTrue(all(i.initial_effort == profile.ULTRACODE for i in lines))
+        lead_usable = {row.key for row in rows if row.lead_usable}
+        self.assertTrue(all(profile.ULTRACODE in i.efforts for i in lines if i.key in lead_usable))
+        self.assertTrue(all(i.initial_effort == profile.ULTRACODE for i in lines if i.key in lead_usable))
         off = [i for i in lines if views.short_label(self.lcat.lines[i.key]["display"]) and self.lcat.lines[i.key]["provider"] == provider]
         self.assertTrue(off)
         for item in off:
             self.assertFalse(item.selectable)
-            self.assertIn("(provider off — G)", item.text)
+            self.assertIn("provider off", item.text)
+            self.assertIn("G → Space enables it", item.note)
         zero = [i for i in model.items if i.kind == "zero"]
         self.assertEqual(len(zero), 1)
         self.assertEqual(zero[0].text, " · ".join(views.zero_model_providers(self.lcat)) + "     configured · no models")
         self.assertTrue(model.items[model.selected].selectable)
 
-    def test_new_excluded_until_admitted_and_named_rows(self) -> None:
+    def test_unadmitted_new_line_and_named_binding_remain_selectable(self) -> None:
         key = next(k for k, e in self.lcat.lines.items() if "agents" in e["capabilities"] and e["roles"] == "all")
         lcat = _with_lines(self.lcat, **{key: {**self.lcat.lines[key], "status": "new"}})
         rows = views.line_rows(lcat, _eff(lcat), custom_ids=frozenset())
         model = views.picker_rows(rows, slot="cm-explorer", bindings={}, lcat=lcat, eff=_eff(lcat), current=None)
-        self.assertNotIn(key, self.keys(model))
-        eff = _eff(lcat, admitted_lines=frozenset({key}))
+        item = next(i for i in model.items if i.kind == "line" and i.key == key)
+        self.assertTrue(item.selectable)
+        self.assertIn("not admitted", item.note)
+        eff = _eff(lcat)
         rows = views.line_rows(lcat, eff, custom_ids=frozenset())
         model = views.picker_rows(
             rows, slot="cm-explorer", bindings={"mine": {"model": key, "effort": "high"}},
@@ -1081,6 +1122,126 @@ class PickerRowsTests(unittest.TestCase):
         self.assertEqual(len(named), 1)
         self.assertTrue(named[0].text.startswith("named       mine → "))
         self.assertEqual(model.items[model.selected].kind, "named")
+
+    def test_legacy_and_unqualified_operator_lines_remain_selectable_everywhere(self) -> None:
+        provider_id = next(pid for pid, p in self.lcat.providers.items() if p["transport"]["kind"] == "direct")
+        legacy = custom.synthetic_entries(
+            {"models": {"views-legacy": {"provider": provider_id, "wire_model": "views-legacy-wire",
+                                           "context_tokens": 200_000}}}, cliproxyapi="0")
+        source = next(e for e in self.lcat.lines.values() if isinstance(e["efforts"], dict)
+                      and isinstance(e.get("lead"), dict))
+        operator_key = "custom-views-line"
+        entry = {**copy.deepcopy(source), "status": "new", "capabilities": ["lead"], "roles": []}
+        lcat = _with_lines(self.lcat, **legacy, **{operator_key: entry})
+        lcat = dataclasses.replace(lcat, operator={operator_key: {"origin": "operator", "family": "mistral"}})
+        for evidence, label in (("missing", "not run"), ("failed", "failed"),
+                                ("definition-stale", "stale definition"), ("contract-stale", "stale contract")):
+            facts = profile.AgentFacts(
+                key=operator_key, provider=entry["provider"], admitted=False, route="catalog", d60=False,
+                route_kind="catalog", family="mistral", t1_families=lcat.known_families, evidence=evidence,
+                evidence_gaps=("tools",) if evidence == "failed" else ())
+            current = lcat.with_gate(profile.AgentGate(facts={operator_key: facts}))
+            eff = _eff(current)
+            with mock.patch.object(cli.Runtime, "smoke", side_effect=AssertionError("automatic smoke")) as smoke, \
+                    mock.patch.object(cli.Runtime, "qualify_post", side_effect=AssertionError("automatic qualification")) as qualify:
+                rows = views.line_rows(current, eff, custom_ids=frozenset(legacy))
+                for key in (*legacy, operator_key):
+                    row = next(r for r in rows if r.key == key)
+                    self.assertTrue(row.offered)
+                    self.assertFalse(row.admitted)
+                    self.assertFalse(row.family_recognized)
+                    self.assertEqual(row.qualification, label + (" (tools)" if evidence == "failed" else "")
+                                     if key == operator_key else "not run")
+                    bindings = {"choice": {"model": key, "effort": row.default_effort}}
+                    for slot in (catalog.LEAD_ROLE, *catalog.AGENT_ROLE_IDS, "binding", "workflow"):
+                        with self.subTest(key=key, evidence=evidence, slot=slot):
+                            model = views.picker_rows(rows, slot=slot, bindings=bindings, lcat=current,
+                                                      eff=eff, current={"use": "choice"})
+                            item = next(i for i in model.items if i.kind == "line" and i.key == key)
+                            self.assertTrue(item.selectable, item.note)
+                            self.assertIn("admission: not admitted", item.details)
+                            self.assertIn("qualification: " + row.qualification, item.details)
+                            self.assertIn("family independence unknown", item.details)
+                            if slot not in ("binding", "workflow"):
+                                named = next(i for i in model.items if i.kind == "named")
+                                self.assertTrue(named.selectable, named.note)
+                            if slot == "workflow" and row.mode == "client":
+                                self.assertEqual((item.efforts, item.initial_effort), ((), row.default_effort))
+                    direct = next(r for r in views.direct_rows(rows, marks={}) if r.key == key)
+                    self.assertEqual(direct.unavailable_reason, "")
+                    self.assertIn("qualification: " + row.qualification, direct.attention)
+            smoke.assert_not_called()
+            qualify.assert_not_called()
+
+    def test_unavailable_mapping_blocks_rows_and_named_choices_with_full_remedy(self) -> None:
+        key = next(iter(self.lcat.lines))
+        reason = "route approval required — G → A approves this credential destination"
+        eff = _eff(self.lcat, unavailable_lines={key: reason}, admitted_lines=frozenset({key}))
+        rows = views.line_rows(self.lcat, eff, custom_ids=frozenset())
+        row = next(r for r in rows if r.key == key)
+        self.assertFalse(row.offered)
+        self.assertTrue(row.admitted, "admission cannot override an unavailable route")
+        self.assertEqual(row.unavailable_reason, reason)
+        for slot in (catalog.LEAD_ROLE, *catalog.AGENT_ROLE_IDS, "binding", "workflow"):
+            with self.subTest(slot=slot):
+                model = views.picker_rows(rows, slot=slot, lcat=self.lcat, eff=eff, current=None,
+                                          bindings={"blocked": {"model": key, "effort": row.default_effort}})
+                item = next(i for i in model.items if i.kind == "line" and i.key == key)
+                self.assertFalse(item.selectable)
+                self.assertEqual(item.note, reason)
+                self.assertIn(reason, item.text)
+                for named in (i for i in model.items if i.kind == "named"):
+                    self.assertFalse(named.selectable)
+                    self.assertEqual(named.note, reason)
+        direct = next(r for r in views.direct_rows(rows, marks={}) if r.key == key)
+        self.assertEqual(direct.mark, "unavailable")
+        self.assertEqual(views.direct_detail(direct, (direct,)), reason)
+        models = views.models_model(rows, used={}, retired={}, continuity_count=0, catalog_version=1, radar={})
+        self.assertIn(reason, " ".join(models.details[key]))
+
+    def test_native_undeclared_effort_warns_but_workflow_stays_default_only(self) -> None:
+        key, original = next((k, e) for k, e in self.lcat.lines.items() if isinstance(e["efforts"], list))
+        default = original["default_effort"]
+        other = next(e for e in self.lcat.agent_efforts if e != default)
+        lcat = _with_lines(self.lcat, **{key: {**original, "efforts": [default]}})
+        eff = _eff(lcat)
+        rows = views.line_rows(lcat, eff, custom_ids=frozenset())
+        bindings = {"explicit": {"model": key, "effort": other}}
+        for slot in (catalog.LEAD_ROLE, "cm-reviewer", "binding"):
+            with self.subTest(slot=slot):
+                model = views.picker_rows(rows, slot=slot, bindings=bindings, lcat=lcat, eff=eff,
+                                          current={"model": key, "effort": other})
+                item = next(i for i in model.items if i.kind == "line" and i.key == key)
+                self.assertTrue(item.selectable)
+                self.assertIn(other, item.efforts)
+                self.assertTrue(any("effort unverified for this line" in d and other in d for d in item.details))
+                if slot != "binding":
+                    self.assertTrue(next(i for i in model.items if i.kind == "named").selectable)
+        document = profile.ad_hoc_direct(key, other)
+        document["agents"] = {"cm-reviewer": {"use": "explicit"}}
+        result = profile.evaluate(document, lcat, bindings=bindings, effective=eff, ad_hoc=True)
+        self.assertEqual(result.errors, ())
+        self.assertTrue(any(w.code == "effort-unverified" and "unverified for this line" in w.message
+                            for w in result.lineup.warnings))
+        model = views.picker_rows(rows, slot="workflow", bindings={}, lcat=lcat, eff=eff,
+                                  current={"model": key, "effort": other})
+        item = next(i for i in model.items if i.kind == "line" and i.key == key)
+        self.assertEqual((item.selectable, item.efforts, item.initial_effort), (True, (), default))
+        with self.assertRaises(scope.ScopeError):
+            scope.workflow_default_selector(lcat, dataclasses.replace(
+                eff, workflow_default_binding={"model": key, "effort": other}))
+
+    def test_gateway_and_unknown_native_effort_bindings_stay_unselectable(self) -> None:
+        for mode in (dict, list):
+            key, entry = next((k, e) for k, e in self.lcat.lines.items() if isinstance(e["efforts"], mode))
+            effort = (next(e for e in self.lcat.agent_efforts if e not in entry["efforts"])
+                      if mode is dict else "not-a-native-effort")
+            model = views.picker_rows(self.rows, slot="cm-reviewer", lcat=self.lcat, eff=self.eff, current=None,
+                                      bindings={"invalid": {"model": key, "effort": effort}})
+            named = next(i for i in model.items if i.kind == "named")
+            self.assertFalse(named.selectable)
+            self.assertIn("unsupported effort/selector", named.note)
+            self.assertIn("edit the named binding", named.note)
 
     def test_removed_current_is_in_the_title(self) -> None:
         null_key = next(k for k in self.lcat.retired if self.lcat.resolve_key(k).key is None)
@@ -1178,8 +1339,9 @@ class ModelsAndDirectTests(unittest.TestCase):
         self.assertEqual(model.title, f"models — catalog {lcat.catalog_version}")
         self.assertNotIn(key, model.keys)
         self.assertEqual(model.new_keys, (key,))
-        self.assertEqual(model.new_rows[0][-1], "New · Off")
-        self.assertEqual(model.new_heading, "new (off until admitted — Enter admits; stored in Settings):")
+        self.assertEqual(model.new_rows[0][-1], "New · not admitted")
+        self.assertIn("optional badge", model.new_heading)
+        self.assertIn("use: available · admission: not admitted (optional)", model.details[key])
         self.assertEqual(
             model.retired, "retired  " + " · ".join(f"{k} → (none)" for k in sorted(retired))
         )
@@ -1191,7 +1353,8 @@ class ModelsAndDirectTests(unittest.TestCase):
         self.assertTrue(admitted.new_heading.endswith(": —"))
         self.assertEqual(admitted.retired, "retired  3 continuity aliases retained")
         self.assertTrue(admitted.details[key][0].endswith(" · admitted (New, stored in Settings)"))
-        self.assertEqual(admitted.details[key][1], "radar!")
+        self.assertIn("use: available · admission: admitted (optional)", admitted.details[key])
+        self.assertEqual(admitted.details[key][-1], "radar!")
 
     def test_custom_rows_listed_once_after_the_catalog_rows(self) -> None:
         provider = next(p for p, v in self.lcat.providers.items() if v["transport"]["kind"] == "direct")
@@ -1205,13 +1368,15 @@ class ModelsAndDirectTests(unittest.TestCase):
         self.assertEqual(model.keys.count("views-c"), 1)
         self.assertEqual(model.keys[-1], "views-c")
         self.assertEqual(model.rows[-1][2], "custom")
-        self.assertEqual(model.rows[-1][-1], "direct only")
+        self.assertEqual(model.rows[-1][-1], "—")
+        self.assertNotIn("direct only", " ".join(model.rows[-1]))
+        self.assertIn("qualification: not run", " ".join(model.details["views-c"]))
         direct = views.direct_rows(rows, marks={})
         self.assertEqual([r.key for r in direct].count("views-c"), 1)
         self.assertEqual(direct[-1].key, "views-c")
         self.assertEqual(
             {r.key for r in direct[:-1]},
-            {r.key for r in rows if r.lead_capable and r.offered and r.source == "catalog"},
+            {r.key for r in rows if r.source == "catalog"},
         )
         self.assertTrue(direct[-1].text().endswith("   (custom)"))
         gateway = next(r for r in direct if r.mode == "gateway")

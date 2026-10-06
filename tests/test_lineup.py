@@ -666,7 +666,8 @@ class ClassifyTests(LineupCase):
         state.atomic_write(live / "lead-set.json", strict_json.canonical_file_bytes(lead_set))
         self.refence()
         code, out, _ = self.request("set reviewer=qwen38")
-        self.assertIn("reviewer: context guard — its provider accepts 983616 tokens", out)
+        self.assertNotIn("context guard", out)
+        self.assertIn("/reload-plugins", out)
 
     def test_reason_9_relaunch_forces_a_pending_change_from_inside(self) -> None:
         self.runtime.environ["CLAUDE_MULTI_MANAGED_ID"] = self.mid
@@ -800,7 +801,7 @@ class LiveApplyTests(LineupCase):
         files = self.scope_files()
         code, out, _ = self.request("profile nosuch")
         self.assertEqual(out, f"claude-multi: {lineup.R11.format(name='nosuch')}\n")
-        code, out, _ = self.request("unset analyst")  # analyst-strong requires analyst
+        code, out, _ = self.request("set analyst=sol:low")  # no gateway selector mapping for low
         self.assertTrue(out.startswith(f"claude-multi: {lineup.R14}\n- "), out)
         code, out, _ = self.request("set implementer=nosuch-model")
         self.assertIn(lineup.R14, out)

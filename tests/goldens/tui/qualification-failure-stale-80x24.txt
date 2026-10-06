@@ -9,12 +9,12 @@
   enables agents
   custom-fixture-reviewer: operator line in providers.d/openrouter.json ·
   openrouter/vendor/fixture-reviewer
-    status admitted · agents requested (cm-reviewer; the agent gate needs
-  claude-multi models qualify custom-fixture-reviewer --agents) · class
-  custom-200000 · validated floor 200000
+    status admitted · agent recommendation: cm-reviewer; qualification is
+  optional · class custom-200000 · validated floor 200000
     selectors custom-fixture-reviewer-high · default effort high
-    smoke evidence: stale or none · definition 957ddafc0392ca34
-
+    use: usable · family: openai
+    qualification: failed (smoke, effort high, stream, tools)
+    smoke evidence: failed (http-status) · definition 957ddafc0392ca34
 
 
 

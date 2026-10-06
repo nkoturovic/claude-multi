@@ -41,7 +41,7 @@ from . import assets
 import copy
 import re
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -323,11 +323,11 @@ def check_workflow_default_binding(binding: Mapping[str, Any] | None, *, catalog
     """Refuse a workflow default binding the catalog cannot back (save side).
 
     The model key must resolve (``resolve_key``: live, or retired with a live
-    successor); the resolved line must be agents-capable and declare the
-    effort. A client-effort line (list-shaped ``efforts``) compiles to its one
+    successor); the effort must have a supported selector/contract mapping.
+    Capability and role declarations are recommendations. A client-effort line compiles to its one
     selector, so ``CLAUDE_CODE_SUBAGENT_MODEL`` cannot carry any other effort:
     the effort must be the line's ``default_effort``.
-    Offered-ness (status, provider enabled) and fence membership are
+    Route usability, provider enablement and fence membership are
     compile-time checks. ``catalog`` needs ``lines`` and ``retired``.
     """
 
@@ -345,22 +345,21 @@ def check_workflow_default_binding(binding: Mapping[str, Any] | None, *, catalog
         raise SettingsError(f"{field}.model: {resolution.notice}")
     key = resolution.key
     entry = catalog.lines[key]
-    if "agents" not in entry.get("capabilities", ()):
-        raise SettingsError(
-            f"{field}.model: line {key!r} is not agents-capable (a lead-only line "
-            "cannot run workflow agents)"
-        )
-    declared = _line_efforts(entry)
-    if effort not in declared:
-        raise SettingsError(
-            f"{field}.effort: {effort!r} is not declared by line {key!r} "
-            f"(declares {list(declared)})"
-        )
     if isinstance(entry.get("efforts"), (list, tuple)) and effort != entry.get("default_effort"):
         raise SettingsError(
             f"{field}.effort: line {key!r} is client-effort (one selector), so a "
             f"workflow default runs at its default effort {entry.get('default_effort')!r}, "
             f"never {effort!r}"
+        )
+    from . import profile
+
+    available = profile.available_efforts(
+        entry, getattr(catalog, "agent_efforts", WORKFLOW_BINDING_EFFORTS), workflow=True,
+    )
+    if effort not in available:
+        raise SettingsError(
+            f"{field}.effort: {effort!r} is not declared or representable by line {key!r} "
+            f"(available {list(available)})"
         )
 
 
@@ -524,7 +523,7 @@ class SettingsStore:
             raise SettingsError(f"unknown catalog line {key!r}")
         if entry.get("status", "active") != "new":
             raise SettingsError(
-                f"line {key!r} is {entry.get('status', 'active')!r}, not New · Off; "
+                f"line {key!r} is {entry.get('status', 'active')!r}, not New; "
                 "only status new lines are admitted"
             )
 
@@ -559,6 +558,8 @@ class Effective:
     (:data:`WINDOW_CEILING_DEFAULT` unless set): an in-memory input of every
     compile and evaluation, never written to ``settings.json`` or a
     snapshot (:func:`snapshot` and :func:`drift` ignore it).
+    ``unavailable_lines`` similarly carries current route/transport problems
+    in memory only; it is independent of optional admission badges.
     """
 
     providers_enabled: Mapping[str, bool]  # every known provider id -> bool (absent = True)
@@ -569,6 +570,8 @@ class Effective:
     review_round_cap: int = REVIEW_ROUND_CAP_DEFAULT
     workflow_default_binding: Mapping[str, str] | None = None  # {model, effort} or None
     window_ceiling: int = WINDOW_CEILING_DEFAULT
+    # Current route/transport problems, never persisted in Settings or snapshots.
+    unavailable_lines: Mapping[str, str] = field(default_factory=dict)
 
 
 def effective(
@@ -626,10 +629,9 @@ def provider_enabled(eff: Effective, provider_id: str) -> bool:
 
 
 def line_offered(key: str, entry_v2: Mapping[str, Any], eff: Effective) -> bool:
-    """A line is offered when active (or admitted) and its provider is enabled."""
+    """Offer valid lines on enabled, usable routes, independently of badges."""
 
-    admitted = entry_v2.get("status", "active") == "active" or key in eff.admitted_lines
-    return admitted and provider_enabled(eff, entry_v2["provider"])
+    return key not in eff.unavailable_lines and provider_enabled(eff, entry_v2["provider"])
 
 
 def _binding_snapshot(binding: Mapping[str, str] | None) -> dict[str, str] | None:

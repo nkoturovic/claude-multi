@@ -7,6 +7,7 @@
   › anthropic  Opus 5.5               1M     (not signed in)
     kimi       Kimi K3                1M     effort [max]
     llm-local  Qwen3.8 Flash Next (local) 320K
+    openai     GPT-5.5                258K   effort [high]  (unavailable)
     openai     GPT-5.6 Sol            1M     effort [high]  (not signed in)
     openrouter DeepSeek V4 Flash      1M     effort [high]
     openrouter Gemini 3 Flash         1M     effort [high]
@@ -18,7 +19,6 @@
   /model in-session: every model in the same class
   Claude account not signed in — Enter offers the sign-in (personal use)
   in-session: /model claude-multi-opus-5-5[1m]
-
 
 
 

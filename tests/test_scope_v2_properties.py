@@ -95,8 +95,7 @@ def family_of(entry: dict[str, Any], providers: dict[str, Any]) -> str:
 
 
 def offered(key: str, entry: dict[str, Any], enabled: dict[str, bool], admitted=()) -> bool:
-    status = entry.get("status", "active") == "active" or key in admitted
-    return status and enabled.get(entry["provider"], True)
+    return enabled.get(entry["provider"], True)
 
 
 def oracle_lead_rows(lines, enabled, lead_class, lead_providers):
@@ -283,7 +282,7 @@ def generate(rng: random.Random, lcat: profile.LineupCatalog) -> Case:
         outside = [
             key
             for key, entry in lines.items()
-            if "agents" not in entry["capabilities"] or not offered(key, entry, enabled)
+            if not offered(key, entry, enabled)
         ]
         if outside:
             key = rng.choice(outside)

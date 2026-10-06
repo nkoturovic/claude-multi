@@ -1147,8 +1147,8 @@ class SeedProfileRuleTests(unittest.TestCase):
         self.assertEqual(
             errors,
             [
-                "profiles/balanced: agents.cm-analyst-strong: requires cm-analyst "
-                "(cm-analyst was unbound: 'muse-spark' was removed)"
+                "profiles/balanced: analyst: 'muse-spark' was removed — unbound; seeds name "
+                "live lines only"
             ],
         )
 
@@ -1161,26 +1161,16 @@ class SeedProfileRuleTests(unittest.TestCase):
         self.assertEqual(
             errors,
             [
-                "profiles/balanced: agents.cm-analyst.effort: 'medium' is not declared by "
-                "'sol' (declared: high, xhigh)"
+                "profiles/balanced: agents.cm-analyst.effort: 'medium' is not supported by "
+                "'sol' (available: high, xhigh)"
             ],
         )
 
-    def test_seed_new_line_is_new_off(self) -> None:
+    def test_new_status_does_not_invalidate_explicit_seed_bindings(self) -> None:
         def mutate(raw):
             raw["docs"]["models"]["models"]["opus5"]["status"] = "new"
 
-        errors = _mutate(mutate)
-        self.assertIn(
-            "profiles/quality: agents.cm-implementer-strong.model: model 'opus5' is "
-            "New · Off (status new) until admitted",
-            errors,
-        )
-        self.assertIn(
-            "profiles/claude: agents.cm-explorer.model: model 'opus5' is New · Off "
-            "(status new) until admitted",
-            errors,
-        )
+        self.assertEqual(_mutate(mutate), [])
 
     def test_seed_secret_scan(self) -> None:
         errors = _mutate(
@@ -2305,7 +2295,7 @@ class CatalogV2Tests(unittest.TestCase):
         )
 
     # 7. New · Off -----------------------------------------------------
-    def test_new_line_is_off_everywhere_but_the_lines(self) -> None:
+    def test_new_line_is_offered_without_admission(self) -> None:
         # Rewritten in place onto the 3.0 readers.  The
         # New line is absent from the merged offered view (scope.line_view,
         # the merged-view seam) and from every BindingPicker slot's rows, yet still a
@@ -2350,15 +2340,15 @@ class CatalogV2Tests(unittest.TestCase):
             provider_ids=bundle.providers,
             line_keys=bundle.lines,
         )
-        self.assertNotIn(key, {line.key for line in scope.line_view(lcat, eff).lines})
+        self.assertIn(key, {line.key for line in scope.line_view(lcat, eff).lines})
         rows = views.line_rows(lcat, eff, custom_ids=frozenset())
-        self.assertFalse(next(row for row in rows if row.key == key).offered)
+        self.assertTrue(next(row for row in rows if row.key == key).offered)
         for slot in (catalog.LEAD_ROLE, *catalog.AGENT_ROLE_IDS, "binding", "workflow"):
             with self.subTest(slot=slot):
                 picker = tui.BindingPicker(
                     views.picker_rows(rows, slot=slot, bindings={}, lcat=lcat, eff=eff, current=None)
                 )
-                self.assertNotIn(key, {item.key for item in picker.model.items if item.kind == "line"})
+                self.assertIn(key, {item.key for item in picker.model.items if item.kind == "line"})
         selector = catalog.line_selectors(bundle.lines[key])[0][1]
         self.assertIn(selector.removesuffix("[1m]"), served_selectors(root))
         self.assertEqual(bundle.resolve_key(key).key, key)
@@ -2508,13 +2498,11 @@ class ShippedLineDefaultsTests(unittest.TestCase):
 
 
 class NewLineGateTests(unittest.TestCase):
-    """New · Off lines are absent from seeds and
-    fences until admitted — checked on every New line the shipped catalog
-    carries and on a disposable New · Off draft promoted into a temporary
-    copy, so the installed-registry presence path runs without weakening
-    any promotion gate. Lines are selected by shape, never by model id."""
+    """New lines are usable without admission, independently of promotion
+    policy. Check both shipped New lines and a disposable promoted draft.
+    Lines are selected by shape, never by model id."""
 
-    def _new_lines_absent_until_admitted(self, bundle: catalog.Catalog, keys: list[str]) -> None:
+    def _new_lines_offered_without_admission(self, bundle: catalog.Catalog, keys: list[str]) -> None:
         from claude_multi import profile, scope, settings
 
         cat = profile.LineupCatalog.from_catalog(bundle)
@@ -2529,20 +2517,20 @@ class NewLineGateTests(unittest.TestCase):
             with self.subTest(line=key):
                 entry = bundle.lines[key]
                 self.assertEqual(entry["status"], "new")
-                self.assertFalse(settings.line_offered(key, entry, default))
+                self.assertTrue(settings.line_offered(key, entry, default))
                 self.assertTrue(settings.line_offered(key, entry, admitted))
                 selectors = {selector for _l, selector, _c in catalog.line_selectors(entry)}
-                self.assertNotIn(key, {line.key for line in scope.line_view(cat, default).lines})
+                self.assertIn(key, {line.key for line in scope.line_view(cat, default).lines})
                 if "agents" in entry["capabilities"]:
-                    self.assertFalse(selectors & set(scope.agent_set(cat, default)))
+                    self.assertTrue(selectors <= set(scope.agent_set(cat, default)))
                     self.assertTrue(selectors <= set(scope.agent_set(cat, admitted)))
 
-    def test_shipped_new_lines_are_off_until_admitted(self) -> None:
+    def test_shipped_new_lines_are_offered_without_admission(self) -> None:
         bundle = catalog.load_catalog(CATALOG_ROOT)
         keys = sorted(key for key, line in bundle.lines.items() if line["status"] == "new")
-        self._new_lines_absent_until_admitted(bundle, keys)
+        self._new_lines_offered_without_admission(bundle, keys)
 
-    def test_disposable_new_off_draft_passes_the_gates_and_stays_off(self) -> None:
+    def test_disposable_new_draft_passes_the_gates_without_admission(self) -> None:
         from claude_multi import dev
 
         root = Path(tempfile.mkdtemp(prefix="claude-multi-newline-"))
@@ -2580,11 +2568,11 @@ class NewLineGateTests(unittest.TestCase):
         self.assertTrue([line for line in registry if "'disposable-new' wire 'gpt-disposable-new'" in line])
         (tree / "catalog" / "models.json").write_bytes(images[next(iter(images))])
         bundle = catalog.load_catalog(tree)
-        self._new_lines_absent_until_admitted(bundle, ["disposable-new"])
+        self._new_lines_offered_without_admission(bundle, ["disposable-new"])
         # An explicit non-new status stays refused (no gate weakened).
         active = dev.make_model_draft(name="d", provider=entry["provider"],
                                       entry={**entry, "status": "active"}, now="2026-09-30T00:00:00Z")
-        with self.assertRaisesRegex(dev.DevError, "New · Off"):
+        with self.assertRaisesRegex(dev.DevError, "status \"new\""):
             dev.build_post_images(raw, active)
 
 

@@ -219,11 +219,13 @@ class GetStartedKeyTests(CardOnboardingCase):
         with self.get_started() as calls, mock.patch.dict(self.runtime.environ, {"CLAUDECODE": "1"}):
             _result, win = self.run_card(screen, ["w", ESC])
         self.assertEqual(calls, [])
-        self.assertIn(cli_text.GS_IN_SESSION[:60], win.frames[-1])
+        self.assertEqual(screen.message, cli_text.GS_IN_SESSION)
+        self.assertIn(cli_text.GS_IN_SESSION[:45], win.frames[-1])
         with self.get_started() as calls, mock.patch.object(self.runtime, "allow_state_writes", False):
             _result, win = self.run_card(screen, ["w", ESC])
         self.assertEqual(calls, [])
-        self.assertIn(cli_text.GS_READONLY[:60], win.frames[-1])
+        self.assertEqual(screen.message, cli_text.GS_READONLY)
+        self.assertIn(cli_text.GS_READONLY[:45], win.frames[-1])
 
     def test_profiles_from_get_started_returns_the_profile_used(self) -> None:
         other = sorted(self.runtime.profiles.names())[-1]

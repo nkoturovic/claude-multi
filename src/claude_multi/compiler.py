@@ -898,17 +898,9 @@ def compile_lineup_launch(
             f"the lineup was resolved for a session window of {lineup.policy.window} tokens, "
             f"but this launch compiles {context.window}; resolve it again with the same Settings"
         )
-    gaps = agent_context_gaps(lineup, context.window)
-    if gaps:
-        detail = ", ".join(
-            f"{rid} (provider bound {lineup.agents[rid].binding.provider_context_tokens} "
-            f"< client window {lineup.agents[rid].binding.client_context_tokens})"
-            for rid in gaps
-        )
-        raise CompilerError(
-            f"bound agents cannot hold the session's process window {context.window}: "
-            f"{detail}; bind another model or relaunch with a smaller lead class"
-        )
+    # Provider context bounds are capacity warnings, not routing permission.
+    # Evaluation reports the actual client class, window and trigger; short
+    # requests can still work. The policy-consistency check above stays hard.
 
     if worktree_available is None:
         worktree_available = True if session_cwd is None else git_work_tree(session_cwd)
