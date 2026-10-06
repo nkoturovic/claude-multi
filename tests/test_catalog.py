@@ -1741,6 +1741,8 @@ class GatewayManifestConsistencyTests(unittest.TestCase):
                 "cli-proxy-api-codex-client-identity.patch",
                 "cli-proxy-api-antigravity-loopback-callback.patch",
                 "cli-proxy-api-codex-api-key-safety.patch",
+                "cli-proxy-api-refresh-shutdown-join.patch",
+                "cli-proxy-api-openai-content-chunks.patch",
             ],
         )
 
