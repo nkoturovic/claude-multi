@@ -251,8 +251,14 @@ class PreflightCheckTests(unittest.TestCase):
                                  "contract", "gateway-parity",
                                  "notices", "hygiene", "history", "trust", "release-urls", "receipt"])
         verdicts = {check.name: check.ok for check in checks}
-        self.assertTrue(verdicts["version"])
-        self.assertTrue(verdicts["changelog"])
+        # A development line (X.Y.Z-dev, AGENTS.md) is refused by the version
+        # and changelog checks; the release commit sets X.Y.Z and its dated
+        # entry, and then both pass.
+        from claude_multi import __version__
+
+        released = self.tool.RELEASE_VERSION.fullmatch(__version__) is not None
+        self.assertEqual(verdicts["version"], released)
+        self.assertEqual(verdicts["changelog"], released)
         self.assertTrue(verdicts["clean-tree"] and verdicts["contract"] and verdicts["gateway-parity"]
                         and verdicts["release-urls"])
         self.assertTrue(verdicts["trust"])  # the production key
