@@ -80,11 +80,11 @@ you can choose.
 | Anthropic or OpenAI API key | the provider's API key | **G** → Enter on Anthropic or OpenAI → the API key | `claude-multi providers transport anthropic api-key` (or `openai`) | the same Claude lines; for OpenAI, the models reviewed for its API (see the note below) |
 | a built-in keyed provider: DeepSeek, Kimi, Meta, Qwen | the provider's API key | **G** → **K** on the provider | `claude-multi providers set-key <provider>` | its shipped lines, through a starter profile |
 | OpenRouter | an OpenRouter API key | **G** → **K** on OpenRouter | `claude-multi providers set-key openrouter` | the shipped `openrouter` profile |
-| a preset of a vendor's Anthropic-compatible endpoint (Z.ai, Moonshot AI, Model Studio, Novita AI, Vercel AI Gateway) | the vendor's API key | **W** → **A** → the preset | `claude-multi providers add --preset <name>` | the models you add and admit |
-| a preset of an OpenAI-compatible endpoint (Groq, Mistral AI, xAI, Cerebras, Google Gemini) | the vendor's API key | **W** → **A** → the preset | `claude-multi providers add --preset <name>` | the models you add and admit |
-| your own Anthropic-compatible endpoint (recommended for anything not listed) | the vendor's API key | **G** → **N** → Anthropic-compatible | `claude-multi providers add <name> --kind anthropic-compatible <options>` | the models you add and admit |
-| your own OpenAI-compatible endpoint | the vendor's API key | **G** → **N** → OpenAI-compatible | `claude-multi providers add <name> --kind openai-compatible <options>` | the models you add and admit, through Messages-to-chat translation ([limits](providers/openai-compatible.md#translation-limits)) |
-| a server on your network (Ollama, LM Studio, vLLM, llama.cpp, any OpenAI-compatible server) | none | **G** → **N** → the server | `claude-multi providers add --preset ollama` | a lead model (for a direct session or a profile's lead) once you add and admit one; no agents |
+| a preset of a vendor's Anthropic-compatible endpoint (Z.ai, Moonshot AI, Model Studio, Novita AI, Vercel AI Gateway) | the vendor's API key | **W** → **A** → the preset | `claude-multi providers add --preset <name>` | the valid models you add on its approved route |
+| a preset of an OpenAI-compatible endpoint (Groq, Mistral AI, xAI, Cerebras, Google Gemini) | the vendor's API key | **W** → **A** → the preset | `claude-multi providers add --preset <name>` | the valid models you add on its approved route |
+| your own Anthropic-compatible endpoint (recommended for anything not listed) | the vendor's API key | **G** → **N** → Anthropic-compatible | `claude-multi providers add <name> --kind anthropic-compatible <options>` | the valid models you add on its approved route |
+| your own OpenAI-compatible endpoint | the vendor's API key | **G** → **N** → OpenAI-compatible | `claude-multi providers add <name> --kind openai-compatible <options>` | the valid models you add on its approved route, through Messages-to-chat translation ([limits](providers/openai-compatible.md#translation-limits)) |
+| a server on your network (Ollama, LM Studio, vLLM, llama.cpp, any OpenAI-compatible server) | none | **G** → **N** → the server | `claude-multi providers add --preset ollama` | the valid models you add, as leads or agents; no key required |
 
 On the OpenAI API key, Claude Code's per-request output cap is not
 applied: one answer can run up to the model's own output limit, billed
@@ -147,12 +147,22 @@ same way after `claude-multi providers add`):
 claude-multi providers add --preset zai     # approve where the key goes
 claude-multi providers set-key zai
 claude-multi models add zai <wire> --context <n> --source docs --source-ref "https://docs.z.ai/ 2026-10" --as custom-example
-claude-multi models admit custom-example    # one small request, after you agree
 claude-multi profile starter --apply
 ```
 
-An admitted model can lead at once; agent roles also need it qualified
-(`claude-multi models qualify custom-example --agents`), see
+A valid model on a usable route can lead or run agents without admission
+or qualification. In Get started you can skip admission and go straight to
+profile selection. Starter selection prefers locally ready models, not
+upstream-verified ones. Explicit bindings override role recommendations
+with warnings; they do not override route approval or native limits.
+
+`claude-multi models admit custom-example` records an optional local badge
+with zero inference requests.
+`claude-multi models qualify custom-example --agents` is an optional
+diagnostic: it lists its request plan, needs your explicit yes at a terminal
+outside Claude Code (default **No**) and may be billed. Selection, launch,
+doctor and import never run it automatically. Failed or stale evidence stays
+visible as Attention; it is not a use prohibition. See
 [guides/models.md](guides/models.md#add-a-model-of-your-own).
 
 ## 5. Know what a session costs
@@ -198,9 +208,11 @@ Inside the session, type:
 ```
 
 `/cm show` lists the lineup and the profiles you can switch to;
-`/cm set <agent>=<model>` binds one agent to another model; the change takes effect for new agents
-after you type `/reload-plugins` in that session. Only you can run `/cm`,
-not the model. More: [guides/lineup.md](guides/lineup.md).
+`/cm set <agent>=<model>` binds one agent to another model. If its selector
+is already in the proven launch fence and the class/process policy permits
+LIVE, type `/reload-plugins` and start fresh agents; running agents keep their
+binding. Otherwise the change is recorded for relaunch. Only you can run
+`/cm`, not the model. More: [guides/lineup.md](guides/lineup.md).
 
 ## 9. Exit and resume
 

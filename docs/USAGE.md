@@ -19,8 +19,16 @@ The words the launcher uses, as its help (`?` on the card) defines them:
 - **lead**: the model you talk to; **agents**: the `cm-*` subagents it
   delegates to.
 - **provider**: where a model runs: an API key or an account sign-in,
-  through the local gateway. A provider is **connected** when its key is
-  set or its sign-in saved and the gateway serves its models.
+  through the local gateway. A provider is **connected** when its selected
+  route is locally configured (key/sign-in where required, credential route
+  approved) and the gateway serves its models; keyless LAN routes need no key.
+  This is not upstream verification.
+- **admission**: an optional definition-bound local badge, not route permission.
+  `models admit` makes zero inference requests; `models revoke` removes only
+  the badge, not availability or qualification evidence.
+- **qualification**: optional diagnostics, with explicit human consent to the
+  request plan (default No). Missing, failed or stale evidence warns, but does
+  not prohibit a valid binding on a usable route.
 - **follow / pin**: a following session takes its profile's edits; a
   pinned one keeps its lineup.
 - **lead set**: the models `/model` offers in a session: the lead's class,
@@ -61,8 +69,10 @@ want.
 
 - [Profiles](guides/profiles.md): the lead and agent roles, shipped and
   starter profiles, named bindings and the default profile.
-- [Models](guides/models.md): model lines, adding a model of your own,
-  admission and qualification, context windows.
+- [Models](guides/models.md): add and bind without optional admission or
+  qualification, family labels versus review independence, and actual shared
+  context windows. Supported LAN and legacy custom models can be agents;
+  explicit bindings override role recommendations, not route or native limits.
 
 ## Sessions and lineup changes
 
@@ -88,6 +98,10 @@ want.
 
 - [Update](update.md) · [Move to another computer](guides/move-machines.md)
   · [Uninstall](uninstall.md).
+- Import never approves a credential destination or imports trusted passing
+  evidence. No storage migration is needed for permissive bindings, but older
+  releases may refuse broader family labels or newly allowed profiles;
+  [rollback limits](guides/move-machines.md#moving-to-an-older-release-or-rolling-back).
 
 ## Trust and privacy
 

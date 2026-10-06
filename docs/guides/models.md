@@ -10,14 +10,20 @@ lists them all.
 | Kind | Where it comes from | Before you can bind it |
 | --- | --- | --- |
 | catalog line | the release, reviewed | connect its provider |
-| your line | `claude-multi models add <provider> <wire> <options>`, or **A** in Providers | admit it; qualify it for agent roles |
+| your line | `claude-multi models add <provider> <wire> <options>`, or **A** in Providers | a valid declaration and a usable provider route; admission and qualification are optional |
 | candidate | the pinned gateway's registry or a provider's listing | nothing: a candidate is advice, never a grant; declare it to make it your line |
 
 A line belongs to a **provider** (where it runs: OpenRouter, Anthropic, a
-server of yours) and to a model **family** (who makes it: Anthropic,
-OpenAI, DeepSeek, …). On an aggregator such as OpenRouter the two differ;
-reviews are routed by family, and an `unknown` family never counts as an
-independent reviewer.
+server of yours) and has a model **family** label (who makes it: Anthropic,
+OpenAI, DeepSeek, …). You may supply any nonempty, single-line printable
+label up to 64 characters, including `mistral`; controls and secret-bearing
+values are refused. A line's own label overrides its provider's default;
+an omitted aggregator family is `unknown`.
+
+A label is not a certificate of review independence. Review routing prefers
+recognized different families, calls recognized equal families **same-family**,
+and otherwise reports **independence unknown**. Unrecognized families remain
+usable for leads, agents and reviews.
 
 ## The release's lines
 
@@ -58,11 +64,30 @@ claude-multi models --candidates       # advisory candidates (nothing declared o
 
 The listing shows each line's generation, provider, context class,
 efforts and status, its typed `/model` selectors, and the retired keys
-with their successors. A line you add starts **New · Off**: declared and
-served by the gateway, but offered nowhere until you admit it. A line
-whose provider has no key or sign-in is shown as not connected on the
+with their successors. Three separate facts matter:
+
+- **Use availability:** a valid declaration, an enabled provider and a usable
+  route. Route approval, a required credential and a supported selected
+  transport still matter; an unavailable line stays visible with its remedy.
+- **Admission:** an optional, definition-bound local badge. A new line is
+  **New · not admitted**, not off. Missing or stale admission is Attention,
+  not a reason to hide it or refuse a binding.
+- **Qualification:** optional diagnostic evidence, shown as not run, passing,
+  failed or stale. Failure stays visible; being usable never turns it into
+  a pass or promises that a provider request will work.
+
+A line whose provider has no key or sign-in is shown as not connected on the
 card and in **M**; a line the running gateway does not serve is a doctor
-finding with its fix.
+finding with its fix. Local readiness means locally configured and served,
+not upstream verified.
+
+**Direct-mode exception:** `claude-multi direct --model <line>` treats a
+missing credential as advisory ("requests may fail") and still launches.
+The TUI Direct screen warns and asks **Launch anyway?**, default **No**;
+answering Yes continues despite the missing credential. Profile and binding
+paths retain their credential refusals. This narrow Direct exception does
+not bypass route approval, an explicitly disabled provider or an unusable
+selected transport; no credential or alternate transport is supplied implicitly.
 
 ## Add a model of your own
 
@@ -70,41 +95,57 @@ No step happens by itself; every request to a provider is listed and
 needs your yes, in a terminal outside Claude Code (no flag waives this).
 
 In the launcher: **G** Providers → select the provider → **A** add models
-(a listing you agree to, with checkboxes, or entry by hand) → **M** Models
-→ Enter admits → **Q** qualifies → **E** binds it in the profile editor.
+(a listing you agree to, with checkboxes, or entry by hand), then return to
+**E** on the launch card to bind the line in the profile editor. Skipping
+admission does not prevent selection. In **M** Models, Enter changes the
+optional admission badge and **Q** offers optional diagnostics.
 
-From a terminal:
+With the provider already connected and its route usable, add and bind
+without either optional step:
 
 ```bash
-claude-multi discover <provider>                          # one listing request, after you agree
-claude-multi discover <provider> --add <wire> --as custom-example
 claude-multi models add <provider> <wire> --context <n> --source docs --source-ref "URL, date" --as custom-example
-claude-multi models edit custom-example                   # stage roles and family before admission
-claude-multi models admit custom-example
-claude-multi models qualify custom-example --agents
-claude-multi profile edit <name>
+claude-multi profile edit <name>         # choose custom-example for the lead or a cm-* agent
 ```
 
-- **Declare.** A declaration records the wire id, a sourced context size
-  (`--source docs|registry` needs `--source-ref` with a URL and date), the
-  efforts and the roles you intend. A listing without a context needs one
-  you source; a context above the listed one needs `--over-listed REASON`.
-- **Admit.** Admission runs a checklist (valid declaration, usable route,
-  key present by name, every alias served) and at most one small request
-  you agree to. It is bound to the line's definition: changing its wire,
-  context or efforts needs a new admission; its display name does not.
-- **Qualify.** `claude-multi models qualify <line>` runs bounded checks
-  through the gateway after one confirmation listing every request: a
-  minimal request (`--smoke`), one per effort (`--efforts`), a tool round
-  trip (`--tools`, with `--tool-choice forced` or `auto`), a streamed
-  request (`--stream`); `--agents` runs all four. It writes evidence only:
-  it never admits or edits a line. An agent role needs passing evidence; a
-  network failure is inconclusive and never erases an earlier pass.
-- **Bind** the line in a profile ([profiles.md](profiles.md)).
+A declaration records the wire id, a sourced context size
+(`--source docs|registry` needs `--source-ref` with a URL and date),
+efforts and role recommendations. A listing without a context needs one
+you source; a context above the listed one needs `--over-listed REASON`.
+An explicit binding overrides capability and role recommendations with a
+warning, including on supported LAN routes and legacy custom lines. It
+does not create a missing selector, effort mapping or route contract;
+an agent does not inherit a model's lead-only environment.
 
-When the client or gateway pin changes in a release, earlier passing
-evidence becomes stale: it still counts, and doctor shows Attention
-suggesting a new qualification.
+### Optional admission and diagnostics
+
+```bash
+claude-multi models admit custom-example                 # optional local badge; zero inference requests
+claude-multi models qualify custom-example --smoke        # optional minimal request, after explicit consent
+claude-multi models qualify custom-example --agents       # optional effort, tools and streaming checks too
+```
+
+- **Admit** validates the local definition and asks before recording your
+  attestation. It sends no inference request and needs no smoke pass,
+  running gateway or provider credential just to record the badge. Changing
+  the wire, context or efforts makes the badge stale; the display name does
+  not. Admission never approves a credential destination.
+- **Qualify** lists every bounded request and requires a human's explicit
+  yes at a terminal outside Claude Code; the default is **No**, and no flag
+  waives it. Checks include `--smoke`, `--efforts`, `--tools` (with
+  `--tool-choice forced` or `auto`), `--stream` and `--context`; `--agents`
+  combines smoke, efforts, tools and streaming. Qualification writes evidence
+  only: it never admits or edits a line. A network failure is inconclusive
+  and never erases an earlier pass. Failed tool checks remain failures;
+  automatic-only tool evidence is not a forced-tool pass.
+- **Use is your choice.** Missing, failed or stale evidence warns for leads,
+  agents and workflow defaults; it does not prohibit the binding. Selection,
+  launch, doctor and import never run qualification automatically. Declining
+  diagnostics sends no request.
+
+When the client or gateway pin changes in a release, earlier evidence stays
+recorded but is shown as stale, not a current verification. Doctor shows
+Attention suggesting optional requalification.
 
 A provider whose key you save before it has any model continues into this
 journey by itself (G → K on a provider with no models).
@@ -115,13 +156,20 @@ A new first-party model on a signed-in account can be added the same way:
 select Anthropic or OpenAI in **G**, **A** → enter it by hand with its
 documented context and efforts. It needs no new route approval. Its agent
 qualification also runs an offline check of the pinned Claude Code with
-that model id; where that check cannot run on your platform, the line
-stays ineligible for agents with that reason.
+that model id. Missing, failed or unavailable exact-client evidence is a
+warning, not an agent-use prohibition. The selected account or API-key
+transport must still support the route; there is no implicit fallback.
 
 ## Revoke, remove, replace
 
+**Revoke removes only the admission badge. The line remains usable, and
+qualification evidence is unchanged.** It sends no inference request and
+does not disable the route, remove a binding or change a session's fence.
+To stop using a model, remove its binding or declaration; to stop using a
+provider, disable that provider in Settings.
+
 ```bash
-claude-multi models revoke <line>                      # running sessions keep their fence until they relaunch
+claude-multi models revoke <line>                      # optional badge only; not an availability control
 claude-multi models rm <line>                          # a line you added
 claude-multi models rm <line> --successor <line>       # also rewrite the profiles and bindings that use it
 ```
@@ -142,13 +190,24 @@ claude-multi window-ceiling 400K       # set it (applies at the next launch or r
 claude-multi window-ceiling --reset    # back to 800K
 ```
 
-Settings (**O**) has the same row. A session's window is the smaller of
-the ceiling and the smallest provider bound among its lead set. The lead
-and every agent on a 1M-class line whose provider bound reaches that
-window run at it; an agent line whose bound is below it runs in the 200K
-class with its own smaller window, so it never outgrows its provider. The
-card, the lineup summary (`/cm show`, `claude-multi profile show <name>`)
-and `--print-launch` show each role's effective window.
+Settings (**O**) has the same row. A session's process window is the smaller
+of the ceiling and the smallest provider bound among its lead set. A
+1M-class agent whose provider bound reaches that window keeps the 1M class
+and shares that window; one whose bound falls below it uses the existing
+200K fallback. In scalar-window sessions, agents share that process policy.
+A new binding using a legacy suffixless selector uses the actual scalar or
+200K client class, not 1M merely because its declaration says 1M. There is
+no separately adjustable per-agent provider-sized window.
+
+For example, with an 800K process window a line bounded at 872K can keep
+its 1M class, while a 500K line falls back to 200K. A 128K provider bound
+cannot make a 200K-class agent's window 128K: a request can overflow the
+provider before the client compacts. The card, lineup summary (`/cm show`,
+`claude-multi profile show <name>`) and `--print-launch` show the actual
+client class and effective window; warnings name the process window,
+compaction trigger and provider bound where they mismatch. Such predictions
+warn rather than block. Never inflate declared capacity to hide a warning.
+Concrete invalid-window or native selector limits still refuse.
 
 A session recorded with agents in another class keeps them until its next
 resume, which shows each move (for example "agent class 200K → 1M");

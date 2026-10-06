@@ -39,10 +39,25 @@ Every change is classified before anything is written:
 | Class | When | What happens |
 | --- | --- | --- |
 | LIVE | only agent bindings change, every new model is inside the fence the session launched with, and the lead stays in the lead set | the agents and the lineup are rewritten at once; type `/reload-plugins` in that session, then start agents fresh (running agents keep their model) |
-| RELAUNCH | another lead class, a native-agent or workflow change, a model outside the fence, a context gap, or a model of your own on an agent | recorded as a pending change (↻) and applied at the next resume |
+| RELAUNCH | another lead class or process-window policy, a native-agent or workflow change, or a selector outside the proven launch fence | recorded as a pending change (↻) and applied at the next resume |
+
+A model of your own does not by itself require RELAUNCH: changing to an
+already-fenced operator selector can be LIVE. A new, unbound operator
+selector is not automatically in every session's fence. The exact on-disk
+launch fence, lead/agent/fallback sets, credentials and name-collision checks
+still apply; a missing selector or stale fence proof is not waived by a
+badge. Admission or qualification changes alone do not rewrite fences or
+require scope repair.
+
+Context-overflow predictions are warnings, not automatic RELAUNCH reasons.
+The shared process window and actual client class still govern each agent;
+a small provider bound is not a per-agent window control
+([context windows](models.md#context-windows)). A family-change prompt is
+about cache/history cost, not permission to use that family.
 
 `/reload-plugins` is yours to type: no hook can observe it, so until you
-do, new agents keep the previous bindings.
+do, new agents keep the previous bindings. Start fresh agents afterwards;
+`SendMessage` continuation keeps the old agent's binding.
 
 ## From a terminal and the sessions screen
 
@@ -120,18 +135,38 @@ claude-multi direct -c                # continue the last session in this direct
 ```
 
 A direct session has a lead and no `cm-*` agents; Claude Code's own agents
-stay on. **D** lists every lead-capable model (models of your own too);
-← → picks the effort, and Tab saves the choice as a lead-only profile. A
+stay on. **D** offers valid models with usable lead/context fields and routes
+(models of your own and legacy custom lines too), without requiring admission
+or qualification. ← → picks the effort, and Tab saves the choice as a
+lead-only profile. A
 direct session gains agents later with `/cm profile <name>`.
 `--no-subagents` denies delegation for that session (recorded; resume
 applies it again).
 
+With `claude-multi direct --model <model>` from the CLI, a missing provider
+credential is advisory: it warns "requests may fail" and still launches.
+The TUI Direct screen offers **Launch anyway?**, default **No**; explicitly
+answer Yes to continue despite the missing credential. Profile and binding
+paths retain their credential refusals. This Direct exception does not waive
+route approval, explicit provider disablement or an unusable selected
+transport, and never chooses another credential or transport for you.
+
 ## Reviews
 
 `/cm review [high-stakes] [<range>]` briefs the lead for a report-only
-review routed by the lineup: the reviewer agents from another model family
-review the change; high-stakes uses both reviewer grades and the lead
+review routed by the lineup. Recognized different families get preference;
+recognized equal families are labelled **same-family**. Unknown or
+unrecognized labels show **independence unknown**, not same-family, and
+fall back to the usual preferred bound reviewer. With no reviewer, the lead
+reviews alone. High-stakes uses both bound reviewer grades and the lead
 arbitrates. It writes nothing and exists only inside a session.
+
+Explicit bindings can override role and grade recommendations, including for
+legacy custom models; the known role IDs and `/cm` effort grammar do not
+change. Native-unsupported efforts and missing gateway-effort mappings still
+refuse. A client-effort workflow default still cannot encode a nondefault
+effort ([profile limits](profiles.md#recommendations-and-technical-limits)).
+Read-only reviewer/explorer tools and writer worktree isolation stay in force.
 
 ## Inside the session
 

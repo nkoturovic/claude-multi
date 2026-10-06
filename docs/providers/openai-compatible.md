@@ -21,41 +21,62 @@ OpenAI-compatible endpoint or a preset below. Give its name and `https`
 address, the models' family (`unknown` if unsure), and optionally the model
 list's address. The key is always sent as `Authorization: Bearer`. Approve
 where the key goes, then type the key; adding models follows. In **M** Models,
-Enter admits a model and **Q** qualifies it for agents; bind it in the profile
-editor. Declaration, route approval, a key, admission, qualification and
-binding are separate steps: declaring an endpoint alone grants nothing.
+Enter changes the optional admission badge and **Q** offers optional
+diagnostics; bind it in the profile editor without either step. A valid
+model on an enabled, approved route with its key can lead or run agents.
+Declaring a keyed endpoint alone never approves its credential destination.
 
 From a terminal outside Claude Code (an invented vendor and model with a
 200,000-token context limit; use your real model's documented limit, never
-inflate it to make it eligible):
+inflate it to silence a context warning):
 
 ```bash
 claude-multi providers add acme --kind openai-compatible --base-url https://api.acme.example/v1 --auth bearer --secret-ref env:ACME_API_KEY --family unknown
 claude-multi providers set-key acme
 claude-multi models add acme acme-large-1 --context 200000 --source docs --source-ref "https://docs.acme.example/models" --as custom-acme-large
+claude-multi profile edit <name>         # bind custom-acme-large as a lead or agent
+```
+
+`models add` defaults to recommending lead use. An explicit agent binding
+overrides that recommendation with a warning; you do not have to edit the
+capabilities or declare agent roles first. If you want to record your own
+recommendations, optionally run:
+
+```bash
 claude-multi models edit custom-acme-large
 ```
 
-`models add` declares a lead-only model. In the editor, keep the existing
-fields under `custom-acme-large` and add these fields to request agent use:
+Keep its existing fields and, for example, add:
 
 ```json
 {"capabilities": ["lead", "agents"], "roles": ["cm-analyst", "cm-reviewer"]}
 ```
 
-Save and confirm the edit **before** admission, since changing the declaration
-invalidates earlier admission and qualification. Then run:
+These are recommendations, not an agent allowlist. Definition changes can
+make existing admission and qualification stale. Optional actions afterwards:
 
 ```bash
 claude-multi models admit custom-acme-large
 claude-multi models qualify custom-acme-large --agents
 ```
 
+Admission records a local badge with zero inference requests. Qualification
+requires explicit human consent, default **No**. It lists every bounded
+request, may be billed, and requires a
+terminal outside Claude Code. Missing, failed or stale evidence warns; it
+never becomes a pass just because the model is bindable. Diagnostics never
+run automatically during selection, launch, doctor or import.
+
 `providers add` asks you to approve the credential route; `--declare-only`
 writes an inert declaration instead. Changing the address or key name needs
-fresh approval. After admission, choose the model as a lead; after successful
-agent qualification, bind this example to `cm-analyst` or `cm-reviewer` too
-([models](../guides/models.md), [profiles](../guides/profiles.md)).
+fresh approval. Admission does not approve a route; `models revoke` removes
+only its badge, leaving usability and qualification evidence unchanged.
+See [models](../guides/models.md) and [profiles](../guides/profiles.md).
+
+A model may have any nonempty, single-line printable family label up to 64
+characters, including `mistral`; controls and secrets are refused. The line's
+label overrides the provider default. Unknown or unrecognized labels mean
+**independence unknown** for reviews, not an agent-use restriction.
 
 Other options:
 
@@ -88,8 +109,8 @@ From a terminal, `claude-multi providers add --preset groq` declares and
 approves one, then `claude-multi providers set-key groq` saves its key.
 The same options for [a second copy or shared key](anthropic-compatible.md#the-same-preset-twice)
 apply. Each has a model-list address: listing models is a separate, consented
-request, not automatic admission or qualification. Add and admit the model ids
-you choose; qualify any you want to use as agents.
+request, not automatic admission or qualification. Add the model ids you
+choose and bind them as leads or agents; the badge and diagnostics are optional.
 
 ## What the route does
 
@@ -99,8 +120,10 @@ you choose; qualify any you want to use as agents.
   `/chat/completions` requests, including manual and automatic compaction.
 - Declared efforts are passed as the chat API's reasoning effort, clamped
   to the levels you declared.
-- Its models still need admission, and agent roles need qualification, as
-  for any model of your own ([guides/models.md](../guides/models.md)).
+- Its valid models can lead or run agents on usable routes without admission
+  or qualification ([guides/models.md](../guides/models.md)). Exact selector
+  and effort mappings, endpoint/auth safety and the release's keyed-route
+  audit remain required. There is no redirect or protocol fallback.
 - `api.openai.com` is refused for this kind: use the dedicated
   [OpenAI Platform API-key route](api-keys.md#openai), not a generic endpoint.
 

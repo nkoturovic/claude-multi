@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Start with `claude-multi doctor`. It reports **Ready**, **Attention**
-(something to fix, with the exact fix) or **BLOCKED** (something is
+(a warning to assess, with a remedy or optional diagnostic) or **BLOCKED** (something is
 broken, and what). Plain `doctor` refreshes the helper shims as routine
 housekeeping; repair, pruning and token rotation require their explicit
 options. Use `claude-multi doctor --json` for a read-only report.
@@ -51,7 +51,7 @@ to a model.
 | an account's requests fail after a while | `invalid_grant` lines since the sign-in, or the pool has no credential record | sign in again: `claude-multi providers sign-in anthropic` (or `openai`) |
 | 401 or 403 from a keyed provider | the provider refused the key | create a new key in its console and set it again |
 | 402 or 429, agents of one provider stall | per-model counts of 402/429/403 from the gateway's log | in the session, `/cm fallback <provider>`, then `/reload-plugins`; for new launches pick a fallback profile |
-| a provider has no models | its key is set but nothing is admitted | **G** → **K** continues into adding a model, or `claude-multi discover <provider>` |
+| a provider has no models | its key is set but no model is declared | **G** → **K** continues into adding a model, or `claude-multi discover <provider>` |
 | a provider or model command: “needs a terminal outside Claude Code sessions” | the command itself refuses | run it yourself in a terminal outside Claude Code; no flag waives this |
 | a model answered like another one | “gateway substitution:” | the provider served a different model; check `claude-multi models` and rebind the agent if it matters |
 | requests fail saying a spending or usage limit was reached | per-model counts of 402 or 429 (a limit you set yourself can answer 400) | raise or wait out the limit in the provider's console ([costs per provider](providers/api-keys.md#6-costs-and-limits)); meanwhile `/cm fallback <provider>` |
@@ -62,6 +62,32 @@ to a model.
 | a preset or an OpenAI-compatible endpoint: “not available in this release” | a build whose keyed OpenAI-compatible audit is closed (the route is available in 1.0.0) | use an audited release, the vendor's Anthropic-compatible endpoint, OpenRouter, or a server on your network ([providers/openai-compatible.md](providers/openai-compatible.md)) |
 | adding a preset again: “is already the API key of …” | another provider uses that key name | follow the message: another provider name, or share or replace the key on purpose ([the same preset twice](providers/anthropic-compatible.md#the-same-preset-twice)) |
 | setting a key asks to replace it “for each of them” | the key name is shared: other providers (a preset added twice, or a provider of the earlier custom registry) use the same key | answer y to replace it for every provider named, or N to keep it ([replace a shared key](providers/api-keys.md#4-replace-remove-disconnect)) |
+
+## Models, evidence and bindings
+
+Route availability, the optional admission badge and optional qualification
+are separate. Local readiness means configured and served, not upstream
+verified. Doctor never sends model qualification requests automatically.
+
+| Symptom | Meaning | What to do |
+| --- | --- | --- |
+| New · not admitted, or stale admission | the optional definition-bound badge is absent or stale; not a use block | bind the model on its usable route, or optionally use **M** → Enter / `claude-multi models admit <line>`; admission sends no inference request |
+| qualification not run, failed or stale; exact-client evidence unavailable | Attention, not a lead/agent/workflow ban; the failed check remains a failure | assess the named limitation; optionally run `claude-multi models qualify <line> --agents` at a terminal outside Claude Code, with explicit human consent to the plan, default No |
+| tools evidence covers auto but not forced | automatic tool use is not evidence of forced-tool support | keep the warning or explicitly test forced tools; no automatic weaker-contract retry |
+| a model remains usable after `models revoke` | expected: revoke removes only the badge, leaving qualification evidence unchanged | remove its binding/declaration or disable the provider if you want to stop using it |
+| a model is disabled or its route is unavailable | a real configuration restriction, not missing qualification | enable the provider deliberately or approve/fix the exact route named; there is no implicit transport or credential fallback |
+| Direct can launch despite a missing credential | expected: CLI Direct warns "requests may fail"; TUI Direct asks **Launch anyway?**, default **No**, and continues only on Yes | set the key or sign in before expecting requests to work; profile/binding credential refusals remain, and neither Direct path bypasses route approval, provider disablement or an unusable selected transport |
+| a family says independence unknown | an unknown or unrecognized label cannot certify independent review | keep the model if wanted; use a recognized different family if review independence matters |
+| a capability/role or missing companion-grade warning | the binding overrides a recommendation | assess it; the explicit lead/agent binding remains allowed, including LAN and legacy custom lines |
+| client window or compaction trigger exceeds provider bound | overflow is possible; a small provider limit does not shrink a shared client window | inspect the actual class, process window, trigger and provider bound; reduce the session ceiling where appropriate or choose another binding, never inflate declared capacity |
+| LAN server observed unreachable | Attention rather than a launch veto; requests may fail | connect to its network or choose another model; unknown observations are not promoted to ready |
+| nondefault effort refused for a client-effort workflow default | that separate effort cannot be represented by its one selector | choose its default effort; admission or qualification cannot waive this limit |
+| a new binding needs RELAUNCH | its selector is outside the proven launch fence or its class/process policy changes | resume to apply it; being operator-added or unqualified alone does not require relaunch |
+| an older release refuses a profile after rollback | unchanged storage formats do not imply support for broader family labels or newly allowed bindings | use a compatible binding or return to the newer release; never hand-edit records to bypass the refusal ([rollback limits](guides/move-machines.md#moving-to-an-older-release-or-rolling-back)) |
+
+Unknown roles/models, malformed declarations, missing selector mappings,
+unsupported native efforts, unsafe routes and damaged state still refuse.
+See [models](guides/models.md) and [profile limits](guides/profiles.md#recommendations-and-technical-limits).
 
 ## Claude Code's copy
 
@@ -124,7 +150,7 @@ and shortens the middle, so an 80-column terminal still shows what to do.
 | The card shows | Fix |
 | --- | --- |
 | “! CLAUDE_CONFIG_DIR ignored: settings, MCP, memory, resume use ~/.claude — V” | managed sessions read settings, MCP servers, memory and resume from `~/.claude`; **V** says which values that affects. Unset the variable, or keep it for your own `claude` |
-| “! <n> new model line(s) off until admitted — M → Enter admits” | **M**, then Enter on the line admits it (or leave it off) |
+| a new model is not admitted | the badge is optional: bind it on a usable route, or **M** → Enter to attest locally; see any separate route/credential remedy |
 | “implementers unavailable: not a Git repository here (git init enables them)” | launch from a Git work tree, or `git init` |
 | the lead or agents with “no <pool> OAuth credential record” | sign in where the row says: **G**, then **L** on the account provider (on a resume card, the row names the way back to a launch card first) |
 | **H**: a key to save, “G (providers) → K on <provider>” | **G**, then **K** on that provider (from a terminal: `claude-multi providers set-key <provider>`); on a resume card, the report first names the way back to a launch card, then **S** resumes |

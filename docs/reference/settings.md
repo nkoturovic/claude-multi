@@ -42,6 +42,28 @@ Settings screen (**O**: Enter edits, **R** resets).
 | `explore_inherit_cap_disabled` | true | turns off Claude Code's Explore inheritance cap for Fable leads (other leads are not affected) |
 | `review_round_cap` | 2 (1–3) | the review rounds the lineup allows, printed in the lineup |
 | `workflow_default_binding` | none | a model and effort for workflow agents started without a `cm-*` agent type, and for Claude Code's general-purpose agent |
+| `admitted_lines` | empty | optional model admission badges, not an availability allowlist; change through Models, not by hand |
+
+A workflow default may use an unadmitted or unqualified line on a usable
+route. Missing/failed/stale evidence (including forced-tool checks) warns.
+A single-selector client-effort line can supply only its default effort for
+this setting; gateway-effort lines require an existing selector/contract
+mapping. An explicit binding overrides capability and role recommendations,
+not native effort limits or route approval.
+
+Admission is a local definition-bound attestation; `models admit` sends no
+inference requests. `models revoke` clears only the badge, leaving model
+availability and qualification evidence unchanged. Provider enablement and
+current route/transport usability are separate checks; no badge implicitly
+enables a provider or approves a key destination. Current availability
+findings are computed, not a new stored setting. Qualification is optional,
+requires explicit human consent (default No), and never runs during selection,
+launch, doctor or import.
+
+The process window is shared, not independently sized to each agent's
+provider limit. The actual client class, window and compaction trigger may
+exceed a small provider bound, which warns without inflating that bound
+([context windows](../guides/models.md#context-windows)).
 
 The Settings screen also rotates the gateway token
 ([guides/gateway.md](../guides/gateway.md#the-gateway-token)) and edits
@@ -81,7 +103,7 @@ file is never parsed by a shell. Key names are listed per provider in
 | `profiles/<name>.json` | Config root | your profiles (and `.<name>.<reason>-<time>.json` backups) |
 | `bindings.json` | Config root | named bindings |
 | `providers.d/<id>.json` | HOME-relative | the providers you declared |
-| `operator-ledger.json` | HOME-relative | route approvals, admissions and served aliases (claude-multi writes it; never edit) |
+| `operator-ledger.json` | HOME-relative | credential-route approvals, optional definition-bound admission badges and served aliases (claude-multi writes it; never edit) |
 | `endpoint.json` | HOME-relative | the gateway's port, backend, unit and outbound proxy |
 | `continuity.json` | HOME-relative | aliases kept serving for sessions of retired models |
 | `custom.json` | Config root (launcher); HOME-relative (gateway) | the earlier registry of your own models (`claude-multi providers migrate-custom` moves it); differing copies are reported as a mismatch |
