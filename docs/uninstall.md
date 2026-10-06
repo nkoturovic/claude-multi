@@ -9,8 +9,11 @@ claude-multi uninstall
 ```
 
 It is command-line only, because it removes the program the launcher
-runs. It prints its whole plan first and removes nothing before you answer
-y/N. Credentials are removed only after you type `delete credentials`.
+runs. Run it in a terminal outside Claude Code, with both input and output
+connected to the terminal; piped answers are not enough. It prints its
+whole plan first and removes nothing before you answer y/N. Credentials
+are removed only after you type `delete credentials`. `--yes` skips the
+y/N question, not the terminal requirement or the typed phrase.
 
 ## Options
 
@@ -19,7 +22,7 @@ y/N. Credentials are removed only after you type `delete credentials`.
 | `--dry-run` | show the plan and remove nothing |
 | `--keep-setup` | keep your setup and session state: profiles, settings, records |
 | `--keep-credentials` | keep your API keys, sign-ins and the local gateway key, without asking |
-| `--yes` | skip the y/N question (never the typed one for credentials) |
+| `--yes` | skip the y/N question (never the terminal requirement or the typed one for credentials) |
 | `--force` | remove even when sessions may still be running (they are named) |
 
 ## What it removes, and what it keeps

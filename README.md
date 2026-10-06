@@ -24,6 +24,11 @@ curl -fsSLO https://github.com/nkoturovic/claude-multi/releases/latest/download/
 sh install.sh
 ```
 
+Run this in a terminal outside Claude Code. Interactive setup needs
+terminal input and output; piped answers are not enough. To install without
+starting setup, use `sh install.sh --no-setup`, then run
+`claude-multi setup` in a terminal later.
+
 The installer verifies the release's signed checksums before it installs
 anything, then starts `claude-multi setup`. The installer script itself
 is what you trust: read it before you run it, and see

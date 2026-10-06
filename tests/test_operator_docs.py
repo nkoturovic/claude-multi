@@ -1061,6 +1061,51 @@ class PageAnchorTests(unittest.TestCase):
             self.assertIn(anchor, flat)
         self.assertNotRegex(flat, r"\d,\d{3} (offline )?tests")  # no dated counts
 
+    def test_linux_minimal_image_prerequisites(self) -> None:
+        text = _text("install/linux.md")
+        flat = _flat(text)
+        self.assertIn("minimal Debian or Ubuntu image", flat)
+        self.assertIn("as root, or with `sudo`", flat)
+        self.assertIn("apt-get update", text)
+        install = re.search(r"^apt-get install (.+)$", text, re.MULTILINE)
+        self.assertIsNotNone(install)
+        self.assertTrue({"curl", "ca-certificates", "openssh-client"} <= set(install.group(1).split()))
+        self.assertIn("trusted CA certificates for HTTPS", flat)
+        self.assertIn("Fedora", flat)
+        self.assertIn("`openssh-clients`", flat)
+        self.assertIn("installer itself runs as your normal user", flat)
+        self.assertIn("Without it, the installer", flat)  # OpenSSH is not mandatory in every mode.
+
+    def test_security_gives_version_matched_signature_downloads(self) -> None:
+        text = _text("security.md")
+        flat = _flat(text)
+        self.assertIn("version=VERSION", text)
+        base = f"{vocab.PUBLIC_REPOSITORY}/releases/download/v${{version}}"
+        for name in ("SHA256SUMS", "SHA256SUMS.sshsig"):
+            command = f'curl -fsSLO "{base}/{name}"'
+            self.assertIn(command, text)
+            self.assertLess(text.index(command), text.index("ssh-keygen -Y verify"))
+        self.assertIn("without the leading `v`", flat)
+        self.assertIn("same version for every file", flat)
+        self.assertIn("do not mix", flat)
+        self.assertIn("files from `latest`", flat)
+        self.assertIn("directory containing the downloaded installer or bundle", flat)
+
+    def test_setup_and_uninstall_explain_terminal_input(self) -> None:
+        readme = _flat(_text("README.md"))
+        uninstall = _flat(_text("uninstall.md"))
+        for flat in (readme, uninstall):
+            self.assertIn("terminal outside Claude Code", flat)
+            self.assertIn("input and output", flat)
+            self.assertIn("piped answers are not enough", flat)
+        self.assertIn("`sh install.sh --no-setup`", readme)
+        self.assertIn("`claude-multi setup` in a terminal later", readme)
+        self.assertIn("connected to the terminal", uninstall)
+        self.assertIn("`--yes` skips the y/N question, not the terminal requirement or the typed phrase", uninstall)
+        self.assertIn("`delete credentials`", uninstall)
+        self.assertIn("| `--yes` | skip the y/N question (never the terminal requirement", uninstall)
+        self.assertIn("| `--dry-run` | show the plan and remove nothing |", uninstall)
+
     def test_the_release_urls_are_the_packaged_ones(self) -> None:
         product = json.loads(_text("packaging/product.json"))
         latest = product["release_latest_url"]
@@ -1289,13 +1334,17 @@ class PageAnchorTests(unittest.TestCase):
 
     def test_networking_distinguishes_transport_configuration(self) -> None:
         text = _flat(_text("guides/networking.md"))
-        for anchor in ("disables environment proxies for these requests",
+        for anchor in ("`https_proxy` / `HTTPS_PROXY`", "`no_proxy` / `NO_PROXY`", "lowercase wins",
+                       "not the gateway setting or operating-system proxy discovery",
+                       "`curl`'s or `wget`'s own proxy settings", "only the proxy you set in setup",
+                       "not SOCKS, PAC or every proxy authentication scheme",
                        "the environment's proxy settings", "direct DNS resolution and TCP connection",
                        "values from the installing terminal are copied into the unit",
                        "unit adds no certificate override",
                        "LAN reachability check is separate"):
             self.assertIn(anchor, text)
-        self.assertIn("urllib.request.ProxyHandler({})", _text("src/claude_multi/release_update.py"))
+        self.assertIn("urllib.request.ProxyHandler(urllib.request.getproxies_environment())",
+                      _text("src/claude_multi/release_update.py"))
 
     def test_contributing_says_what_is_safe_to_attach(self) -> None:
         flat = _flat(_text("CONTRIBUTING.md"))

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import http.client
 import os
 import urllib.error
 import urllib.parse
@@ -105,7 +106,8 @@ class HttpsTransport:
     a version's files, ``latest_url`` for the latest release's
     ``MANIFEST.json`` and checksums. Redirects stay on https and on the
     release host (plus its known download host); every response is capped
-    at the size the caller allows."""
+    at the size the caller allows. Proxy selection and bypass use the process
+    environment; ``environ`` is the certificate-trust seam only."""
 
     def __init__(self, base_url: str, latest_url: str | None = None, *,
                  environ: Mapping[str, str] | None = None, timeout: float = TIMEOUT,
@@ -132,7 +134,7 @@ class HttpsTransport:
         if self._opener is not None:
             return self._opener(url, timeout=self.timeout)
         handlers = [urllib.request.HTTPSHandler(context=tls.context(self._environ)), _Redirects(self.hosts),
-                    urllib.request.ProxyHandler({})]
+                    urllib.request.ProxyHandler(urllib.request.getproxies_environment())]
         opener = urllib.request.build_opener(*handlers)
         request = urllib.request.Request(url, headers={"User-Agent": "claude-multi-update"})
         return opener.open(request, timeout=self.timeout)
@@ -145,9 +147,9 @@ class HttpsTransport:
             raise
         except urllib.error.HTTPError as exc:
             raise TransportError(f"the release server answered {exc.code} for {name}") from exc
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            reason = getattr(exc, "reason", exc)
-            raise TransportError(f"cannot reach the release server for {name}: {reason}") from exc
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
+            # Proxy URLs and CONNECT replies can carry credentials or server text.
+            raise TransportError(f"cannot reach the release server for {name}: connection failed") from None
         final = urllib.parse.urlsplit(response.geturl() if hasattr(response, "geturl") else url)
         if final.scheme != "https" or (final.hostname or "").lower() not in self.hosts:
             response.close()

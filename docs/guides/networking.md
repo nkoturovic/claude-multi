@@ -10,7 +10,7 @@ TLS-inspecting firewall, configure each one you use.
 | --- | --- | --- | --- |
 | installer (`install.sh`) | the release download location | `curl`'s or `wget`'s own proxy settings | `curl`'s or `wget`'s own CA settings |
 | launcher: Claude Code download | `downloads.claude.ai` | the environment's HTTPS proxy settings | `SSL_CERT_FILE` / `SSL_CERT_DIR`, else the Python interpreter's defaults, else a well-known system bundle |
-| launcher: `claude-multi update` | the release download location | none: it disables environment proxies for these requests | the launcher's trust, as above |
+| launcher: `claude-multi update` | the release download location | `https_proxy` / `HTTPS_PROXY`, with `no_proxy` / `NO_PROXY` bypass | the launcher's trust, as above |
 | launcher: model discovery and public feed | the listing endpoint shown in the request plan, or the public model feed | the environment's proxy settings | the launcher's trust, as above |
 | launcher: LAN reachability | a declared keyless server's host and port | direct DNS resolution and TCP connection, not the gateway proxy | no TLS handshake or HTTP request |
 | Claude Code (each managed session) | the gateway on loopback; other endpoints upstream Claude Code uses | inherited proxy settings; the launcher adds a loopback bypass when a proxy is set | Claude Code's own trust settings; `NODE_EXTRA_CA_CERTS` is passed through untouched |
@@ -31,6 +31,18 @@ Notes:
   of the certificates the launcher trusts. A configured location that is
   missing or unreadable is treated as empty: the request fails its
   certificate check rather than falling back to other certificates.
+- **The updater's proxy** comes from the invoking process's environment,
+  not the gateway setting or operating-system proxy discovery. It uses
+  `https_proxy` / `HTTPS_PROXY` and `no_proxy` / `NO_PROXY` for bypass;
+  lowercase wins, including an empty lowercase override. With no HTTPS
+  proxy set it connects directly; a failed proxy is not retried directly.
+  The isolated tests exercise HTTP CONNECT carrying verified HTTPS, not
+  SOCKS, PAC or every proxy authentication scheme. TLS verification,
+  release-host restrictions and signature checks still apply.
+  The installed **1.0.0** updater disables environment proxies: behind a
+  mandatory proxy, use the installer (with `curl`'s or `wget`'s proxy
+  settings) or `claude-multi update --from-dir <path>` once to reach a
+  release with the fix. See [update](../update.md#offline-and-behind-a-proxy).
 - **The gateway's proxy** is set with
   `claude-multi setup --step gateway --proxy <url>` (an unauthenticated
   `http`, `https` or `socks5` address, no credentials in it) and removed
