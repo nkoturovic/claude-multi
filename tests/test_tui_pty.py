@@ -1612,6 +1612,9 @@ finally:
             child.send(b"\n")
             child.read_until(b"Confirm explicit action")
             child.send(b"y")
+            # The account-filtered listing has its own consent after the public one.
+            child.read_until(b"/user")
+            child.send(b"y")
             child.read_until(b"advertised models")
             child.send(b" \n")
         child.read_until(b"declare model")
@@ -1660,7 +1663,7 @@ finally:
         child.read_until(b"JOURNEY_LAUNCHED=1", FIXTURE_TIMEOUT)
         code, output, attrs = child.finish()
         self.assertEqual(code, 0, output)
-        self.assertIn(b"LISTINGS=" + (b"0" if pool or keyed else b"1"), output)
+        self.assertIn(b"LISTINGS=" + (b"0" if pool or keyed else b"2"), output)
         if keyed:
             self.assertIn(b"KEYED_NOT_ADMITTED_SELECTABLE", output)
         self.assertIn(b"ADMISSION_REQUESTS=0", output)

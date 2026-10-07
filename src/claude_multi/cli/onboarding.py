@@ -63,14 +63,18 @@ def key_status(runtime, provider_id):
     return provider.secret_name, secret_store.default_store(ctx.env).is_set(provider.secret_name)
 
 
-def listing(runtime, provider_id, *, confirm):
+def listing(runtime, provider_id, *, confirm, notice=lambda text: None):
     """An explicit listing only; moving through forms never reaches this."""
-    consent.require_human(f"discover {provider_id}", runtime.gateway_environ())
-    call = discover._plan_one(runtime, provider_id)
-    if not confirm(discovery.consent_text([call])):
-        return None
-    result = discover._execute(runtime, call)
-    return call, result
+    return discover.listing(runtime, provider_id, confirm=confirm, notice=notice)
+
+
+def listing_rows(runtime, provider_id, entries):
+    """The same provider-scoped classifications the CLI listing reports."""
+    return discovery.mark_listing(provider_id, entries, **discover._marks_inputs(runtime))
+
+
+def lookup_stealth(runtime, wire, *, confirm, notice):
+    return discover.lookup_stealth(runtime, wire, confirm=confirm, notice=notice)
 
 
 def line_draft(runtime, provider_id, entry, call=None, *, registry=None):
@@ -86,9 +90,10 @@ def line_draft(runtime, provider_id, entry, call=None, *, registry=None):
         registry_ref = f"pinned registry {section} {discover._today()}"
     else:
         model, registry_ref = discover._registry_model(runtime, provider, entry["id"])
+    source_url = discovery.OPENROUTER_MODELS_URL + "/user" if entry.get("account_only") else call.url if call else None
     return discovery.declaration_line(
         entry, provider=provider, agent_efforts=runtime.catalog.agent_efforts,
-        source_ref=f"{call.url} {discover._today()}"[:256] if call else "manual declaration",
+        source_ref=f"{source_url} {discover._today()}"[:256] if source_url else "manual declaration",
         registry_model=model, registry_ref=registry_ref,
     )
 

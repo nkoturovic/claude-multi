@@ -377,7 +377,7 @@ _LISTING_SUPPORT = _freeze_descriptors({
         "status": "verified",
         "url": "https://openrouter.ai/api/v1/models",
         "auth": "none",
-        "shape": "openai",
+        "shape": "openrouter",
     },
     "meta": {
         # Documented GET /v1/models with Bearer; unverified 2026-09 — the
@@ -878,6 +878,63 @@ def _bounded_fetch(deadline: float = LISTING_DEADLINE_SECONDS, max_bytes: int = 
     return fetch
 
 
+def _openrouter_facts(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep only bounded advertised facts, never arbitrary provider metadata."""
+
+    from decimal import Decimal, InvalidOperation
+
+    prices = {}
+    pricing = item.get("pricing")
+    if isinstance(pricing, dict):
+        for name in ("prompt", "completion"):
+            value = pricing.get(name)
+            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                continue
+            text = str(value)
+            if len(text) > 64:
+                continue
+            try:
+                number = Decimal(text)
+                if number.is_finite() and number >= 0:
+                    prices[name] = "0" if number == 0 else str(number)
+            except InvalidOperation:
+                pass
+    parameters = item.get("supported_parameters")
+    tools = ("tools" in parameters if isinstance(parameters, list)
+             and all(isinstance(value, str) for value in parameters) else None)
+    architecture = item.get("architecture")
+    modality = architecture.get("modality") if isinstance(architecture, dict) else None
+    if not isinstance(modality, str) or not re.fullmatch(r"[a-z+]+->[a-z+]+", modality) or len(modality) > 96:
+        modality = None
+    return {"openrouter": True, "pricing": prices, "tools": tools, "modality": modality}
+
+
+def _openrouter_model_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Endpoint-specific facts are model-wide only when every endpoint agrees."""
+
+    endpoints = item.get("endpoints")
+    if not isinstance(endpoints, list) or not endpoints or not all(isinstance(row, dict) for row in endpoints):
+        return item
+    result = dict(item)
+    contexts = [row.get("context_length") for row in endpoints]
+    if ("context_length" not in result
+            and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in contexts)
+            and all(value == contexts[0] for value in contexts)):
+        result["context_length"] = contexts[0]
+    facts = [_openrouter_facts(row) for row in endpoints]
+    tools = [row["tools"] for row in facts]
+    if "supported_parameters" not in result and tools[0] is not None and all(value is tools[0] for value in tools):
+        result["supported_parameters"] = ["tools"] if tools[0] else []
+    if "pricing" not in result:
+        pricing = {}
+        for name in ("prompt", "completion"):
+            values = [row["pricing"].get(name) for row in facts]
+            if values[0] is not None and all(value == values[0] for value in values):
+                pricing[name] = values[0]
+        result["pricing"] = pricing
+    return result
+
+
 def parse_listing(raw: bytes, shape: str) -> ListingResult:
     """Normalize an anthropic- or openai-shaped listing body.
 
@@ -888,10 +945,15 @@ def parse_listing(raw: bytes, shape: str) -> ListingResult:
     try:
         payload = strict_json.loads(raw)
         items = payload.get("data") if isinstance(payload, dict) else None
+        if shape == "openrouter-model":
+            if not isinstance(items, dict) or not isinstance(items.get("id"), str):
+                raise TypeError("the model envelope is not {data: {id: ...}}")
+            items = [_openrouter_model_item(items)]
         if items is None or not isinstance(items, list):
             raise TypeError("the listing envelope is not {data: [...]}")
         entries = []
-        openai_shape = shape == "openai"
+        openrouter_shape = shape in {"openrouter", "openrouter-model"}
+        openai_shape = shape == "openai" or openrouter_shape
         for item in items:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
                 continue
@@ -926,8 +988,12 @@ def parse_listing(raw: bytes, shape: str) -> ListingResult:
                     entry["think_efforts"] = [
                         str(e) for e in reasoning["supported_efforts"] if isinstance(e, str)
                     ]
+            if openrouter_shape:
+                entry.update(_openrouter_facts(item))
+                if not context_ok or context_length <= 0:
+                    entry["context_length"] = None
             entries.append(entry)
-        complete = not (isinstance(payload, dict) and payload.get("has_more") is True)
+        complete = shape != "openrouter-model" and not (isinstance(payload, dict) and payload.get("has_more") is True)
     except (ValueError, TypeError, AttributeError, RecursionError) as exc:
         # RecursionError: deeply nested bodies far below the byte cap.
         raise ListingShapeError(type(exc).__name__) from exc

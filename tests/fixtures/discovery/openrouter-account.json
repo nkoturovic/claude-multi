@@ -1,0 +1,8 @@
+{
+  "data": [
+    {"id": "vendor/regular", "name": "Must not replace public facts", "context_length": 1},
+    {"id": "stealth/space-bunny-alpha", "name": "Space Bunny Alpha", "context_length": 262144, "pricing": {"prompt": "0", "completion": "0"}, "supported_parameters": ["tools"], "architecture": {"modality": "text+image+video->text"}},
+    {"id": "vendor/account-only", "name": "Account Only", "context_length": 128000},
+    {"id": "vendor/account-only", "name": "Duplicate ignored"}
+  ]
+}
