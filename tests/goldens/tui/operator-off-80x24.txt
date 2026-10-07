@@ -2,7 +2,6 @@
   models — catalog 31
   ─────────────────────────────────────────────────────────────────────────────
     line          generation    provider      class  efforts       used by
-    opus5         Opus 5 · 1M…  anthropic     1M     xhigh         2 profiles
     opus55        Opus 5.5 · …  anthropic     1M     xhigh         6 profiles
     or-deepseek   DeepSeek V4…  openrouter    1M     high xhigh    1 profile
     or-gemini     Gemini 3 Fl…  openrouter    1M     high xhigh    1 profile
@@ -17,7 +16,8 @@
   › custom-fixt…  Fixture Rev…  openrouter …  200K   high          New · not a…
   retired  muse-spark → (none) · 2 continuity aliases retained
   Fixture Reviewer · OpenRouter · gateway-effort · default high · operator line
-  use: available · admission: not admitted (optional)
+  use: available
+  admission: not admitted (optional)
   qualification: not run (smoke, efforts, tools, stream) · family: openai (rec…
 
   Enter admit badge · Q diagnostics · E edit · X remove · V details · ? help

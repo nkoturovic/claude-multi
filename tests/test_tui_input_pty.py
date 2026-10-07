@@ -259,6 +259,62 @@ class CardKeyTests(_InputCase):
         self.quit_card(child)
 
 
+class RemedyLayoutTests(_InputCase):
+    def test_narrow_picker_warning_keeps_v_details_and_opens_them(self) -> None:
+        setup = """
+from claude_multi import tui, views
+
+def picker_main(argv, *, runtime, input_stream, output_stream, interactive):
+    lcat, effective = runtime.lineup_catalog(), runtime.current_effective()
+    rows = views.line_rows(lcat, effective, custom_ids=frozenset())
+    picker = views.picker_rows(rows, slot="cm-reviewer", bindings={}, lcat=lcat,
+                               eff=effective, current=None)
+    selected = tui.run_curses_on_streams(
+        lambda win: tui.BindingPicker(picker, palette=tui.MONO_PALETTE).run(win),
+        input_stream, output_stream, palette=tui.MONO_PALETTE)
+    print("PICKER_RESULT=" + repr(selected), flush=True)
+    return 0
+entry.main = picker_main
+"""
+        child = self.child("claude-multi-pty-picker-remedy-", setup=setup)
+        child.read_until("— V details".encode(), FIXTURE_TIMEOUT)
+        self.press(child, b"v", "model — details".encode())
+        child.read_until(b"effort unverified for this line", FIXTURE_TIMEOUT)
+        self.press(child, b"\x1b", "reviewer — choose model".encode())
+        child.send(b"\x1b")
+        code, output, after = child.finish()
+        self.assertEqual(code, 0, output)
+        self.assertIn(b"PICKER_RESULT=None", output)
+        self.assertNotIn(b"FAKE_LAUNCH", output)
+        _restored(self, child, after)
+
+    def test_narrow_models_keeps_full_approval_remedy_and_separate_badge(self) -> None:
+        setup = """
+import dataclasses
+from claude_multi import tui
+from claude_multi.cli.screens.models import _ModelsScreen
+
+def models_main(argv, *, runtime, input_stream, output_stream, interactive):
+    key = next(iter(runtime.lineup_catalog().lines))
+    original = runtime.current_effective
+    runtime.current_effective = lambda: dataclasses.replace(original(), unavailable_lines={
+        key: "provider fixture: route unapproved; route approval required — claude-multi providers approve fixture"})
+    screen = _ModelsScreen(runtime, palette=tui.MONO_PALETTE)
+    screen.index = screen.keys.index(key)
+    tui.run_curses_on_streams(screen.run, input_stream, output_stream, palette=tui.MONO_PALETTE)
+    return 0
+entry.main = models_main
+"""
+        child = self.child("claude-multi-pty-model-remedy-", setup=setup)
+        child.read_until(b"claude-multi providers approve fixture", FIXTURE_TIMEOUT)
+        child.read_until(b"admission: not admitted (optional)", FIXTURE_TIMEOUT)
+        child.send(b"\x1b")
+        code, output, after = child.finish()
+        self.assertEqual(code, 0, output)
+        self.assertNotIn(b"FAKE_LAUNCH", output)
+        _restored(self, child, after)
+
+
 class DirectTests(_InputCase):
     _NO_LEADS = """
 lcat = runtime.lineup_catalog()
@@ -266,11 +322,12 @@ for provider in sorted({e['provider'] for e in lcat.lines.values() if 'lead' in 
     runtime.settings_store.set_provider_enabled(provider, False, catalog=runtime.catalog)
 """
 
-    def test_direct_without_a_model_names_the_fix_and_launches_nothing(self) -> None:
+    def test_direct_disabled_models_stay_visible_with_remedy_and_never_launch(self) -> None:
         child = self.child("claude-multi-pty-direct-none-", ["direct"], setup=self._NO_LEADS)
-        child.read_until(b"no model can lead a direct session here", FIXTURE_TIMEOUT)
-        child.send(b"\r")
-        child.send(b"\t")
+        child.read_until("provider off — G → Space enables it".encode(), FIXTURE_TIMEOUT)
+        self.assertIn(b"(unavailable)", bytes(child.output))
+        self.press(child, b"\r", b"model unavailable")
+        self.press(child, b"\x1b", "direct session — lead only".encode())
         offset = len(child.output)
         child.send(b"\x1b")
         code, output, after = child.finish()

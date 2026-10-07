@@ -8,13 +8,13 @@ route carries its reason, and the OpenAI API key reaches a reviewed model.
 Every shipped keyed provider ships models now, so the provider without
 models is synthetic: a copy of the shipped assets with one keyed
 provider's lines removed, taken through the key, the next steps, adding a
-model and admitting it, then the profile step saving that starter as the
-default, read back ready with the admitted model as its lead. A setup with
+model with or without an optional admission badge, then the profile step
+saving that starter as the default, read back ready with the model as its lead. A setup with
 only one keyed provider (Kimi alone, Qwen alone, and the synthetic one
 without models, through its listing or by hand) reaches a usable profile
 through the guided TUI journey. Read from the packaged catalog (model ids
 are derived, never pinned); temp home, no gateway, no provider request:
-the listing and the admission's test request are mocked seams."""
+listing is a mocked seam; admission and skipped diagnostics send no inference."""
 
 from __future__ import annotations
 
@@ -168,7 +168,9 @@ class SyntheticModellessProviderTests(test_cli.OperatorCommandCase):
         self.serve_current()
         code, out, err = self.op(["models", "admit", key], "y\n")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.calls, [key])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.http_calls, [])
+        self.assertIn(key, self.runtime.current_effective().admitted_lines)
         self.assertEqual(setup_status.without_models(self.runtime, (pid,)), ())
         plan, _warnings = self.runtime.starter_plan("starter")
         self.assertIsNotNone(plan.document, plan.refusal)
@@ -201,8 +203,8 @@ class SyntheticModellessProviderTests(test_cli.OperatorCommandCase):
 
 class _JourneyCase(_ShippedCase):
     """One keyed provider alone, connected on the Providers screen and taken
-    to a starter profile that launches. The provider calls are mocked: the
-    listing's one request and the admission's test request."""
+    to a starter profile that launches without admission or diagnostics.
+    Only an explicitly chosen listing uses its mocked request seam."""
 
     KEY = "journey-dummy-key"
 
@@ -223,7 +225,8 @@ class _JourneyCase(_ShippedCase):
                               lambda _self, title, lines: self.shown.append((title, list(lines)))),
             mock.patch.object(tui.OnboardingForm, "run", self._accept),
             mock.patch.object(discover_cmd, "_fetch", self._listing),
-            mock.patch.object(operator_mod, "smoke_current", return_value=True),
+            mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("unexpected inference")),
+            mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("unexpected inference")),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -251,13 +254,14 @@ class _JourneyCase(_ShippedCase):
         keys = ["K", *self.KEY, ENTER, ENTER]  # the key, Save
         if modelless:
             # List its models (one request) and declare the one listed, or
-            # enter it by hand; then Admit.
+            # enter it by hand; then accept the default Skip admission.
             keys += [DOWN, ENTER] if by_hand else [ENTER, " ", ENTER]
             keys += [ENTER]
         win = FakeWindow([*keys, ESC, ESC], height=30, width=100)
         screen.run(win)
         if modelless:
-            self.assertIn(cli_text.NO_MODELS_ADMITTED.format(id=pid, keys="custom-journey-model-1"), screen.message)
+            self.assertIn(cli_text.NO_MODELS_NOT_ADMITTED.format(id=pid, keys="custom-journey-model-1"), screen.message)
+            self.assertNotIn("custom-journey-model-1", self.runtime.current_effective().admitted_lines)
             self.assertEqual(len(self.listings), 0 if by_hand else 1)
         # A usable profile: the starter step saves it as the default, and it launches.
         out = io.StringIO()
@@ -293,8 +297,8 @@ class SingletonJourneyTests(_JourneyCase):
 @uses_shipped_catalog
 class ModellessJourneyTests(_JourneyCase):
     """The synthetic keyed provider without models, alone: its key
-    continues into its listing or a model by hand, the admission, and a
-    starter profile that launches."""
+    continues into its listing or a model by hand, skips admission, and
+    reaches a starter profile that launches."""
 
     def assets(self, tmp: Path) -> Path:
         root, self.pid = modelless_copy(tmp)

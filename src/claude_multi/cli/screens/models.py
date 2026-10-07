@@ -309,7 +309,7 @@ class _ModelsScreen:
             row += 1
         key = self.selected_key
         for line in model.details.get(key, ()) if key is not None else ():
-            tui.safe_add(win, row, 2, views.clip(line, width - 3), palette.attr("normal"))
+            tui.safe_add(win, row, 2, views.fit_text((line,), width - 3), palette.attr("normal"))
             row += 1
         if self.message:
             tui.safe_add(win, message_row, 2, views.clip(self.message, width - 3),

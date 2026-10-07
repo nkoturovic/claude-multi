@@ -126,8 +126,22 @@ class OperatorGoldens(unittest.TestCase):
     def test_provider_route_approval_consent_golden(self):
         self.check_frame("provider-route-approval", "Approve this route?", "value not shown")
 
-    def test_changed_route_refusal_golden(self):
-        self.check_frame("changed-route-refusal", "route changed", "providers approve acme")
+    def test_changed_route_does_not_prevent_optional_badge_golden(self):
+        self.check_frame("changed-route-refusal", "Optional badge recorded", "qualification unchanged")
 
     def test_qualification_failure_stale_evidence_golden(self):
-        self.check_frame("qualification-failure-stale", "failed", "stale or none")
+        self.check_frame("qualification-failure-stale", "qualification: failed", "smoke evidence: failed (http-status)")
+
+    def test_route_remedy_and_badge_both_survive_narrow_models_layout(self):
+        text = _tui_render.build("operator-route-unapproved")
+        remedy = next(line for line in text.splitlines() if line.startswith("  use:"))
+        self.assertTrue(remedy.endswith("— claude-multi providers approve acme"), remedy)
+        self.assertIn("admission: not admitted (optional)", text)
+        assertGolden(self, TUI_GOLDENS / _tui_render.golden_name("operator-route-unapproved"), text.encode())
+
+    def test_picker_warning_keeps_details_action_in_the_narrow_row(self):
+        text = _tui_render.build("operator-picker-ineligible")
+        selected = next(line for line in text.splitlines() if line.startswith("  ›"))
+        self.assertTrue(selected.endswith("— V details"), selected)
+        self.assertIn("Fixture Reviewer", selected)
+        assertGolden(self, TUI_GOLDENS / _tui_render.golden_name("operator-picker-ineligible"), text.encode())

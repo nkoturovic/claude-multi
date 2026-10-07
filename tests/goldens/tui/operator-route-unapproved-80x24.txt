@@ -2,7 +2,6 @@
   models — catalog 31
   ─────────────────────────────────────────────────────────────────────────────
     line          generation    provider    class  efforts        used by
-    opus55        Opus 5.5 · …  anthropic   1M     xhigh          6 profiles
     or-deepseek   DeepSeek V4…  openrouter  1M     high xhigh     1 profile
     or-gemini     Gemini 3 Fl…  openrouter  1M     high xhigh     1 profile
     or-gpt        GPT-6 Sol ·…  openrouter  1M     high xhigh     1 profile
@@ -16,7 +15,8 @@
   › custom-acme…  acme-small-1  acme op     200K   high (lead r…  New · unavai…
   retired  muse-spark → (none) · 2 continuity aliases retained
   acme-small-1 · acme · client-effort · default high · operator line
-  use: provider acme: route unapproved; route approval required — claude-multi…
+  use: provider acme: route unapproved; … — claude-multi providers approve acme
+  admission: not admitted (optional)
   qualification: not run (smoke, efforts, tools, stream) · family: acme (indep…
   Use unavailable — Esc → G (Providers) → acme shows the remedy.
 

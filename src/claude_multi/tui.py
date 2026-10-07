@@ -2525,7 +2525,7 @@ class BindingPicker:
             attr = palette.attr(item.role) | (curses.A_REVERSE if focused else 0)
             if focused:
                 safe_add(win, row, 2, "›", palette.attr("accent"))
-            safe_add(win, row, 4, _clip_at(item.text, width, 4), attr)
+            safe_add(win, row, 4, views.fit_text((item.text,), max(0, width - 5)), attr)
         safe_add(win, height - bar_rows - 1, 2, _clip_at(self._effort_line(), width, 2), palette.attr("accent"))
         bar.draw(win, height - 1, palette)
         win.refresh()

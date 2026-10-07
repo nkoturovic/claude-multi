@@ -2,7 +2,6 @@
   models — catalog 31
   ─────────────────────────────────────────────────────────────────────────────
     line          generation    provider       class  efforts        used by
-    kimi-k3       Kimi K3 · 1…  kimi           1M     max            —
     opus          Opus 4.8 · …  anthropic      1M     xhigh          —
     opus5         Opus 5 · 1M…  anthropic      1M     xhigh          2 profiles
     opus55        Opus 5.5 · …  anthropic      1M     xhigh          6 profiles
@@ -17,7 +16,8 @@
   › custom-fixt…  Fixture Rev…  openrouter op  200K   high           —
   retired  muse-spark → (none) · 2 continuity aliases retained
   Fixture Reviewer · OpenRouter · gateway-effort · default high · admitted (Ne…
-  use: available · admission: admitted (optional)
+  use: available
+  admission: admitted (optional)
   qualification: not run (smoke, efforts, tools, stream) · family: openai (rec…
 
   Enter revoke badge · Q diagnostics · E edit · X remove · V details · ? help

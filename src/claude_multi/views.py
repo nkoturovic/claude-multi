@@ -2138,7 +2138,7 @@ def models_model(
         availability = row.unavailable_reason or ("available" if row.offered else "unavailable — check Providers (G)")
         badge = "admitted" if row.admitted else "not admitted"
         family = "recognized" if row.family_recognized else "independence unknown"
-        lines = (detail, f"use: {availability} · admission: {badge} (optional)",
+        lines = (detail, f"use: {availability}", f"admission: {badge} (optional)",
                  f"qualification: {row.qualification} · family: {row.family} ({family})")
         lines += ((radar[row.key],) if row.key in radar else ())
         details[row.key] = lines

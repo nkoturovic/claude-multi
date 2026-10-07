@@ -21,9 +21,9 @@
   new (not admitted — Enter adds an optional badge): —
   retired  muse-spark → (none) · 2 continuity aliases retained
   Fable 5 · 1M selector · Anthropic · client-effort · default max
-  use: available · admission: not admitted (optional)
+  use: available
+  admission: not admitted (optional)
   qualification: reviewed with the catalog · family: anthropic (recognized)
-
 
 
 
