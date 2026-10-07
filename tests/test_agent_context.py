@@ -248,18 +248,19 @@ class RoleWindowRuleTests(unittest.TestCase):
                 self.assertEqual(context.trigger, compiler.reactive_trigger(context.window, 85))
 
     def test_the_window_condition_of_the_agent_gate(self) -> None:
-        # A [1m] line whose bound is at least the window, or below it (the
-        # 200K class), compacts within its bound; only a bound below the
-        # 200K-class trigger is a problem.
+        # A 1M line may use the 200K class. Both a window above the bound
+        # and a compaction trigger above it are advisory capacity risks.
         self.assertIsNone(profile.agent_window_problem("x[1m]", 872_000))
         self.assertIsNone(profile.agent_window_problem("x[1m]", BELOW))
-        self.assertIsNone(profile.agent_window_problem("x[1m]", 167_000))
+        self.assertIsNone(profile.agent_window_problem("x[1m]", 200_000))
+        self.assertIn("effective client window exceeds", profile.agent_window_problem("x[1m]", 167_000))
         problem = profile.agent_window_problem("x[1m]", 150_000)
         self.assertEqual(problem, "its agent class 200K (200000 tokens), shared process window 800000, "
                                   "effective window 200000, compacts at 167000 tokens (95%), "
                                   "above its provider bound 150000")
         at_90 = profile.WindowPolicy(window=800_000, percent=90)
-        self.assertIsNone(profile.agent_window_problem("x[1m]", 165_000, policy=at_90))
+        self.assertIn("effective client window exceeds",
+                      profile.agent_window_problem("x[1m]", 165_000, policy=at_90))
         self.assertIsNotNone(profile.agent_window_problem("x[1m]", 165_000))
 
 

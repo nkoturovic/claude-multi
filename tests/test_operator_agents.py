@@ -260,7 +260,8 @@ class GateTests(unittest.TestCase):
         self.assertEqual(profile_mod.agent_class_window("x"), 200000)
         self.assertEqual(profile_mod.agent_class_window("x", 150000), 150000)
         self.assertEqual(profile_mod.agent_class_window("x[1m]", ceiling=800000), 800000)
-        self.assertIsNone(profile_mod.agent_window_problem("x", 167000))
+        self.assertIsNone(profile_mod.agent_window_problem("x", 200000))
+        self.assertIn("effective client window exceeds", profile_mod.agent_window_problem("x", 167000))
         self.assertIsNotNone(profile_mod.agent_window_problem("x", 166999))
         # A 1M-class line runs at the session window when its bound is at
         # least the window, and in the 200K class below it.

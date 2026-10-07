@@ -446,9 +446,9 @@ def agent_context_gaps(lineup: profile.ResolvedLineup, window: int) -> tuple[str
     hold more context than its route accepts (agents never shrink the lead
     window). An agent whose 1M class was narrowed to the 200K class
     (``profile.role_window``) is no gap unless its bound is below that
-    class too. Returns the offending agent ids in lineup order; unbound
-    lines are never checked. Also the live-apply re-check (with
-    ``lead-set.json``'s ``context.window``).
+    class too. Returns the affected agent ids in lineup order; unbound
+    lines are never checked. These are diagnostic predictions, not compile
+    or live-apply refusals; profile evaluation reports the actual numbers.
     """
 
     return tuple(

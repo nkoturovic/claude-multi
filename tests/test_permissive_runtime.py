@@ -137,6 +137,29 @@ class PermissiveScopeTests(unittest.TestCase):
         self.assertEqual(scope.fence_gaps([model for model in plan.settings["availableModels"] if model != selected],
                                          [selected]), (selected,))
 
+    def test_provider_window_mismatch_warns_even_when_the_trigger_fits(self):
+        bundle = scope_fixtures._bundle()
+        docs = copy.deepcopy(bundle.docs)
+        entry = docs["models-v2"]["models"]["gpt55"]
+        entry["context"]["provider_tokens"] = 175000
+        entry["context"]["validated_tokens"] = min(entry["context"]["validated_tokens"], 175000)
+        lcat = profile.LineupCatalog.from_docs(docs)
+        eff = settings.effective({"version": 1}, provider_ids=lcat.providers, line_keys=lcat.lines)
+        document = profile.ad_hoc_direct("opus", "high")
+        document["agents"] = {"cm-reviewer": {"model": "gpt55", "effort": "high"}}
+        lineup = profile.resolve(document, lcat, effective=eff)
+        role = dict(profile.lineup_windows(lineup))["cm-reviewer"]
+        self.assertLess(role.trigger, 175000)
+        self.assertGreater(role.window, 175000)
+        warning = next(f.message for f in lineup.warnings if f.code == "context-risk")
+        for text in ("200000", "175000", "162000", "effective client window exceeds"):
+            self.assertIn(text, warning)
+        scope_fixtures._compile(lineup, lcat, eff, bundle)
+        workflow = dataclasses.replace(eff, workflow_default_binding={"model": "gpt55", "effort": "high"})
+        findings = scope.workflow_default_warnings(lcat, workflow, policy=lineup.policy)
+        self.assertTrue(any(f.code == "context-risk" and "175000" in f.message for f in findings))
+        scope_fixtures._compile(lineup, lcat, workflow, bundle)
+
     def test_every_mutable_warning_is_excluded_from_scope_identity(self):
         bundle, lcat, eff, lineup = scope_fixtures._seed("balanced")
         before = scope_fixtures._compile(lineup, lcat, eff, bundle)

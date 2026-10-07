@@ -765,8 +765,8 @@ def agent_compaction_trigger(class_window: int, percent: int = settings.COMPACTI
 
 def agent_window_problem(selector: str, provider_tokens: int, *, policy: WindowPolicy | None = None,
                          client_tokens: int | None = None) -> str | None:
-    """Why an agent on the line selector ``selector`` would compact beyond
-    its provider bound under ``policy`` (the default policy at the largest
+    """Why an agent's client window or compaction trigger exceeds its
+    provider bound under ``policy`` (the default policy at the largest
     percent without one), or None. The class is decided by
     :func:`role_window`; ``client_tokens`` is the line's client class (by
     default the selector's). The text names the numbers."""
@@ -776,15 +776,18 @@ def agent_window_problem(selector: str, provider_tokens: int, *, policy: WindowP
         client_tokens = agent_class_window(selector)
     role = role_window(selector, client_tokens=client_tokens, provider_tokens=provider_tokens,
                        policy=policy, decide=True)
-    if role.trigger <= provider_tokens:
+    if role.window <= provider_tokens and role.trigger <= provider_tokens:
         return None
     return _window_risk_text(role, provider_tokens, policy)
 
 
 def _window_risk_text(role: RoleWindow, provider_tokens: int, policy: WindowPolicy) -> str:
-    return (f"its agent class {format_tokens(role.client_class)} ({role.client_class} tokens), "
-            f"shared process window {policy.window}, effective window {role.window}, "
-            f"compacts at {role.trigger} tokens ({policy.percent}%), above its provider bound {provider_tokens}")
+    context = (f"its agent class {format_tokens(role.client_class)} ({role.client_class} tokens), "
+               f"shared process window {policy.window}, effective window {role.window}, "
+               f"compacts at {role.trigger} tokens ({policy.percent}%)")
+    if role.trigger > provider_tokens:
+        return f"{context}, above its provider bound {provider_tokens}"
+    return f"{context}; the effective client window exceeds its provider bound {provider_tokens}"
 
 
 def binding_warnings(entry: Mapping[str, Any], *, key: str, slot: str | None, effort: str,
@@ -1824,7 +1827,7 @@ def _warnings(
         active_policy = policy or default_policy(percent=settings.COMPACTION_PERCENT_DEFAULT)
         role = role_window(binding.selector, client_tokens=binding.client_context_tokens,
                            provider_tokens=binding.provider_context_tokens, policy=active_policy, decide=False)
-        if role.trigger > binding.provider_context_tokens:
+        if role.window > binding.provider_context_tokens or role.trigger > binding.provider_context_tokens:
             message = f"{label(rid)}: {_window_risk_text(role, binding.provider_context_tokens, active_policy)}"
             found.append(Finding("context-risk", rid, message, f"{label(rid)}: context overflow risk"))
 
