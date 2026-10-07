@@ -92,13 +92,13 @@ installation (a source tree, or the prefix of an installed package: its
                                  # claude-multi-gateway.service by default)
 ```
 
-Release: the version in `version.json` (1.0.0, in development; catalog 37).
+Release: the version in `version.json` (1.1.0; catalog 38).
 Current default: the **`balanced` seed profile**
 (`catalog/profiles/balanced.json`): Opus 5.5 lead at ultracode, Sol high
 explorer/xhigh analyst, Opus analyst-strong, Luna max / Sol xhigh / Sol max
 implementer grades, Sol max reviewer and Opus reviewer-strong.
 The trusted catalog pins Claude
-**2.1.286** as the verified binary. The gateway is **CLIProxyAPI 7.3.15**
+**2.1.292** as the verified binary. The gateway is **CLIProxyAPI 7.3.15**
 (pinned in `gateway/UPSTREAM.json` and built by `tools/build.py` with the official
 Go toolchain, `CGO_ENABLED=0`; see "Gateway build" in §4) with twenty-one local patches (numbered 1–10 and 12–22; 11 is deferred) —
 loopback OAuth bind, Kimi/Claude compat, the non-Claude cache-retention
@@ -2264,7 +2264,17 @@ the operator's approval. Doctor never retires backups.
   `models add` declares; only advertised levels no contract matches refuse.
   The shipped keyed providers without lines (`test_shipped_first_run`'s
   singleton journeys) reach a usable profile through the Providers screen:
-  key → listing or a model by hand → admission → starter.
+  key → listing or a model by hand → starter; admission is optional.
+- OpenRouter discovery uses one immutable `ListingCall` per request. Public and
+  optional account-filtered listings get separate consent. The latter resolves
+  a key by name into the Bearer header only and revalidates before secret access
+  and send; limits remain 20 s/4 MiB with no redirects or retries. Merging
+  preserves public rows and marks account-only additions. CLI and TUI share
+  classifications and normalized facts: `stealth/` defaults to unknown family
+  with maker/privacy/availability cautions, while `openrouter/` marks routers.
+  Anonymous per-model lookup prefills an explicit declaration only; endpoint
+  facts must agree, missing facts stay unknown, and suffixed ids remain visible
+  but non-addable. No grants, bindings or defaults are automatic.
 - `qualify.py` owns bounded smoke/effort/tools/stream/context plans. Forced and
   strict-auto tools are chosen and disclosed before consent, with no weaker retry.
   Evidence belongs to the current definition digest and exact client/gateway
@@ -2274,7 +2284,8 @@ the operator's approval. Doctor never retires backups.
   successful measured bound (`checks.context.floor`) apart from the latest
   verdict, so a smaller pass or a failure never lowers the validated floor. Qualification edits no declaration or
   admission. Pool agents also run the explicit offline `probe.py` exact-client
-  check; unavailable executable/isolation yields the specific ineligible reason.
+  check; unavailable executable/isolation leaves the corresponding optional
+  evidence unavailable and produces a warning, not a qualification-based block.
 - `profile.agent_eligibility` decides new bindings, named bindings, workflow
   defaults, pickers and bound T2 fence selectors. Only three conditions refuse:
   an unapproved route (record-authority compiles keep recorded grants), an
@@ -2474,7 +2485,7 @@ states the user-facing caveats.
 
 Audit=true is guarded by `tests/fixtures/keyed-compat-audit.json` and
 `test_packaging.KeyedAuditInvariantTests`: full ordered basename@sha256 manifest
-(series order, 19 entries numbered 1–10 and 12–20), mandatory 3/9/10,
+(series order, 21 entries numbered 1–10 and 12–22), mandatory 3/9/10,
 no 11, build definition, recipe and build tool,
 source/vendor, client and exact whole-file relevant-source identities plus
 complete core/audit/client/`J1` proof. The fixture is test provenance, never runtime policy. Closed and
@@ -2482,7 +2493,7 @@ absent flags remain regression inputs; changing the flag creates no operator sta
 Any listed-source change requires fresh complete keyed proof and fixture refresh,
 or audit=false; patch basenames/version equality alone are insufficient.
 **Available in this release:** the regenerated complete proof passes all 34
-required rows (5 core, 11 audit, 9 client and 9 journeys) against the 19-patch
+required rows (5 core, 11 audit, 9 client and 9 journeys) against the 21-patch
 gateway and pinned client. The shipped flag is true. Source paths in the
 fixture are repository-relative; immutable store paths and binary digests
 remain exact. The package-containment journey checks that the standalone
