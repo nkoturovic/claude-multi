@@ -1100,17 +1100,25 @@ class TextInput:
 
         visible = self._visible(width)
         safe_add(win, row, col, " " * width, attr)
-        index, x = self.offset, col
+        echo = self._echo(visible)
+        if echo and self._combining(echo[0]):
+            echo = " " + echo
         stop = self.offset + len(visible)
-        while index < stop:
-            next_index = self._next(index)
-            text = self.value[index:next_index]
-            echo = self._echo(text)
-            if echo and self._combining(echo[0]):
-                echo = " " + echo
-            safe_add(win, row, x, echo, attr)
-            x += self._width(text)
-            index = next_index
+        if len(echo) <= width:
+            safe_add(win, row, col, echo, attr)
+        else:
+            # Many combining marks can exceed safe_add's character-count
+            # clip even though their display cells fit. Draw whole units.
+            index, x = self.offset, col
+            while index < stop:
+                next_index = self._next(index)
+                text = self.value[index:next_index]
+                echo = self._echo(text)
+                if echo and self._combining(echo[0]):
+                    echo = " " + echo
+                safe_add(win, row, x, echo, attr)
+                x += self._width(text)
+                index = next_index
         position = row, col + self._width(self.value[self.offset:self.cursor])
         if highlight_cursor:
             text = self.value[self.cursor:self._next(self.cursor)] if self.cursor < stop else ""
