@@ -31,7 +31,7 @@ from unittest import mock
 
 import test_cli  # module import: no test classes re-exported
 from _catalog import FIXTURE_ROOT
-from claude_multi import catalog, discovery, launch, operator as operator_mod, proxy
+from claude_multi import catalog, discovery, launch, operator as operator_mod, proxy, secret_store
 from claude_multi.cli import gateway_facts
 from claude_multi.cli import parser as parser_mod
 
@@ -366,6 +366,28 @@ class RouteTests(DiscoveryCLICase):
         self.assertEqual(self.sent, [])
         self.assertEqual(out, "")
 
+    def test_required_credential_removed_after_consent_is_still_fatal(self) -> None:
+        self.approve_acme()
+        self.listing("https://api.acme.example/anthropic/v1/models", [{"id": "acme-new"}])
+        original = test_cli.consent_mod.confirm
+        after_removal = {}
+
+        def remove_key_after_consent(text, *, input_stream):
+            answer = original(text, input_stream=input_stream)
+            if answer:
+                secret_store.default_store(self.runtime.gateway_environ()).delete("ACME_API_KEY")
+                after_removal.update(self.state_bytes())
+            return answer
+
+        with mock.patch.object(test_cli.consent_mod, "confirm", side_effect=remove_key_after_consent):
+            code, out, err = self.op(["discover", "acme"], "y\n")
+        self.assertEqual(code, 1)
+        self.assertIn("discover acme: credential ACME_API_KEY is not set — nothing sent", err)
+        self.assertEqual(out, "")
+        self.assertEqual(self.sent, [])
+        self.assertTrue(after_removal)
+        self.assertEqual(self.state_bytes(), after_removal)
+
     def test_approved_t2_listing_sends_one_bearer_request_to_the_attempt_url(self) -> None:
         self.approve_acme()
         url = "https://api.acme.example/anthropic/v1/models"
@@ -682,7 +704,7 @@ class DriftTests(DiscoveryCLICase):
         self.assertEqual(code, 0, err)
         lines = out.splitlines()
         self.assertEqual(lines[:4], [
-            "acme-one\toperator custom-acme-one (off) context=262144 efforts=high,max created=2026-01-01T00:00:00Z",
+            "acme-one\toperator custom-acme-one (not admitted) context=262144 efforts=high,max created=2026-01-01T00:00:00Z",
             "acme-later\tnew created=2026-06-01T00:00:00Z",
             "acme-earlier\tcandidate created=2025-06-01T00:00:00Z",
             "acme-undated\tcandidate",
@@ -694,7 +716,19 @@ class DriftTests(DiscoveryCLICase):
             "  consequence: new class; admission and evidence lapse; running sessions keep their fence until relaunch",
             "custom-acme-one: listing efforts now include max",
             "  edit: claude-multi models edit custom-acme-one",
-            "  consequence: only reviewed contracts are eligible; re-admission and qualification are required "
+            "  consequence: only reviewed contracts are eligible; re-admission and qualification are optional "
+            "after a definition change",
+        ])
+
+    def test_effort_drift_keeps_re_admission_and_qualification_optional(self) -> None:
+        line = discovery.OperatorState("custom-a", "p", "w", "not admitted", 9000, ("high",))
+        drift = discovery.drift_lines(
+            "p", [{"id": "w", "think_efforts": ["high", "max"]}], complete=True,
+            operator={line.key: line}, today=self.today)
+        self.assertEqual(drift, [
+            "custom-a: listing efforts now include max",
+            "  edit: claude-multi models edit custom-a",
+            "  consequence: only reviewed contracts are eligible; re-admission and qualification are optional "
             "after a definition change",
         ])
 
@@ -709,10 +743,17 @@ class DriftTests(DiscoveryCLICase):
                                              {}, {}, {}, {}, None)
         states = discovery.operator_states(layer, ledger, {"custom-a", "custom-b"})
         self.assertEqual({k: v.status for k, v in states.items()},
-                         {"custom-a": "admitted", "custom-b": "changed — re-admit", "custom-c": "off",
-                          "custom-d": "off"})
-        layer.route_status = {"p": "unapproved"}
-        self.assertEqual(discovery.operator_states(layer, ledger, {"custom-a"})["custom-a"].status, "route unapproved")
+                         {"custom-a": "admitted", "custom-b": "changed — re-admit", "custom-c": "not admitted",
+                          "custom-d": "not admitted"})
+        for route in ("approved", "catalog", "keyless"):
+            with self.subTest(route=route):
+                layer.route_status = {"p": route}
+                self.assertEqual(discovery.operator_states(layer, ledger, ())["custom-c"].status, "not admitted")
+        for route in ("unapproved", "changed", "invalid"):
+            with self.subTest(route=route):
+                layer.route_status = {"p": route}
+                unavailable = discovery.operator_states(layer, ledger, {"custom-a"})
+                self.assertTrue(all(row.status == "route unapproved" for row in unavailable.values()))
         marked = discovery.mark_listing("p", [{"id": "w"}, {"id": "leg"}, {"id": "old"}, {"id": "cat"}],
                                         operator={"custom-a": states["custom-a"]},
                                         catalog_lines={"catline": {"provider": "p", "wire_model": "cat"}},
@@ -749,7 +790,7 @@ class DeclarationTests(DiscoveryCLICase):
         # Existing lines are never edited; a second add of it is refused.
         code, _out, err = self.op(["discover", "acme", "--add", "acme-fresh"], "y\n")
         self.assertEqual(code, 1)
-        self.assertIn("acme-fresh is operator custom-acme-fresh (off) — declaration never edits an existing line",
+        self.assertIn("acme-fresh is operator custom-acme-fresh (not admitted) — declaration never edits an existing line",
                       err)
 
     def test_context_rules_and_over_listed(self) -> None:

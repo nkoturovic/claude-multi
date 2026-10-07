@@ -13,7 +13,7 @@ After the answer the plan is derived again: a changed fingerprint (a
 provider, route, secret name or URL edit while the prompt was open) sends
 nothing. Listings are observations: marks and drift are printed, absence
 only from a complete listing, and nothing is declared unless ``--add``
-names the wire (the declaration transaction, New · Off).
+names the wire (the declaration transaction, New · not admitted).
 """
 
 from __future__ import annotations
@@ -44,9 +44,15 @@ CLAUDE_SESSION_ENV_KEYS = consent.SESSION_MARKERS
 OUTSIDE_SESSION_HINT = "run it in a separate shell"
 LEGACY_FLAG_ERROR = ("--yes-i-approve-this-provider-call cannot replace interactive approval;\n"
                      "run discover in a terminal outside Claude Code sessions.")
+ACCOUNT_CREDENTIAL_UNAVAILABLE = (
+    "OpenRouter: account-filtered listing skipped (credential unavailable); keeping the public listing.")
 
 fail = providers_cmd.fail
 report = providers_cmd.report
+
+
+class ListingCredentialUnavailable(providers_cmd.OperatorCommandError):
+    """A listing credential is absent or unreadable, not a route or state refusal."""
 
 
 def _claude_session_marker(environ: dict[str, str]) -> str | None:
@@ -124,9 +130,9 @@ def _secret(runtime: runtime_mod.Runtime, call: discovery.ListingCall) -> str | 
     try:
         value = secret_store.default_store(runtime.gateway_environ()).get(call.secret_name)
     except secret_store.SecretStoreError as exc:
-        raise providers_cmd.OperatorCommandError(f"discover {call.provider_id}: {exc}") from None
+        raise ListingCredentialUnavailable(f"discover {call.provider_id}: {exc}") from None
     if value is None:
-        raise providers_cmd.OperatorCommandError(
+        raise ListingCredentialUnavailable(
             f"discover {call.provider_id}: credential {call.secret_name} is not set — nothing sent; "
             f"claude-multi providers set-key {call.provider_id}")
     return value
@@ -167,8 +173,13 @@ def account_listing(runtime, call, public, *, confirm, notice):
     if call.provider_id != "openrouter" or call.tier != "T1" or call.wire is not None:
         return public
     account = _plan_one(runtime, call.provider_id, account=True)
-    store = secret_store.default_store(runtime.gateway_environ())
-    if not store.is_set(account.secret_name):
+    try:
+        store = secret_store.default_store(runtime.gateway_environ())
+        present = store.is_set(account.secret_name)
+    except secret_store.SecretStoreError:
+        notice(ACCOUNT_CREDENTIAL_UNAVAILABLE)
+        return public
+    if not present:
         notice("OpenRouter: public listing only (no key configured); stealth ids can be added directly.")
         return public
     if not confirm(discovery.consent_text([account])):
@@ -176,6 +187,9 @@ def account_listing(runtime, call, public, *, confirm, notice):
         return public
     try:
         result = _execute(runtime, account)
+    except ListingCredentialUnavailable:
+        notice(ACCOUNT_CREDENTIAL_UNAVAILABLE)
+        return public
     except proxy_mod.ProxyError as exc:
         notice(f"OpenRouter: account-filtered listing failed ({exc}); keeping the public listing.")
         return public

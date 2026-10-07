@@ -138,6 +138,86 @@ class OpenRouterTests(DiscoveryCLICase):
         self.assertIn("vendor/bare\tcandidate", out)
         self.assertEqual(self.state_bytes(), before)
 
+    def test_malformed_account_store_preserves_public_rows_without_mutation(self):
+        state.atomic_write(self.secret_file, f"OPENROUTER_CLAUDE_API_KEY={KEY}\nmalformed {KEY}\n".encode())
+        before = self.state_bytes()
+        code, out, err = self.op(["discover", "openrouter"], "y\ny\n")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.sent, [(PUBLIC, {})])
+        self.assertEqual(err.count("Proceed with these listed requests?"), 1)
+        self.assertIn("account-filtered listing skipped (credential unavailable); keeping the public listing", out)
+        for row in entries("public"):
+            self.assertIn(row["id"] + "\t", out)
+        self.assertNotIn(KEY, out + err)
+        self.assertNotIn(str(self.secret_file), out + err)
+        self.assertEqual(self.state_bytes(), before)
+
+    def test_unavailable_account_store_preserves_public_rows_without_disclosure(self):
+        before = self.state_bytes()
+        with mock.patch.object(secret_store, "default_store", side_effect=secret_store.SecretStoreError(
+                f"fixture credential unavailable: {self.secret_file} {KEY}")):
+            code, out, err = self.op(["discover", "openrouter"], "y\ny\n")
+        self.assertEqual(code, 0, "credential availability must not discard the public listing")
+        self.assertEqual(self.sent, [(PUBLIC, {})])
+        self.assertEqual(err.count("Proceed with these listed requests?"), 1)
+        self.assertIn("account-filtered listing skipped (credential unavailable); keeping the public listing", out)
+        for row in entries("public"):
+            self.assertIn(row["id"] + "\t", out)
+        self.assertNotIn(KEY, out + err)
+        self.assertNotIn(str(self.secret_file), out + err)
+        self.assertEqual(self.state_bytes(), before)
+
+    def test_key_removed_after_account_consent_preserves_public_rows(self):
+        self.set_key()
+        original = consent.confirm
+        after_removal = {}
+
+        def remove_key_after_consent(text, *, input_stream):
+            answer = original(text, input_stream=input_stream)
+            if ACCOUNT in text and answer:
+                secret_store.default_store(self.runtime.gateway_environ()).delete("OPENROUTER_CLAUDE_API_KEY")
+                after_removal.update(self.state_bytes())
+            return answer
+
+        with mock.patch.object(consent, "confirm", side_effect=remove_key_after_consent):
+            code, out, err = self.op(["discover", "openrouter"], "y\ny\n")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err.count("Proceed with these listed requests?"), 2)
+        self.assertEqual(self.sent, [(PUBLIC, {})])
+        self.assertIn("account-filtered listing skipped (credential unavailable); keeping the public listing", out)
+        for row in entries("public"):
+            self.assertIn(row["id"] + "\t", out)
+        self.assertNotIn(WIRE + "\t", out)
+        self.assertNotIn(KEY, out + err)
+        self.assertNotIn(str(self.secret_file), out + err)
+        self.assertTrue(after_removal)
+        self.assertEqual(self.state_bytes(), after_removal)
+
+    def test_account_store_malformed_after_consent_preserves_public_rows(self):
+        self.set_key()
+        original = consent.confirm
+        after_change = {}
+
+        def corrupt_store_after_consent(text, *, input_stream):
+            answer = original(text, input_stream=input_stream)
+            if ACCOUNT in text and answer:
+                state.atomic_write(self.secret_file, f"malformed {KEY}\n".encode())
+                after_change.update(self.state_bytes())
+            return answer
+
+        with mock.patch.object(consent, "confirm", side_effect=corrupt_store_after_consent):
+            code, out, err = self.op(["discover", "openrouter"], "y\ny\n")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err.count("Proceed with these listed requests?"), 2)
+        self.assertEqual(self.sent, [(PUBLIC, {})])
+        self.assertIn("account-filtered listing skipped (credential unavailable); keeping the public listing", out)
+        for row in entries("public"):
+            self.assertIn(row["id"] + "\t", out)
+        self.assertNotIn(KEY, out + err)
+        self.assertNotIn(str(self.secret_file), out + err)
+        self.assertTrue(after_change)
+        self.assertEqual(self.state_bytes(), after_change)
+
     def test_keyed_second_call_has_separate_consent_and_header_only_secret(self):
         self.set_key()
         before = self.state_bytes()
@@ -214,6 +294,33 @@ class OpenRouterTests(DiscoveryCLICase):
                 discover._execute(self.runtime, call)
         self.assertEqual(self.sent, [])
 
+    def test_account_fallback_does_not_hide_state_or_route_refusals(self):
+        self.set_key()
+        original = discover._revalidate
+        before = self.state_bytes()
+        for refusal in (
+                state.StateError("fixture state integrity refused"),
+                discover.providers_cmd.OperatorCommandError(discovery.STALE_TEXT.format(provider="openrouter")),
+                discover.providers_cmd.OperatorCommandError(discovery.ROUTE_TEXT.format(provider="openrouter"))):
+            with self.subTest(refusal=type(refusal).__name__):
+                self.sent.clear()
+
+                def revalidate(runtime, call):
+                    if call.account:
+                        raise refusal
+                    return original(runtime, call)
+
+                with mock.patch.object(discover, "_revalidate", side_effect=revalidate), \
+                        mock.patch.object(secret_store.FileSecretStore, "get",
+                                          side_effect=AssertionError("secret read after authority refusal")):
+                    code, out, err = self.op(["discover", "openrouter"], "y\ny\n")
+                self.assertEqual(code, 1, out + err)
+                self.assertIn(str(refusal), err)
+                self.assertNotIn("keeping the public listing", out)
+                self.assertEqual(self.sent, [(PUBLIC, {})])
+                self.assertNotIn(KEY, out + err)
+                self.assertEqual(self.state_bytes(), before)
+
     def test_direct_stealth_add_fills_facts_without_admission_or_binding(self):
         code, out, err = self.op(["discover", "openrouter", "--add", WIRE], "y\n")
         self.assertEqual(code, 0, err)
@@ -276,6 +383,24 @@ class OpenRouterTests(DiscoveryCLICase):
         self.assertEqual(result.entries, discovery.merge_listings(entries("public"), entries("account")))
         self.assertEqual(self.state_bytes(), before)
 
+    def test_tui_malformed_account_store_keeps_public_rows_and_notice(self):
+        state.atomic_write(self.secret_file, f"malformed {KEY}\n".encode())
+        before = self.state_bytes()
+        consents, notices = [], []
+        with mock.patch.object(consent, "stdio_ttys", return_value=True):
+            call, result = onboarding.listing(
+                self.runtime, "openrouter", confirm=lambda text: consents.append(text) or True,
+                notice=notices.append)
+        self.assertEqual(call.url, PUBLIC)
+        self.assertEqual(result.entries, entries("public"))
+        self.assertTrue(result.complete)
+        self.assertEqual(len(consents), 1)
+        self.assertEqual(notices, ["OpenRouter: account-filtered listing skipped (credential unavailable); "
+                                   "keeping the public listing."])
+        self.assertEqual(self.sent, [(PUBLIC, {})])
+        self.assertNotIn(KEY, "\n".join(consents + notices))
+        self.assertEqual(self.state_bytes(), before)
+
     def test_tui_picker_shares_facts_and_refuses_variant_selection(self):
         self.set_key()
         action = common.OnboardingActions(self.runtime, None, tui.MONO_PALETTE)
@@ -314,6 +439,34 @@ class OpenRouterTests(DiscoveryCLICase):
         cli_row = next(row for row in out.splitlines() if row.startswith(line["wire_model"] + "\t"))
         self.assertEqual(captured, [cli_row.replace("\t", "  ")])
         self.assertIn(f"cataloged as {key}", captured[0])
+
+    def test_tui_keeps_the_cli_unadmitted_operator_classification(self):
+        wire, key = "vendor/bare", "custom-router-bare"
+        code, out, err = self.op(["models", "add", "openrouter", wire, "--as", key,
+                                  "--context", "131072", "--source", "operator"])
+        self.assertEqual(code, 0, err)
+        self.listing(PUBLIC, [{"id": wire, "context_length": 131072}])
+        action = common.OnboardingActions(self.runtime, None, tui.MONO_PALETTE)
+        action.confirm = lambda text: True
+        action.show = mock.Mock()
+        action.model_form = mock.Mock()
+        captured = []
+
+        def choose(picker, *args, **kwargs):
+            captured.extend(item.label for item in picker.items)
+            return None
+
+        before = self.state_bytes()
+        with mock.patch.object(consent, "stdio_ttys", return_value=True), \
+                mock.patch.object(tui.SelectList, "run", choose):
+            action.add_models("openrouter", mode="listing")
+        code, out, err = self.op(["discover", "openrouter"], "y\n")
+        self.assertEqual(code, 0, err)
+        cli_row = next(row for row in out.splitlines() if row.startswith(wire + "\t"))
+        self.assertEqual(captured, [cli_row.replace("\t", "  ")])
+        self.assertIn(f"operator {key} (not admitted)", captured[0])
+        action.model_form.assert_not_called()
+        self.assertEqual(self.state_bytes(), before)
 
     def test_tui_add_by_id_prefills_without_declaration(self):
         action = common.OnboardingActions(self.runtime, None, tui.MONO_PALETTE)
