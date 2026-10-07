@@ -191,14 +191,14 @@ class KeyedAuditInvariantTests(unittest.TestCase):
             "tests.test_portability.KeyedPortabilityTests." + name for name in (
                 "test_keyed_json_export_has_logical_refs_and_no_store_reads",
                 "test_keyed_import_closed_target_refuses_audit",
-                "test_keyed_import_open_target_requires_local_route_key_and_grants",
+                "test_keyed_import_open_target_requires_local_route_and_key_not_admission",
                 "test_keyed_import_rechecks_headers_origins_collisions",
                 "test_keyed_import_uses_existing_single_commit_barrier")}
         expected["J1"].update({
             "tests.test_packaging.PackageSourceTests.test_package_payload_excludes_operator_credentials_and_grants",
             "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_declare_approve_apply_admit_qualify_bind",
-            "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_dimmed",
-            "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_new_off_approval_qualification_and_binding"})
+            "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_selectable_with_warnings",
+            "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_optional_admission_qualification_and_binding"})
         self.assertEqual(set(inventory["inventory"]), set(expected))
         for module, tables in (("tests.test_gateway_keyed_compat", {"core", "audit"}),
                                ("tests.test_keyed_compat_client", {"client"}), ("tests.keyed_journeys", {"J1"})):
