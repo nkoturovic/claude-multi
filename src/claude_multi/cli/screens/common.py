@@ -484,10 +484,12 @@ class OnboardingActions:
             efforts, default = discovery.declaration_efforts(provider, None, None, self.runtime.catalog.agent_efforts)
             line.update(efforts=efforts, default_effort=default)
         family = provider.get("independence_family", "unknown")
-        fields = views.model_form_fields(line, key=key, family=family)
+        fields = views.model_form_fields(line, key=key, family=family, edit=edit)
         values = tui.OnboardingForm("edit model" if edit else "declare model", fields,
                                    palette=self.palette, help_text=(
             "models add PROVIDER WIRE --as custom-NAME --context N --source docs --source-ref 'URL, date'\n"
+            "custom- reserves local ids against future catalog keys; choose your display name freely.\n"
+            "A blank new key derives from the wire id; editing keeps the key immutable.\n"
             "Capabilities and roles are recommendations, not requirements for explicit bindings.\n"
             "Family labels are preserved; unknown/unrecognized labels do not establish review independence.\n"
             "Optional: models admit KEY; models qualify KEY --agents --tool-choice forced|auto.\n"
@@ -498,8 +500,15 @@ class OnboardingActions:
             return
         output = io.StringIO()
         try:
-            if edit and values["key"] != key:
+            if edit and values.get("key", key) != key:
                 raise ValueError("Edit keeps the local key; declare a new line to rename it")
+            model_key = key if edit else values["key"]
+            if not edit and not model_key:
+                lcat = self.runtime.lineup_catalog()
+                taken = set(lcat.lines) | set(lcat.retired) | {k.split("@", 1)[0] for k in lcat.retired}
+                model_key = discovery.derived_key(values["wire"], taken)
+                if model_key is None:
+                    raise ValueError("no valid key derives from this wire id — enter a custom- local key")
             pairs = [x.strip().split("=", 1) for x in values["efforts"].split(",") if x.strip()]
             if not pairs or len({len(x) for x in pairs}) != 1:
                 raise ValueError("Every effort needs a contract, or none does")
@@ -511,7 +520,7 @@ class OnboardingActions:
             previous_context = line.get("context", {})
             if previous_context.get("source") == "listing" and declared > previous_context.get("declared_tokens", declared):
                 raise ValueError("Cannot raise listing context here; use discover --add --context N --over-listed REASON")
-            drafted = {**line, "wire_model": values["wire"], "display": line.get("display", values["wire"]),
+            drafted = {**line, "wire_model": values["wire"], "display": values["display"] or values["wire"],
                        "efforts": efforts, "default_effort": values["default"],
                        "context": {"declared_tokens": declared, "source": values["source"], "source_ref": values["ref"]}}
             if values["output"]:
@@ -531,11 +540,11 @@ class OnboardingActions:
             drafted["roles"] = ("all" if values["roles"] == "all" else
                                 [x.strip() for x in values["roles"].split(",") if x.strip()])
             if self.preview("Declaration preview — admission and diagnostics are optional; route approval is separate.\n" +
-                            operator.document_bytes({values["key"]: drafted}).decode()):
+                            operator.document_bytes({model_key: drafted}).decode()):
                 if edit:
                     onboarding.edit_line(self.runtime, key, drafted, confirm=self.confirm, output=output)
                 else:
-                    onboarding.declare(self.runtime, provider_id, values["key"], drafted, output=output)
+                    onboarding.declare(self.runtime, provider_id, model_key, drafted, output=output)
             else:
                 return
         except (cli_errors.ClaudeMultiError, ValueError, OSError) as exc:

@@ -2285,9 +2285,12 @@ the operator's approval. Doctor never retires backups.
   explicit binding overrides it), a family label outside the T1 families
   (review independence unknown), a context-window risk naming the agent class,
   shared window and trigger, and missing, failed or stale admission or
-  qualification. Warnings stay out of the durable scope identity. Any printable
-  family label is accepted; unknown is never independent. Agent descriptions state operator origin/family, with YAML
-  printable exclusions at the literal boundary.
+  qualification. Only transient admission, qualification, exact-client and context
+  diagnostics stay out of the durable scope identity; family/independence warnings
+  and the review-table text remain in it. Any printable family label is accepted;
+  unknown is never independent. Agent descriptions contain role text and the
+  sentinel, not operator origin or family, with YAML printable exclusions at the
+  literal boundary.
 - Agent context class: one rule, `profile.role_window`, decides each role's
   class and effective window from the session's compiled window/percent policy
   (`profile.WindowPolicy`: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` = min(window

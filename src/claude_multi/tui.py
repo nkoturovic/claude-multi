@@ -37,6 +37,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
@@ -1002,6 +1003,35 @@ class TextInput:
         self.mask = mask
         self.offset = 0  # horizontal scroll: first visible character index
 
+    @staticmethod
+    def _combining(char: str) -> bool:
+        return unicodedata.category(char) in ("Mn", "Me")
+
+    def _previous(self, index: int) -> int:
+        index = max(0, index - 1)
+        while index > 0 and self._combining(self.value[index]):
+            index -= 1
+        return index
+
+    def _next(self, index: int) -> int:
+        index = min(len(self.value), index + 1)
+        while index < len(self.value) and self._combining(self.value[index]):
+            index += 1
+        return index
+
+    def _echo(self, text: str) -> str:
+        return self.mask * len(text) if self.mask is not None else text
+
+    def _width(self, text: str) -> int:
+        # Curses uses display cells: combining marks take none, CJK takes
+        # two. Controls use the same inert notation as every drawing helper.
+        echo = visible_text(self._echo(text))
+        cells = sum(0 if self._combining(char) else
+                    2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+                    for char in echo)
+        # An unattached leading mark is drawn on a space, not on the chrome.
+        return cells + (1 if echo and self._combining(echo[0]) else 0)
+
     def handle(self, key: Key) -> bool:
         if key.kind == "char" and key.ch:
             if key.ch == " " or key.ch.isprintable():
@@ -1013,10 +1043,10 @@ class TextInput:
                 return True
             return False
         if key.kind == "left":
-            self.cursor = max(0, self.cursor - 1)
+            self.cursor = self._previous(self.cursor)
             return True
         if key.kind == "right":
-            self.cursor = min(len(self.value), self.cursor + 1)
+            self.cursor = self._next(self.cursor)
             return True
         if key.kind == "home":
             self.cursor = 0
@@ -1026,26 +1056,69 @@ class TextInput:
             return True
         if key.kind == "backspace":
             if self.cursor > 0:
-                self.value = self.value[: self.cursor - 1] + self.value[self.cursor :]
-                self.cursor -= 1
+                previous = self._previous(self.cursor)
+                self.value = self.value[:previous] + self.value[self.cursor:]
+                self.cursor = previous
             return True
         if key.kind == "delete":
             if self.cursor < len(self.value):
-                self.value = self.value[: self.cursor] + self.value[self.cursor + 1 :]
+                self.value = self.value[:self.cursor] + self.value[self._next(self.cursor):]
             return True
         return False
 
     def _visible(self, inner_width: int) -> str:
-        """Visible slice with the cursor kept in view; returns the slice."""
+        """A whole-cell slice, including room for the insertion point at end."""
 
         if inner_width <= 0:
             return ""
-        if self.cursor < self.offset:
-            self.offset = self.cursor
-        if self.cursor > self.offset + inner_width:
-            self.offset = self.cursor - inner_width
-        self.offset = max(0, min(self.offset, max(0, len(self.value) - inner_width)))
-        return self.value[self.offset : self.offset + inner_width]
+        self.offset = min(self.offset, self.cursor)
+        needed = self._width(self.value[self.cursor:self._next(self.cursor)]) or 1
+        before = self._width(self.value[self.offset:self.cursor])
+        while self.offset < self.cursor and before + needed > inner_width:
+            next_offset = self._next(self.offset)
+            before -= self._width(self.value[self.offset:next_offset])
+            self.offset = next_offset
+        end, used = self.offset, 0
+        while end < len(self.value):
+            next_end = self._next(end)
+            cells = self._width(self.value[end:next_end])
+            if used + cells > inner_width:
+                break
+            used += cells
+            end = next_end
+        return self.value[self.offset:end]
+
+    def draw_text(
+        self, win: Any, row: int, col: int, width: int, *, attr: int = 0,
+        highlight_cursor: bool = False, end_marker: str = " ",
+    ) -> tuple[int, int]:
+        """Draw the editable viewport; return its actual insertion cell.
+
+        The highlighted cell is a fallback for terminals without curs_set.
+        Draw combining sequences together and never cut a wide glyph in half.
+        """
+
+        visible = self._visible(width)
+        safe_add(win, row, col, " " * width, attr)
+        index, x = self.offset, col
+        stop = self.offset + len(visible)
+        while index < stop:
+            next_index = self._next(index)
+            text = self.value[index:next_index]
+            echo = self._echo(text)
+            if echo and self._combining(echo[0]):
+                echo = " " + echo
+            safe_add(win, row, x, echo, attr)
+            x += self._width(text)
+            index = next_index
+        position = row, col + self._width(self.value[self.offset:self.cursor])
+        if highlight_cursor:
+            text = self.value[self.cursor:self._next(self.cursor)] if self.cursor < stop else ""
+            echo = self._echo(text) or end_marker
+            if self._combining(echo[0]):
+                echo = " " + echo
+            safe_add(win, *position, echo, attr | curses.A_REVERSE)
+        return position
 
     def draw(
         self,
@@ -1060,18 +1133,11 @@ class TextInput:
         """Draw ``[value]`` in ``width`` columns; returns the cursor (y, x)."""
 
         inner = max(1, width - 2)
-        visible = self._visible(inner)
-        if self.mask is not None:
-            visible = self.mask * len(visible)
         attr = palette.attr("normal") | (curses.A_REVERSE if focused else 0)
         safe_add(win, row, col, "[", palette.attr("dim"))
-        safe_add(win, row, col + 1, visible.ljust(inner), attr)
+        position = self.draw_text(win, row, col + 1, inner, attr=attr)
         safe_add(win, row, col + 1 + inner, "]", palette.attr("dim"))
-        # At end-of-input with a full field, cursor - offset == inner would
-        # place the cursor on the closing bracket; keep it on the last field
-        # cell (the next typed character shifts into view there).
-        cursor_x = col + 1 + min(self.cursor - self.offset, inner - 1)
-        return row, cursor_x
+        return position
 
 
 @dataclass
@@ -3438,8 +3504,10 @@ class OnboardingForm:
         return True
 
     def _draw(self, win):
+        hide_cursor()
         height, width = win.getmaxyx()
         win.erase()
+        cursor = None
         floor = max(14, len(self.fields[self.index][3]) + 11)
         if height < floor or width < 50:
             _too_small(win, self.palette, "onboarding", floor, 50)
@@ -3456,7 +3524,9 @@ class OnboardingForm:
         elif self._hidden(name):
             safe_add(win, 6, 2, views.clip(FIELD_HIDDEN, width - 4), self.palette.attr("warn"))
         else:
-            safe_add(win, 6, 2, views.clip(value + "_", width - 4), self.palette.attr("accent"))
+            cursor = self.inputs[name].draw_text(
+                win, 6, 2, width - 4, attr=self.palette.attr("accent"),
+                highlight_cursor=True, end_marker="_")
         if self.message and self._message_step == self.index:
             for y, line in enumerate(textwrap.wrap(self.message, max(10, width - 4))[:max(0, height - 13)], 8):
                 safe_add(win, y, 2, line, self.palette.attr("warn"))
@@ -3465,10 +3535,21 @@ class OnboardingForm:
         help_key = "?" if choices else "F1"
         KeyBar((("Enter", "next"), ("Backspace", "previous"), (help_key, "help"), ("Esc", "cancel"))).draw(
             win, height - 1, self.palette)
+        if cursor is not None:
+            try:
+                win.move(*cursor)
+                show_cursor()
+            except CursesError:
+                pass
         win.refresh()
 
     def run(self, win):
-        hide_cursor()
+        try:
+            return self._run(win)
+        finally:
+            hide_cursor()
+
+    def _run(self, win):
         while True:
             self._draw(win)
             key = read_key(win)
