@@ -1620,13 +1620,14 @@ finally:
         child.read_until(b"declare model")
         # Keep the listing prefill, or enter sourced manual pool metadata.
         if keyed:
-            child.send(b"chatco-chat-1\ncustom-chatco-chat\n200000\n\nfixture docs, date\n\n")
+            child.send(b"chatco-chat-1\n\ncustom-chatco-chat\n200000\n\nfixture docs, date\n\n")
         elif pool:
-            child.send(b"claude-fixture-reviewer-9\ncustom-pool-reviewer\n1000000\n\nfixture docs, date\n\n")
+            child.send(b"claude-fixture-reviewer-9\n\ncustom-pool-reviewer\n1000000\n\nfixture docs, date\n\n")
         else:
-            # The family prefill of an aggregator line is "unknown": replace it
-            # (one more Backspace would step back to the previous field).
-            child.send(b"\n\n\n\n\n" + b"\x7f" * len("unknown") + b"openai\n")
+            # Keep the display name and other prefills. The family of an
+            # aggregator line is "unknown": replace it (one more Backspace
+            # would step back to the previous field).
+            child.send(b"\n\n\n\n\n\n" + b"\x7f" * len("unknown") + b"openai\n")
         # Efforts and default; output bound; request agents, then the role.
         child.send(b"\n\n64000\n" + b"\x1bOC" + b"\ncm-reviewer\n")
         child.read_until(b"Declaration preview", FIXTURE_TIMEOUT)

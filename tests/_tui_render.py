@@ -390,7 +390,7 @@ def model_form_golden(root: Path, *, pool=False) -> str:
     line = journeys.JourneyFixture().line(pool=pool)
     def screen():
         form = tui.OnboardingForm("declare model", views.model_form_fields(line, key="custom-fixture-reviewer"))
-        form.index = 9  # requested capabilities (draft, no grant)
+        form.index = next(i for i, (name, *_rest) in enumerate(form.fields) if name == "capabilities")
         return form
     return render(screen)
 
