@@ -923,7 +923,7 @@ class Runtime:
 
     def agent_gate(self, snapshot: operator_mod.OperatorSnapshot | None = None,
                    docs: dict[str, Any] | None = None) -> profile_mod.AgentGate:
-        """Current diagnostic facts for every valid operator line.
+        """Current availability and diagnostic facts for every valid operator line.
 
         Capability and role declarations are recommendations: an explicit
         binding may choose any routable line, with its evidence shown as-is.
@@ -956,7 +956,7 @@ class Runtime:
                 key, layer=snapshot.layer, ledger=snapshot.ledger, evidence=evidence,
                 admitted_lines=eff.admitted_lines,
                 provider_enabled=settings_mod.provider_enabled(eff, line.provider_id),
-                contracts=contracts, docs=docs, trusted_docs=self.catalog.docs,
+                contracts=contracts, docs=docs, trusted_docs=self.catalog.docs, ledger_error=snapshot.ledger_error,
             )
             if fields is not None:
                 facts[key] = profile_mod.AgentFacts(**fields)
@@ -2220,7 +2220,9 @@ def operator_effective(
     }
     unavailable = dict(eff.unavailable_lines)
     for key, line in layer.lines.items():
-        if not operator_mod.operator_line_offered(
+        if snapshot.ledger_error is not None:
+            unavailable[key] = snapshot.ledger_error
+        elif not operator_mod.operator_line_offered(
                 key, layer=layer, ledger=snapshot.ledger, provider_enabled=True):
             status = layer.route_status.get(line.provider_id, "unapproved")
             unavailable[key] = (f"provider {line.provider_id}: route {status}; route approval required — "

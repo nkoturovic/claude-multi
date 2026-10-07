@@ -512,8 +512,8 @@ class RecordAuthorityTests(AgentCase):
 
 
 class InSessionTests(OperatorState, test_lineup.LineupCase):
-    """An in-session T2 agent binding is relaunch-class and uses the
-    current gate (a line admitted before launch, and one admitted after)."""
+    """Changed T2 slots use current availability; unchanged slots keep record
+    authority. The launch fence decides whether a change can apply live."""
 
     launch_profile = None
 
@@ -584,9 +584,91 @@ class InSessionTests(OperatorState, test_lineup.LineupCase):
     def test_in_session_t2_binding_admitted_after_launch_uses_current_gate(self) -> None:
         self._scenario(admitted_before_launch=False)
 
-    def test_the_same_t2_selector_in_another_slot_is_relaunch_class(self) -> None:
+    def _assert_disabled_provider_refuses(self, slot: str, effort: str, *, admitted: bool = True) -> None:
+        files = self.acme_files(efforts={"high": "output-config-high", "max": "output-config-max"})
+        files["acme"]["provider"]["payload_contracts"].append("output-config-max")
+        self.install(self.runtime, files, keys=(AGENT_KEY,) if admitted else ())
+        document = agent_document()
+        key, level = t1_agent()
+        document["agents"]["cm-analyst"] = {"model": key, "effort": level}
+        document["agents"]["cm-explorer"] = {"model": AGENT_KEY, "effort": "max"}
+        target = cli_types.LaunchTarget("ad-hoc", document, None, False, "fixture")
+        record = self.launch_fresh(target)
+        self.mid, self.rid = record["managed_id"], record["runtime_session_id"]
+        selector = f"custom-acme-agent-{effort}"
+        self.assertIn(selector, json.loads((self.live(self.mid) / "settings.json").read_bytes())["availableModels"])
+        self.runtime.settings_store.update(
+            lambda doc: doc.setdefault("providers", {}).update(acme={"enabled": False}),
+            catalog=self.runtime.lineup_catalog())
+        # Provider enablement is not the optional admission badge.
+        self.assertEqual(self.runtime.lineup_catalog().agent_gate.facts[AGENT_KEY].admitted, admitted)
+        before_record, before_scope = self.record_bytes(self.mid), self.scope_files()
+        execs = len(self.execs)
+        plan = transition.expected_plan(
+            self.store.load(self.mid), docs=self.runtime.ordinary_docs,
+            prompt_bodies=self.runtime.catalog.prompt_bodies, state_root=self.store.root,
+            hook_command=self.runtime.hook3_command, token_helper_command=self.runtime.token_helper_command,
+            live=self.live(self.mid), environ=self.runtime.environ)
+        self.assertIsNotNone(plan.plan, plan.reason)
+        self.assertEqual(scope.live_drift(self.live(self.mid), plan.plan), [])
+        # An unchanged recorded slot still passes the live decision's record mode.
+        code, out, err = self.request(f"set reviewer={AGENT_KEY}:high")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("the lineup already matches", out + err)
+        self.assertEqual(self.record_bytes(self.mid), before_record)
+        code, out, err = self.request(f"set {slot}={AGENT_KEY}:{effort}")
+        self.assertIn("provider acme is disabled in Settings", out + err)
+        self.assertEqual(self.record_bytes(self.mid), before_record)
+        self.assertEqual(self.scope_files(), before_scope)
+        self.assertEqual(len(self.execs), execs)
+        # The same already-fenced request succeeds LIVE when enabled, without qualification.
+        self.runtime.settings_store.update(
+            lambda doc: doc["providers"].update(acme={"enabled": True}), catalog=self.runtime.lineup_catalog())
+        code, out, err = self.request(f"set {slot}={AGENT_KEY}:{effort}")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("/reload-plugins", out + err)
+        after = self.store.load(self.mid)
+        self.assertEqual(after["applied"]["agents"][f"cm-{slot}"]["selector"], selector)
+        self.assertEqual(after["lineup_generation"], record["lineup_generation"] + 1)
+        self.assertIsNone(after.get("pending"))
+        self.assertEqual(len(self.execs), execs)
+        if slot != "reviewer":
+            self.assertEqual(after["applied"]["agents"]["cm-reviewer"], record["applied"]["agents"]["cm-reviewer"])
+
+    def test_disabled_provider_refuses_new_already_fenced_operator_slot(self) -> None:
+        self._assert_disabled_provider_refuses("designer", "high")
+
+    def test_disabled_provider_refuses_rebound_already_fenced_operator_slot(self) -> None:
+        self._assert_disabled_provider_refuses("analyst", "high", admitted=False)
+
+    def test_disabled_provider_refuses_changed_already_fenced_operator_effort(self) -> None:
+        self._assert_disabled_provider_refuses("reviewer", "max")
+
+    def test_corrupt_ledger_refuses_new_already_fenced_operator_slot(self) -> None:
+        files = operator_fixtures._fixture_files()
+        for provider, key in (("lanbox", "custom-lan-model"), ("anthropic", "custom-claude-fixture")):
+            with self.subTest(provider=provider):
+                self.install(self.runtime, {provider: files[provider]}, routes=())
+                document = agent_document(key=key)
+                target = cli_types.LaunchTarget("ad-hoc", document, None, False, "fixture")
+                record = self.launch_fresh(target)
+                self.mid, self.rid = record["managed_id"], record["runtime_session_id"]
+                state.atomic_write(operator_mod.ledger_path(self.runtime.gateway_environ()), b"{malformed\n")
+                before_record, before_scope = self.record_bytes(self.mid), self.scope_files()
+                execs = len(self.execs)
+                code, out, err = self.request(f"set reviewer={key}:high")
+                self.assertEqual(code, 0, out + err)
+                self.assertIn("the lineup already matches", out + err)
+                self.assertEqual(self.record_bytes(self.mid), before_record)
+                code, out, err = self.request(f"set analyst={key}:high")
+                self.assertIn("operator-ledger.json is unreadable or invalid", out + err)
+                self.assertEqual(self.record_bytes(self.mid), before_record)
+                self.assertEqual(self.scope_files(), before_scope)
+                self.assertEqual(len(self.execs), execs)
+
+    def test_the_same_t2_selector_in_another_slot_is_live(self) -> None:
         """A T2 selector already in the launch fence (bound
-        as reviewer) is still relaunch-class when assigned to a new slot."""
+        as reviewer) can be assigned live to a new slot."""
 
         self.install(self.runtime, self.acme_files(), keys=(AGENT_KEY,))
         self._qualify()

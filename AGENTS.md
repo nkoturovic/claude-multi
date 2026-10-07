@@ -822,20 +822,24 @@ gateway config). T2 **selects** T0/T1 vocabulary and never extends it.
   only assert it (`state.require_barrier`, `sessions.phase_or_guard`), never
   acquire it. Hooks and the ordinary, unit (`--prepare-start`/`run`), `init`
   and rotation renders stay barrier-free. A command with several commit
-  phases (lineup apply → relaunch, `models admit` smoke → admission) releases
-  the barrier between them and revalidates its CAS sample in each. Exception:
+  phases (such as lineup apply → relaunch) releases the barrier between them
+  and revalidates its CAS sample in each. Exception:
   `doctor --rotate-token`'s dead-confirm path goes rotation → non-blocking SH
   migration → lifecycle through `mark_ended`, never the barrier. The state-root
   authority (`proxy.root_authority_refusal`; an unreadable
   `continuity.json` refuses too) is revalidated inside the phase. Prompts,
   cards, consent and network work happen with no lock held; a long operation
   snapshots, releases, then revalidates under the lock (stale commits refuse).
-- **Admission** is digest-bound (`models admit`: checklist + at most one
-  consented smoke; evidence is verdict-only in
-  `<state>/operator-evidence.json`). Record-authority compiles use the
-  record snapshot, never the ledger; launch and resume use the
-  current ledger. Staged requested agent roles are accepted; admission is an optional attestation
-  (a warning when absent), never a use-time gate.
+- **Admission** is a digest-bound local badge (`models admit`: confirmed
+  metadata writes only, no inference or qualification). Diagnostics and
+  `models qualify` are separate, optional, explicitly requested operations;
+  qualification evidence is verdict-only in `<state>/operator-evidence.json`.
+  Record-authority compiles keep recorded grants; new or rebound operator
+  slots use current provider enablement, route approval and ledger integrity.
+  Launch and resume also use these current facts: a corrupt or unreadable
+  ledger refuses operator use, while an absent ledger is valid on catalog
+  and keyless routes. Staged requested agent roles are accepted; admission
+  is an optional attestation (a warning when absent), never a use-time gate.
 - **Pool lines.** A `providers.d/anthropic.json` or `openai.json` file
   declares lines only on the catalog OAuth pools (no route to approve).
   Claude-pool lines are client-effort (a list; the canonical wire selector,
