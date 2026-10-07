@@ -1,32 +1,32 @@
 {
   "client": {
-    "native_contract_file_sha256": "c5b00ad5b20e354dd29c0bb25978a61cec845b3fb8bdf2526f77fa39c24c0afd",
-    "sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
-    "version": "2.1.286"
+    "native_contract_file_sha256": "76d8c2cd9d1336ef75025db61ecf78c669326141ce2e827d3be54047c84a9b9b",
+    "sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
+    "version": "2.1.292"
   },
   "evidence": {
     "directory": "tests/fixtures",
     "files": {
       "inventory.json": {
         "document": {
-          "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+          "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
           "errors": 0,
           "failures": 0,
-          "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+          "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
           "inventory": {
             "J1": {
               "count": 9,
               "missing": [],
               "present": [
-                "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_dimmed",
+                "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_selectable_with_warnings",
                 "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_declare_approve_apply_admit_qualify_bind",
                 "tests.test_packaging.PackageSourceTests.test_package_payload_excludes_operator_credentials_and_grants",
                 "tests.test_portability.KeyedPortabilityTests.test_keyed_import_closed_target_refuses_audit",
-                "tests.test_portability.KeyedPortabilityTests.test_keyed_import_open_target_requires_local_route_key_and_grants",
+                "tests.test_portability.KeyedPortabilityTests.test_keyed_import_open_target_requires_local_route_and_key_not_admission",
                 "tests.test_portability.KeyedPortabilityTests.test_keyed_import_rechecks_headers_origins_collisions",
                 "tests.test_portability.KeyedPortabilityTests.test_keyed_import_uses_existing_single_commit_barrier",
                 "tests.test_portability.KeyedPortabilityTests.test_keyed_json_export_has_logical_refs_and_no_store_reads",
-                "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_new_off_approval_qualification_and_binding"
+                "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_optional_admission_qualification_and_binding"
               ],
               "skipped": []
             },
@@ -79,11 +79,11 @@
           },
           "journey_tests": 9,
           "keyed_client_budget_seconds": 900,
-          "keyed_client_seconds": 44.799,
-          "keyed_client_tests": 26,
+          "keyed_client_seconds": 11.385,
+          "keyed_client_tests": 10,
           "keyed_identity": {
-            "client_contract_sha256": "c5b00ad5b20e354dd29c0bb25978a61cec845b3fb8bdf2526f77fa39c24c0afd",
-            "gateway": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "client_contract_sha256": "76d8c2cd9d1336ef75025db61ecf78c669326141ce2e827d3be54047c84a9b9b",
+            "gateway": "/nix/store/w42kd1iwar5xihflx17rqyh1hkgampp7-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
             "gateway_patch_names": [
               "cli-proxy-api-loopback-oauth.patch",
               "cli-proxy-api-kimi-claude-compat.patch",
@@ -103,25 +103,27 @@
               "cli-proxy-api-no-antigravity-egress.patch",
               "cli-proxy-api-codex-client-identity.patch",
               "cli-proxy-api-antigravity-loopback-callback.patch",
-              "cli-proxy-api-codex-api-key-safety.patch"
+              "cli-proxy-api-codex-api-key-safety.patch",
+              "cli-proxy-api-refresh-shutdown-join.patch",
+              "cli-proxy-api-openai-content-chunks.patch"
             ],
-            "gateway_sha256": "acb0bafafb81be13c1993685c3427093dcebecfd1f300a0df0d52560169fd039",
+            "gateway_sha256": "e5ffe87601ef548388713e88ada5fd46d18029c276032c8b09a70d8bc0098b7e",
             "sources": {
               "schemas/gateway.schema.json": "e047fd635b3d9b351d7390f9c6d9ece244c42f50902049844cb10cd592ff8533",
               "schemas/models.schema.json": "1d6f195db3b0aec05fda7164a241c1941ed5c9ff9c53aaa957159811c83639d6",
               "schemas/operator-ledger.schema.json": "19e3b4b472ea01ec4110bdcb4be3667e7c2b078dd22f09566cbe6f137aa652e2",
-              "schemas/operator-provider.schema.json": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6",
+              "schemas/operator-provider.schema.json": "bab1eb96832c3e06789a5bf9d566749b733056a53aadceb1aefac444f0c9f972",
               "schemas/providers.schema.json": "c13f85f84a1d2de669d930b81f26815c96295d55ee19ca5339cb802dbd5e5ff4",
-              "src/claude_multi/catalog.py": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0",
-              "src/claude_multi/cli/commands/models.py": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c",
-              "src/claude_multi/cli/commands/providers.py": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719",
-              "src/claude_multi/compiler.py": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77",
-              "src/claude_multi/discovery.py": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07",
-              "src/claude_multi/operator.py": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15",
-              "src/claude_multi/profile.py": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d",
+              "src/claude_multi/catalog.py": "fe40d80e3bb8e839484233b4042763900a6f9172f270c3719d70e928187576f7",
+              "src/claude_multi/cli/commands/models.py": "b044d6f365d6774dc58a342baacb1fbeacb1517610af89dfcb33931504e28044",
+              "src/claude_multi/cli/commands/providers.py": "84b3b6daf5d4b013a8395b7170ac3392c4c96546bab55d40e5fa498d11b5f47c",
+              "src/claude_multi/compiler.py": "9dedefcde35083e711d412136f5e997e48a822d543e5317e28e1f26f0e6d5f8c",
+              "src/claude_multi/discovery.py": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17",
+              "src/claude_multi/operator.py": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3",
+              "src/claude_multi/profile.py": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de",
               "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
               "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
-              "src/claude_multi/scope.py": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590",
+              "src/claude_multi/scope.py": "44c784dd9583b593d69df1c2e2d88cc698280ba60a529e44478c8afb0a2276ae",
               "src/claude_multi/served_plan.py": "ca1af711690b174789b0a9426da3a57936c1972d1f613707cc7f0c394d29788f"
             }
           },
@@ -130,11 +132,11 @@
           "relevant_sources": [
             {
               "path": "src/claude_multi/catalog.py",
-              "sha256": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0"
+              "sha256": "fe40d80e3bb8e839484233b4042763900a6f9172f270c3719d70e928187576f7"
             },
             {
               "path": "src/claude_multi/operator.py",
-              "sha256": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15"
+              "sha256": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3"
             },
             {
               "path": "src/claude_multi/render.py",
@@ -150,27 +152,27 @@
             },
             {
               "path": "src/claude_multi/discovery.py",
-              "sha256": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07"
+              "sha256": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17"
             },
             {
               "path": "src/claude_multi/profile.py",
-              "sha256": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d"
+              "sha256": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de"
             },
             {
               "path": "src/claude_multi/compiler.py",
-              "sha256": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77"
+              "sha256": "9dedefcde35083e711d412136f5e997e48a822d543e5317e28e1f26f0e6d5f8c"
             },
             {
               "path": "src/claude_multi/scope.py",
-              "sha256": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590"
+              "sha256": "44c784dd9583b593d69df1c2e2d88cc698280ba60a529e44478c8afb0a2276ae"
             },
             {
               "path": "src/claude_multi/cli/commands/models.py",
-              "sha256": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c"
+              "sha256": "b044d6f365d6774dc58a342baacb1fbeacb1517610af89dfcb33931504e28044"
             },
             {
               "path": "src/claude_multi/cli/commands/providers.py",
-              "sha256": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719"
+              "sha256": "84b3b6daf5d4b013a8395b7170ac3392c4c96546bab55d40e5fa498d11b5f47c"
             },
             {
               "path": "src/claude_multi/data/schemas/gateway.schema.json",
@@ -182,7 +184,7 @@
             },
             {
               "path": "src/claude_multi/data/schemas/operator-provider.schema.json",
-              "sha256": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6"
+              "sha256": "bab1eb96832c3e06789a5bf9d566749b733056a53aadceb1aefac444f0c9f972"
             },
             {
               "path": "src/claude_multi/data/schemas/operator-ledger.schema.json",
@@ -197,12 +199,12 @@
           "skipped": 0,
           "status": "passed"
         },
-        "sha256": "608410e4635548679321200c34fcff6746c3bf8d638aa6cfd296c19d4bcad62d"
+        "sha256": "9e9e2b5157548788b13f91db58e970b34574205cd006cd6250a64639be17a6a2"
       },
       "tests.keyed_journeys.json": {
         "document": {
           "binary": {
-            "realpath": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "realpath": "/nix/store/w42kd1iwar5xihflx17rqyh1hkgampp7-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
             "version": "7.3.15"
           },
           "module": "tests.keyed_journeys",
@@ -214,64 +216,64 @@
           "tables": {
             "J1": [
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
-                "row": "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_dimmed",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "row": "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_selectable_with_warnings",
                 "status": "passed"
               },
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
                 "row": "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_declare_approve_apply_admit_qualify_bind",
                 "status": "passed"
               },
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
                 "row": "tests.test_packaging.PackageSourceTests.test_package_payload_excludes_operator_credentials_and_grants",
                 "status": "passed"
               },
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_closed_target_refuses_audit",
                 "status": "passed"
               },
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
-                "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_open_target_requires_local_route_key_and_grants",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_open_target_requires_local_route_and_key_not_admission",
                 "status": "passed"
               },
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_rechecks_headers_origins_collisions",
                 "status": "passed"
               },
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_uses_existing_single_commit_barrier",
                 "status": "passed"
               },
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_json_export_has_logical_refs_and_no_store_reads",
                 "status": "passed"
               },
               {
-                "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
-                "row": "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_new_off_approval_qualification_and_binding",
+                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "row": "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_optional_admission_qualification_and_binding",
                 "status": "passed"
               }
             ]
           }
         },
-        "sha256": "644f10247c53782ff73799c453ba807129bf416463970b93c12143345eb20da0"
+        "sha256": "b17b2526594b2344363e62c578cff0404012e09327b691efb0e00ab373dc3e09"
       },
       "tests.test_gateway_keyed_compat.json": {
         "document": {
           "binary": {
-            "realpath": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "realpath": "/nix/store/w42kd1iwar5xihflx17rqyh1hkgampp7-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
             "version": "7.3.15"
           },
           "keyed_identity": {
-            "client_contract_sha256": "c5b00ad5b20e354dd29c0bb25978a61cec845b3fb8bdf2526f77fa39c24c0afd",
-            "gateway": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "client_contract_sha256": "76d8c2cd9d1336ef75025db61ecf78c669326141ce2e827d3be54047c84a9b9b",
+            "gateway": "/nix/store/w42kd1iwar5xihflx17rqyh1hkgampp7-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
             "gateway_patch_names": [
               "cli-proxy-api-loopback-oauth.patch",
               "cli-proxy-api-kimi-claude-compat.patch",
@@ -291,25 +293,27 @@
               "cli-proxy-api-no-antigravity-egress.patch",
               "cli-proxy-api-codex-client-identity.patch",
               "cli-proxy-api-antigravity-loopback-callback.patch",
-              "cli-proxy-api-codex-api-key-safety.patch"
+              "cli-proxy-api-codex-api-key-safety.patch",
+              "cli-proxy-api-refresh-shutdown-join.patch",
+              "cli-proxy-api-openai-content-chunks.patch"
             ],
-            "gateway_sha256": "acb0bafafb81be13c1993685c3427093dcebecfd1f300a0df0d52560169fd039",
+            "gateway_sha256": "e5ffe87601ef548388713e88ada5fd46d18029c276032c8b09a70d8bc0098b7e",
             "sources": {
               "schemas/gateway.schema.json": "e047fd635b3d9b351d7390f9c6d9ece244c42f50902049844cb10cd592ff8533",
               "schemas/models.schema.json": "1d6f195db3b0aec05fda7164a241c1941ed5c9ff9c53aaa957159811c83639d6",
               "schemas/operator-ledger.schema.json": "19e3b4b472ea01ec4110bdcb4be3667e7c2b078dd22f09566cbe6f137aa652e2",
-              "schemas/operator-provider.schema.json": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6",
+              "schemas/operator-provider.schema.json": "bab1eb96832c3e06789a5bf9d566749b733056a53aadceb1aefac444f0c9f972",
               "schemas/providers.schema.json": "c13f85f84a1d2de669d930b81f26815c96295d55ee19ca5339cb802dbd5e5ff4",
-              "src/claude_multi/catalog.py": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0",
-              "src/claude_multi/cli/commands/models.py": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c",
-              "src/claude_multi/cli/commands/providers.py": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719",
-              "src/claude_multi/compiler.py": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77",
-              "src/claude_multi/discovery.py": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07",
-              "src/claude_multi/operator.py": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15",
-              "src/claude_multi/profile.py": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d",
+              "src/claude_multi/catalog.py": "fe40d80e3bb8e839484233b4042763900a6f9172f270c3719d70e928187576f7",
+              "src/claude_multi/cli/commands/models.py": "b044d6f365d6774dc58a342baacb1fbeacb1517610af89dfcb33931504e28044",
+              "src/claude_multi/cli/commands/providers.py": "84b3b6daf5d4b013a8395b7170ac3392c4c96546bab55d40e5fa498d11b5f47c",
+              "src/claude_multi/compiler.py": "9dedefcde35083e711d412136f5e997e48a822d543e5317e28e1f26f0e6d5f8c",
+              "src/claude_multi/discovery.py": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17",
+              "src/claude_multi/operator.py": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3",
+              "src/claude_multi/profile.py": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de",
               "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
               "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
-              "src/claude_multi/scope.py": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590",
+              "src/claude_multi/scope.py": "44c784dd9583b593d69df1c2e2d88cc698280ba60a529e44478c8afb0a2276ae",
               "src/claude_multi/served_plan.py": "ca1af711690b174789b0a9426da3a57936c1972d1f613707cc7f0c394d29788f"
             }
           },
@@ -464,17 +468,17 @@
             ]
           }
         },
-        "sha256": "ad61daef27861c03833a48d2b89f04bf696b7138173aad4ef379bfc7f5345005"
+        "sha256": "b9a9451b8cb652c7126d3458ce4a92de0f618d94b151ad4b3fe5181be3d2b618"
       },
       "tests.test_keyed_compat_client.json": {
         "document": {
           "binary": {
-            "realpath": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "realpath": "/nix/store/w42kd1iwar5xihflx17rqyh1hkgampp7-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
             "version": "7.3.15"
           },
           "keyed_identity": {
-            "client_contract_sha256": "c5b00ad5b20e354dd29c0bb25978a61cec845b3fb8bdf2526f77fa39c24c0afd",
-            "gateway": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+            "client_contract_sha256": "76d8c2cd9d1336ef75025db61ecf78c669326141ce2e827d3be54047c84a9b9b",
+            "gateway": "/nix/store/w42kd1iwar5xihflx17rqyh1hkgampp7-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
             "gateway_patch_names": [
               "cli-proxy-api-loopback-oauth.patch",
               "cli-proxy-api-kimi-claude-compat.patch",
@@ -494,25 +498,27 @@
               "cli-proxy-api-no-antigravity-egress.patch",
               "cli-proxy-api-codex-client-identity.patch",
               "cli-proxy-api-antigravity-loopback-callback.patch",
-              "cli-proxy-api-codex-api-key-safety.patch"
+              "cli-proxy-api-codex-api-key-safety.patch",
+              "cli-proxy-api-refresh-shutdown-join.patch",
+              "cli-proxy-api-openai-content-chunks.patch"
             ],
-            "gateway_sha256": "acb0bafafb81be13c1993685c3427093dcebecfd1f300a0df0d52560169fd039",
+            "gateway_sha256": "e5ffe87601ef548388713e88ada5fd46d18029c276032c8b09a70d8bc0098b7e",
             "sources": {
               "schemas/gateway.schema.json": "e047fd635b3d9b351d7390f9c6d9ece244c42f50902049844cb10cd592ff8533",
               "schemas/models.schema.json": "1d6f195db3b0aec05fda7164a241c1941ed5c9ff9c53aaa957159811c83639d6",
               "schemas/operator-ledger.schema.json": "19e3b4b472ea01ec4110bdcb4be3667e7c2b078dd22f09566cbe6f137aa652e2",
-              "schemas/operator-provider.schema.json": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6",
+              "schemas/operator-provider.schema.json": "bab1eb96832c3e06789a5bf9d566749b733056a53aadceb1aefac444f0c9f972",
               "schemas/providers.schema.json": "c13f85f84a1d2de669d930b81f26815c96295d55ee19ca5339cb802dbd5e5ff4",
-              "src/claude_multi/catalog.py": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0",
-              "src/claude_multi/cli/commands/models.py": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c",
-              "src/claude_multi/cli/commands/providers.py": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719",
-              "src/claude_multi/compiler.py": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77",
-              "src/claude_multi/discovery.py": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07",
-              "src/claude_multi/operator.py": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15",
-              "src/claude_multi/profile.py": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d",
+              "src/claude_multi/catalog.py": "fe40d80e3bb8e839484233b4042763900a6f9172f270c3719d70e928187576f7",
+              "src/claude_multi/cli/commands/models.py": "b044d6f365d6774dc58a342baacb1fbeacb1517610af89dfcb33931504e28044",
+              "src/claude_multi/cli/commands/providers.py": "84b3b6daf5d4b013a8395b7170ac3392c4c96546bab55d40e5fa498d11b5f47c",
+              "src/claude_multi/compiler.py": "9dedefcde35083e711d412136f5e997e48a822d543e5317e28e1f26f0e6d5f8c",
+              "src/claude_multi/discovery.py": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17",
+              "src/claude_multi/operator.py": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3",
+              "src/claude_multi/profile.py": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de",
               "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
               "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
-              "src/claude_multi/scope.py": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590",
+              "src/claude_multi/scope.py": "44c784dd9583b593d69df1c2e2d88cc698280ba60a529e44478c8afb0a2276ae",
               "src/claude_multi/served_plan.py": "ca1af711690b174789b0a9426da3a57936c1972d1f613707cc7f0c394d29788f"
             }
           },
@@ -528,7 +534,7 @@
           "tables": {
             "client": [
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "compact_events": 1,
                 "count_tokens_ingress": 0,
                 "genuine_compact_image_sdk_hits": 0,
@@ -539,7 +545,7 @@
                 "transport_requests": 1
               },
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "distinct_wire": true,
                 "intended_effort": "max",
                 "requests": 4,
@@ -548,7 +554,7 @@
                 "thinking_type_present": true
               },
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "default_child_dispatched": true,
                 "explicit_auto_child_hits": 0,
                 "requests": 12,
@@ -557,7 +563,7 @@
                 "thinking_type_present": true
               },
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "requests": 2,
                 "row": "C1-lead",
                 "status": "passed",
@@ -565,7 +571,7 @@
                 "tool_continuation": true
               },
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "requests": 2,
                 "returned_thinking_history": true,
                 "returned_tool_history": true,
@@ -574,7 +580,7 @@
                 "thinking_type_present": true
               },
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "fast_speed": false,
                 "requests": 2,
                 "row": "C1-policy",
@@ -583,7 +589,7 @@
                 "thinking_type_present": true
               },
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "intended_effort": "high",
                 "requests": 4,
                 "row": "C1-workflow",
@@ -592,7 +598,7 @@
                 "workflow_distinct_wire": true
               },
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "forbidden_wire_hits": 0,
                 "lead_wire_child_hits": 0,
                 "permission_modes": 2,
@@ -603,7 +609,7 @@
                 "workflow_default_child_hits": 1
               },
               {
-                "client_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+                "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
                 "compact_events": 1,
                 "count_tokens_ingress": 0,
                 "genuine_compact_image_sdk_hits": 0,
@@ -616,7 +622,7 @@
             ]
           }
         },
-        "sha256": "85e5e964d3078cbf2024e4646848c1b95e37432a00ba089af7c68bec8c8c600e"
+        "sha256": "d6b61fd1fde7321d291c8e648201ecb1acab2df96c634882e5bbc411340ae3ce"
       }
     },
     "validated_exit": 0
@@ -653,17 +659,17 @@
       "version": 7
     },
     "binary_sha256": {
-      "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api": "acb0bafafb81be13c1993685c3427093dcebecfd1f300a0df0d52560169fd039",
-      "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-executor-probe": "6027263e907a7039d458303910080fea458366d21bc47d9c67025048071e545b",
-      "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-handlers-probe": "cf22d760a0a5273cbdfd39aa6916fd228d36f130d71305264e49ffdd2de47d32",
-      "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-startup-probe": "f689d430f78b91d2ff0434e89bf16f5dbb40aa31bf0aac34613faa7a85fc111c"
+      "/nix/store/4qs6gk0136wb16azaj4zg91gmflywlpg-gwtest-startup-probe-7.3.15/bin/gwtest-executor-probe": "0427b5fc9b1fed7df57704d40c9713224b393de4004aa7f771bc97d200e292fb",
+      "/nix/store/4qs6gk0136wb16azaj4zg91gmflywlpg-gwtest-startup-probe-7.3.15/bin/gwtest-handlers-probe": "d1c59b43cc2af12b9a6dc19eb9ad362a42c012b1abf5fbf8b5b49a7a1951f9f6",
+      "/nix/store/4qs6gk0136wb16azaj4zg91gmflywlpg-gwtest-startup-probe-7.3.15/bin/gwtest-startup-probe": "2a8bd940bbbeafa83766eda996ba5dd3e81e7757773fe0aba0a55346150220ac",
+      "/nix/store/w42kd1iwar5xihflx17rqyh1hkgampp7-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api": "e5ffe87601ef548388713e88ada5fd46d18029c276032c8b09a70d8bc0098b7e"
     },
     "build_definition_sha256": "4e721a9fa02dd9859bdb34d593d719cf4b596568af0dd6f115742559adeba916",
     "consumed_go_modules": "/nix/store/xkljmgxi3cwh12myims7q3m9hjgmw0yf-cli-proxy-api-7.3.15-go-modules",
-    "derivation": "/nix/store/k0wh7hfggmjmjp4bk596q7q8vpxgbrir-cli-proxy-api-linux-amd64-7.3.15.drv",
-    "executor_omission": "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-executor-probe",
-    "gateway": "/nix/store/85dlwkki66v96nj7jfan5lvpz06z6jap-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
-    "handlers_omission": "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-handlers-probe",
+    "derivation": "/nix/store/bb5mqzglhn587pckxri180wxyff3fx50-cli-proxy-api-linux-amd64-7.3.15.drv",
+    "executor_omission": "/nix/store/4qs6gk0136wb16azaj4zg91gmflywlpg-gwtest-startup-probe-7.3.15/bin/gwtest-executor-probe",
+    "gateway": "/nix/store/w42kd1iwar5xihflx17rqyh1hkgampp7-cli-proxy-api-linux-amd64-7.3.15/bin/cli-proxy-api",
+    "handlers_omission": "/nix/store/4qs6gk0136wb16azaj4zg91gmflywlpg-gwtest-startup-probe-7.3.15/bin/gwtest-handlers-probe",
     "numbered_to_shipped": [
       {
         "identity": "cli-proxy-api-loopback-oauth.patch@2eb510b85f5204820d7a3d70c9b9a7bce283b1a7f23ead305ddfe28d500163a5",
@@ -740,6 +746,14 @@
       {
         "identity": "cli-proxy-api-codex-api-key-safety.patch@b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628",
         "number": 20
+      },
+      {
+        "identity": "cli-proxy-api-refresh-shutdown-join.patch@6474a404f9ecba94c07fc9415ffee3601059941101cbf944a17a623e5b80c8e3",
+        "number": 21
+      },
+      {
+        "identity": "cli-proxy-api-openai-content-chunks.patch@f2db67071e99b3c106ea262502c04be887f6fb17277a848d0cdd6810f9b03025",
+        "number": 22
       }
     ],
     "ordered_manifest": {
@@ -762,18 +776,20 @@
         "cli-proxy-api-no-antigravity-egress.patch@233443d22a411ee935b4c0776c26992543a5b97d1241784db5bf726ca80464c6",
         "cli-proxy-api-codex-client-identity.patch@b4ffbda891ee82dbd0441dfa6a6b1d154fd82be33dc4c5e2edb2526eeb041c65",
         "cli-proxy-api-antigravity-loopback-callback.patch@f728ba3eb999266d30137cd7d4501d54cdb9613c2cc33579194a6d7b9a23a523",
-        "cli-proxy-api-codex-api-key-safety.patch@b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628"
+        "cli-proxy-api-codex-api-key-safety.patch@b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628",
+        "cli-proxy-api-refresh-shutdown-join.patch@6474a404f9ecba94c07fc9415ffee3601059941101cbf944a17a623e5b80c8e3",
+        "cli-proxy-api-openai-content-chunks.patch@f2db67071e99b3c106ea262502c04be887f6fb17277a848d0cdd6810f9b03025"
       ],
       "upstream_version": "7.3.15",
       "version": 1
     },
     "recipe_sha256": {
-      "gateway/UPSTREAM.json": "d4cd7c46695f35fec02016c88ffa125d057bf6f04dbdeaef1fa88b7c22f0174a",
+      "gateway/UPSTREAM.json": "f55de61b80a041f00dbba1997233e3ad42ee2dd39a281b2a858c7628de9734bb",
       "tools/build.py": "c9a41cda7b5d5e39da9e6ce9b4c780c46e64d0e27762f15b59828dd8df91007c"
     },
     "source_hash": "sha256-s6Vdpcl7Hr85azsZ2DpkEQyod9eE9UQizKiYAJtguwY=",
     "source_tag": "v7.3.15",
-    "startup": "/nix/store/90pg757sdb6s59dmk7pyg0ga1zlnchmx-gwtest-startup-probe-7.3.15/bin/gwtest-startup-probe",
+    "startup": "/nix/store/4qs6gk0136wb16azaj4zg91gmflywlpg-gwtest-startup-probe-7.3.15/bin/gwtest-startup-probe",
     "upstream_version": "7.3.15",
     "vendor_hash": "sha256-r3yWkdMcM40G9jV7MxW/qNv3E9WrHavFilW24quEf+8="
   },
@@ -803,20 +819,22 @@
     "#17 local-model egress suppression",
     "#18 Codex identity consumed unchanged (not a keyed safety fix)",
     "#19 Antigravity callback confinement and #20 dedicated Codex API-key safety coexistence",
-    "Pinned upstream translator/thinking/config/auth/capability selection, Go/vendor inputs, renderer/operator/schema/served-plan/qualifier and final client compiler"
+    "Pinned upstream translator/thinking/config/auth/capability selection, Go/vendor inputs, renderer/operator/schema/served-plan/qualifier and final client compiler",
+    "#21 refresh-worker shutdown join (auth persistence at stop; no keyed route change)",
+    "#22 OpenAI-compatible content-chunk decoding on the keyed chat response paths (string/null/absent content byte-identical)"
   ],
   "source_report": {
     "document": {
       "evidence_dir": "tests/fixtures",
-      "head": "5d863e5aa8da6f4191b33385abcd2508184f99e6",
+      "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
       "relevant_sources": [
         {
           "path": "src/claude_multi/catalog.py",
-          "sha256": "44f625258ede5bac36021128f04d8289b0027a70e14876d4e3ce197cfcd46da0"
+          "sha256": "fe40d80e3bb8e839484233b4042763900a6f9172f270c3719d70e928187576f7"
         },
         {
           "path": "src/claude_multi/operator.py",
-          "sha256": "671a436db5379fa77b57ff30a36ab7a844cec5a4f4fb5a2ea48eda539be03e15"
+          "sha256": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3"
         },
         {
           "path": "src/claude_multi/render.py",
@@ -832,27 +850,27 @@
         },
         {
           "path": "src/claude_multi/discovery.py",
-          "sha256": "de2b87ffdaf6f2d981a5c4d537d75e180001b2d44d934572db84a3228412ba07"
+          "sha256": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17"
         },
         {
           "path": "src/claude_multi/profile.py",
-          "sha256": "e716e1d04723329f1c29dc5fd5d2a44b5aa78ac5471520e6228773835a23340d"
+          "sha256": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de"
         },
         {
           "path": "src/claude_multi/compiler.py",
-          "sha256": "390010fc97b43a00f40a80405513a4aacc8cdb84bacfdaf7baecb8a3ec986e77"
+          "sha256": "9dedefcde35083e711d412136f5e997e48a822d543e5317e28e1f26f0e6d5f8c"
         },
         {
           "path": "src/claude_multi/scope.py",
-          "sha256": "edc57ed681031d0b6305d5a402cd7152aca56688a63739582fec19c62c483590"
+          "sha256": "44c784dd9583b593d69df1c2e2d88cc698280ba60a529e44478c8afb0a2276ae"
         },
         {
           "path": "src/claude_multi/cli/commands/models.py",
-          "sha256": "185f9fde16f0baaf7fc0a88ef861bf4e50ce32388be602a95936b9bf1dfb126c"
+          "sha256": "b044d6f365d6774dc58a342baacb1fbeacb1517610af89dfcb33931504e28044"
         },
         {
           "path": "src/claude_multi/cli/commands/providers.py",
-          "sha256": "a0a7df1fcebda50d075a38a152dc26c4ef2ff6be45c7910319c83ddac2451719"
+          "sha256": "84b3b6daf5d4b013a8395b7170ac3392c4c96546bab55d40e5fa498d11b5f47c"
         },
         {
           "path": "src/claude_multi/data/schemas/gateway.schema.json",
@@ -864,7 +882,7 @@
         },
         {
           "path": "src/claude_multi/data/schemas/operator-provider.schema.json",
-          "sha256": "d151d54b6748572da56f5b6b30f0e68cd96013e5984a3d20250557272c66e6b6"
+          "sha256": "bab1eb96832c3e06789a5bf9d566749b733056a53aadceb1aefac444f0c9f972"
         },
         {
           "path": "src/claude_multi/data/schemas/operator-ledger.schema.json",
@@ -876,7 +894,7 @@
         }
       ]
     },
-    "sha256": "693e0575caec4a8745bf1c1e8d5ed3a6e8d03f871e83a6cfc8c4eb4a40c1d03e"
+    "sha256": "3ba8ae62c8b09acf4810c09ef17ea20fb865d6a03ee075ea2077d79ec0338b53"
   },
   "version": 1
 }
