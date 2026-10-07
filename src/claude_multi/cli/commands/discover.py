@@ -360,6 +360,8 @@ def _declare(
                 continue
             code = fail(f"{verb}: {wire}: {exc} — nothing declared")
             continue
+        if args.discover_family is not None:
+            line["family"] = args.discover_family
         result = models_cmd.declare_line(runtime, call.provider_id, key, line, verb=verb,
                                          output_stream=output_stream)
         code = code or result
@@ -470,15 +472,22 @@ def _discover_command(
     if sum(modes) != 1:
         return _usage("name exactly one of PROVIDER, --all or --feed")
     adds = list(getattr(args, "discover_add", []) or [])
-    declaring = adds or args.discover_as is not None or args.discover_context is not None or args.over_listed
+    family = args.discover_family
+    declaring = adds or args.discover_as is not None or family is not None or args.discover_context is not None or args.over_listed
     if declaring and provider is None:
-        return _usage("--add, --as, --context and --over-listed need a PROVIDER")
-    if (args.discover_as is not None or args.discover_context is not None or args.over_listed) and not adds:
-        return _usage("--as, --context and --over-listed need --add WIRE")
+        return _usage("--add, --as, --family, --context and --over-listed need a PROVIDER")
+    if (args.discover_as is not None or family is not None or args.discover_context is not None or args.over_listed) and not adds:
+        return _usage("--as, --family, --context and --over-listed need --add WIRE")
     if args.discover_as is not None and len(adds) != 1:
         return _usage("--as names exactly one --add WIRE")
+    if family is not None and len(adds) != 1:
+        return _usage("--family labels exactly one --add WIRE")
     if args.discover_as is not None and not operator_mod.NEW_KEY.fullmatch(args.discover_as):
         return _usage(f"--as {args.discover_as!r} must match {operator_mod.NEW_KEY.pattern}")
+    # Reject malformed labels before a listing. The declaration transaction
+    # still runs the canonical per-model schema and printable-text validation.
+    if family is not None and not (0 < len(family) <= 64 and family.isprintable()):
+        return _usage("--family LABEL: nonempty, single-line printable text (at most 64 characters)")
     if args.over_listed is not None and not (0 < len(args.over_listed) <= discovery.OVER_LISTED_MAX
                                              and args.over_listed.isprintable()):
         return _usage(f"--over-listed REASON: 1..{discovery.OVER_LISTED_MAX} printable characters")

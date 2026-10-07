@@ -2957,13 +2957,15 @@ def preset_form_fields(name: str, base_url: str = ""):
     )
 
 
-def model_form_fields(line, *, key="", family="unknown"):
+def model_form_fields(line, *, key="", family="unknown", edit=False):
     efforts = line.get("efforts", ["high"])
     effort_text = ",".join(f"{level}={contract}" for level, contract in efforts.items()) if isinstance(efforts, Mapping) else ",".join(efforts)
     roles = line.get("roles", [])
+    key_field = () if edit else (("key", "Local key (blank derives custom- id from wire)", key, ()),)
     return (
         ("wire", "Wire model id", line.get("wire_model", ""), ()),
-        ("key", "Local key (custom- prefix)", key, ()),
+        ("display", "Display name (blank uses wire id)", line.get("display") or line.get("wire_model", ""), ()),
+        *key_field,
         ("context", "Declared context tokens (not a measured floor)", str(line.get("context", {}).get("declared_tokens", "")), ()),
         ("source", "Context source", line.get("context", {}).get("source", "docs"),
          tuple((x, x) for x in ("docs", "listing", "registry", "operator"))),

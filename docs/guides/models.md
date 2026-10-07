@@ -18,7 +18,12 @@ server of yours) and has a model **family** label (who makes it: Anthropic,
 OpenAI, DeepSeek, …). You may supply any nonempty, single-line printable
 label up to 64 characters, including `mistral`; controls and secret-bearing
 values are refused. A line's own label overrides its provider's default;
-an omitted aggregator family is `unknown`.
+an omitted aggregator family is `unknown`. Supply `--family LABEL` on
+`models add` or `discover PROVIDER --add WIRE` to override the default for
+that one model. On `discover`, `--family` needs exactly one `--add` wire;
+it is not a listing filter. Omitting it keeps the existing defaults,
+including `unknown` for OpenRouter stealth models. No maker is inferred
+from a model id, and the label changes no review-independence rules.
 
 A label is not a certificate of review independence. Review routing prefers
 recognized different families, calls recognized equal families **same-family**,
@@ -99,6 +104,19 @@ In the launcher: **G** Providers → select the provider → **A** add models
 **E** on the launch card to bind the line in the profile editor. Skipping
 admission does not prevent selection. In **M** Models, Enter changes the
 optional admission badge and **Q** offers optional diagnostics.
+
+The model form lets you choose a **Display name** (the listing's name or
+wire id by default). It is separate from the stable local key. On a new
+model, leave the key blank to derive a `custom-…` key from the wire id;
+collisions get a numeric suffix, and the declaration preview shows the
+final key before anything is written. Editing can change the display name,
+not the key. Cancel at either the form or preview writes nothing.
+
+The `custom-` prefix reserves your local ids against current and future
+catalog keys, so a catalog update cannot take over their names. Your
+display name can be chosen freely (`models add --display` on the CLI).
+Text fields show the insertion cell, scroll horizontally as you edit,
+and support Left/Right, Home/End, Backspace and Delete; F1 opens their help.
 
 With the provider already connected and its route usable, add and bind
 without either optional step:

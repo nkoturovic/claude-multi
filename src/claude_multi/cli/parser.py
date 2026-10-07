@@ -517,7 +517,9 @@ def build_parser() -> argparse.ArgumentParser:
     discover_parser.add_argument("--add", dest="discover_add", nargs="+", action="extend", default=[],
                                  metavar="WIRE", help="declare listed WIRE(s); admission and diagnostics are optional")
     discover_parser.add_argument("--as", dest="discover_as", default=None, metavar="KEY",
-                                 help="line key for exactly one --add WIRE (custom-...)")
+                                 help="line key for exactly one --add WIRE (custom-... reserves local ids against future catalog keys)")
+    discover_parser.add_argument("--family", dest="discover_family", default=None, metavar="LABEL",
+                                 help="model family label for exactly one --add WIRE (overrides the default; no inference)")
     discover_parser.add_argument("--context", dest="discover_context", type=int, default=None, metavar="N",
                                  help="declared context when the listing states none, or an explicit override")
     discover_parser.add_argument("--over-listed", dest="over_listed", default=None, metavar="REASON",
@@ -839,14 +841,17 @@ def _add_models_commands(parser: argparse.ArgumentParser) -> None:
     add = sub.add_parser("add", help="declare a model of yours (New · not admitted; allowed anywhere)")
     add.add_argument("provider", metavar="PROVIDER", help="catalog or providers.d provider id")
     add.add_argument("wire", metavar="WIRE", help="upstream model id")
-    add.add_argument("--as", dest="key", default=None, metavar="KEY", help="line key (custom-...; derived from WIRE)")
+    add.add_argument("--as", dest="key", default=None, metavar="KEY",
+                     help="line key (derived from WIRE; custom- reserves local ids against future catalog keys)")
+    add.add_argument("--family", default=None, metavar="LABEL",
+                     help="model family label (overrides the provider default; no inference)")
     add.add_argument("--context", required=True, type=int, metavar="N", help="declared context tokens")
     add.add_argument("--source", required=True, choices=MODEL_SOURCES, help="where the context figure comes from")
     add.add_argument("--source-ref", default=None, metavar="TEXT", help="URL/date for --source docs|registry")
     add.add_argument("--effort", action="append", default=[], metavar="LEVEL[=CONTRACT]",
                      help="declared effort (repeatable; with contracts a map, else a list)")
     add.add_argument("--default-effort", default=None, metavar="LEVEL", help="default effort (a declared one)")
-    add.add_argument("--display", default=None, help="display name")
+    add.add_argument("--display", default=None, help="display name (chosen freely; defaults to WIRE)")
     for verb, text in (("admit", "record an optional local admission badge (zero inference; terminal, outside sessions)"),
                        ("revoke", "remove only the admission badge (use and qualification unchanged)"),
                        ("edit", "edit a model of yours in $VISUAL/$EDITOR (shows the admission consequences)")):

@@ -2,7 +2,7 @@
   declare model
   ─────────────────────────────────────────────────────────────────────────────
 
-  Step 10/11 — Recommended uses (bindings may override)
+  Step 11/12 — Recommended uses (bindings may override)
 
     lead recommended
   > lead + agents recommended

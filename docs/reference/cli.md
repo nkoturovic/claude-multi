@@ -691,20 +691,21 @@ claude-multi models list [--json]
 Declare a model of yours (New · not admitted; allowed anywhere).
 
 ```text
-claude-multi models add <provider> <wire> [--as <new-id>] --context <n> --source docs|operator|registry [--source-ref <text>] [--effort <effort>] [--default-effort <effort>] [--display <text>]
+claude-multi models add <provider> <wire> [--as <new-id>] [--family <family>] --context <n> --source docs|operator|registry [--source-ref <text>] [--effort <effort>] [--default-effort <effort>] [--display <text>]
 ```
 
 | Argument | What it does |
 | --- | --- |
 | `<provider>` | catalog or providers.d provider id |
 | `<wire>` | upstream model id |
-| `--as <new-id>` | line key (custom-...; derived from WIRE) |
+| `--as <new-id>` | line key (derived from WIRE; custom- reserves local ids against future catalog keys) |
+| `--family <family>` | model family label (overrides the provider default; no inference) |
 | `--context <n>` | declared context tokens |
 | `--source docs\|operator\|registry` | where the context figure comes from |
 | `--source-ref <text>` | URL/date for --source docs\|registry |
 | `--effort <effort>` | declared effort (repeatable; with contracts a map, else a list) |
 | `--default-effort <effort>` | default effort (a declared one) |
-| `--display <text>` | display name |
+| `--display <text>` | display name (chosen freely; defaults to WIRE) |
 
 #### claude-multi models admit
 
@@ -795,7 +796,7 @@ claude-multi models qualify <line> [--smoke] [--efforts] [--tools] [--tool-choic
 List the models a provider advertises (PROVIDER), every enabled direct provider (--all), or compare the public feed with the pinned registry (--feed). Provider calls run only in a terminal outside Claude Code sessions, after one y/N naming every request.
 
 ```text
-claude-multi discover [<provider>] [--all | --feed] [--add <wire>…] [--as <new-id>] [--context <n>] [--over-listed <text>]
+claude-multi discover [<provider>] [--all | --feed] [--add <wire>…] [--as <new-id>] [--family <family>] [--context <n>] [--over-listed <text>]
 ```
 
 | Argument | What it does |
@@ -804,7 +805,8 @@ claude-multi discover [<provider>] [--all | --feed] [--add <wire>…] [--as <new
 | `--all` | list every enabled direct provider with a supported listing (observation only; `discover openai` stays separate) |
 | `--feed` | compare the public model feed with the pinned registry (advisory) |
 | `--add <wire>…` | declare listed WIRE(s); admission and diagnostics are optional |
-| `--as <new-id>` | line key for exactly one --add WIRE (custom-...) |
+| `--as <new-id>` | line key for exactly one --add WIRE (custom-... reserves local ids against future catalog keys) |
+| `--family <family>` | model family label for exactly one --add WIRE (overrides the default; no inference) |
 | `--context <n>` | declared context when the listing states none, or an explicit override |
 | `--over-listed <text>` | required to declare --context above the listing-stated value |
 

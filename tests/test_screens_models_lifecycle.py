@@ -195,7 +195,7 @@ class ContinueTests(ModelsCase):
 
         code, _out, err = self.op(test_cli.ACME_ADD, "y\n")
         self.assertEqual(code, 0, err)
-        keys = [DOWN, ENTER, *"acme-small-1", ENTER, *KEY, ENTER, *"131072", ENTER,
+        keys = [DOWN, ENTER, *"acme-small-1", ENTER, ENTER, *KEY, ENTER, *"131072", ENTER,
                 ENTER, *"fixture docs, date", ENTER, *([ENTER] * 6), ENTER, ESC, ENTER]
         win = FakeWindow(keys, height=30, width=90)
         actions = providers_screen.ConnectActions(self.runtime, win, tui.MONO_PALETTE)
