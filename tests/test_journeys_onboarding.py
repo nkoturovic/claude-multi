@@ -543,7 +543,7 @@ class FirstRunJourneys(JourneyCase):
 
         child.keys(HOME, DOWN, ENTER)
         child.expect("declare model")
-        child.keys(f"{wire}\n{key}\n200000\n\nfixture docs, date\n")
+        child.keys(f"{wire}\n\n{key}\n200000\n\nfixture docs, date\n")  # default display name
         child.keys(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER)  # family, efforts, default, output, lead only, roles
         child.expect("Declaration preview")
         child.keys(ENTER)

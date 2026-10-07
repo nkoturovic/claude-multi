@@ -371,6 +371,8 @@ def _models_add(runtime: runtime_mod.Runtime, args: argparse.Namespace, *, outpu
         context["source_ref"] = args.source_ref
     line = {"wire_model": args.wire, "display": args.display or args.wire, "efforts": efforts,
             "default_effort": default, "context": context}
+    if args.family is not None:
+        line["family"] = args.family
     return declare_line(runtime, provider_id, key, line, verb="models add", output_stream=output_stream)
 
 
