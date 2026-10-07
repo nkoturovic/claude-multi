@@ -1,0 +1,9 @@
+{
+  "data": [
+    {"id": "vendor/regular", "name": "Regular", "context_length": 200000, "created": 1750000000, "pricing": {"prompt": "0.000001", "completion": "0.000002"}, "supported_parameters": ["tools", "temperature"], "architecture": {"modality": "text+image->text"}},
+    {"id": "vendor/bare"},
+    {"id": "vendor/free:free", "name": "Free variant", "pricing": {"prompt": "0", "completion": "0.0"}, "supported_parameters": []},
+    {"id": "openrouter/auto", "name": "Router", "context_length": 200000},
+    {"id": "vendor/malformed", "context_length": true, "pricing": {"prompt": "NaN", "completion": -1}, "supported_parameters": "tools", "architecture": {"modality": ["text"]}}
+  ]
+}

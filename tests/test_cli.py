@@ -3347,10 +3347,13 @@ class ImprovementBatchTests(CLITestCase):
         shape = claude_multi.proxy._LISTING_SUPPORT.get(provider, {}).get("shape", "anthropic")
         code, out = self._discover(provider, entries, shape=shape)
         self.assertEqual(code, 0)
+        # OpenRouter also prints normalized facts after the classification.
+        marks = {line.split("\t", 1)[0]: line.split("\t", 1)[1].split(" context=", 1)[0]
+                 for line in out.splitlines() if "\t" in line}
         for wire, model_id in wires.items():
-            self.assertIn(f"{wire}\tcataloged as {model_id}\n", out)
-        self.assertIn(f"{redirect}\tcandidate\n", out)
-        self.assertIn(f"{foreign_wire}\tcandidate\n", out)
+            self.assertEqual(marks[wire], f"cataloged as {model_id}")
+        self.assertEqual(marks[redirect], "candidate")
+        self.assertEqual(marks[foreign_wire], "candidate")
 
     def test_discover_unknown_provider_is_refused(self) -> None:
         with unittest.mock.patch("claude_multi.cli.consent.stdio_ttys", return_value=True):
@@ -7317,7 +7320,7 @@ class NewLineListingFilterTests(CLITestCase):
                 contextlib.redirect_stderr(io.StringIO()):
             code, out = self.run_cli(["discover", "openrouter"], "y\n")
         self.assertEqual(code, 0)
-        self.assertIn(f"{wire}\tcataloged as grok46\n", out)
+        self.assertIn(f"{wire}\tcataloged as grok46 context=unknown ", out)
         self.assertIn("x-ai/fresh\tcandidate", out)
 
 

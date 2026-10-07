@@ -19,6 +19,7 @@ names the wire (the declaration transaction, New · Off).
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime, timezone
 from typing import Any, Mapping, TextIO, TYPE_CHECKING
 
@@ -96,17 +97,18 @@ def _transports(ctx: providers_cmd.OperatorContext) -> dict[str, str]:
     return dict(ctx.ledger.transport_choices) if ctx.ledger is not None else {}
 
 
-def _plan_one(runtime: runtime_mod.Runtime, provider_id: str) -> discovery.ListingCall:
+def _plan_one(runtime: runtime_mod.Runtime, provider_id: str, *, account: bool = False,
+              wire: str | None = None) -> discovery.ListingCall:
     ctx, docs = _view(runtime)
     return discovery.plan_provider(provider_id, docs=docs, layer=ctx.layer, descriptors=proxy_mod._LISTING_SUPPORT,
-                                   transports=_transports(ctx))
+                                   transports=_transports(ctx), account=account, wire=wire)
 
 
 def _revalidate(runtime: runtime_mod.Runtime, call: discovery.ListingCall) -> None:
     """Re-derive the call; any difference is a stale plan (nothing sent)."""
 
     try:
-        fresh = _plan_one(runtime, call.provider_id)
+        fresh = _plan_one(runtime, call.provider_id, account=call.account, wire=call.wire)
     except discovery.PlanRefusal as exc:
         if exc.route:
             raise providers_cmd.OperatorCommandError(exc.reason) from None
@@ -143,8 +145,75 @@ def _execute(runtime: runtime_mod.Runtime, call: discovery.ListingCall) -> proxy
             fetch=lambda url, headers: _fetch(runtime, url, headers))
         return proxy_mod.ListingResult(tuple(dict(item) for item in listed), True)
     headers = proxy_mod.listing_headers(call.auth, call.shape, secret=secret, header=call.header)
-    raw = _fetch(runtime, call.url, headers)
-    return proxy_mod.parse_listing(raw, call.shape)
+    try:
+        raw = _fetch(runtime, call.url, headers)
+    except Exception as exc:
+        # A transport exception may contain headers; only fixed categories leave here.
+        detail = str(exc) if isinstance(exc, proxy_mod.ListingFailure) else type(exc).__name__
+        raise proxy_mod.ProxyError(detail) from None
+    if secret and secret.encode() in raw:
+        raise proxy_mod.ProxyError("listing response contained credential material")
+    result = proxy_mod.parse_listing(raw, call.shape)
+    if secret and secret in json.dumps(result.entries, ensure_ascii=False):
+        raise proxy_mod.ProxyError("listing response contained credential material")
+    if call.wire is not None and (len(result.entries) != 1 or result.entries[0]["id"] != call.wire):
+        raise proxy_mod.ProxyError("model endpoint returned a different id")
+    return result
+
+
+def account_listing(runtime, call, public, *, confirm, notice):
+    """An optional second request with its own consent; public rows always survive."""
+
+    if call.provider_id != "openrouter" or call.tier != "T1" or call.wire is not None:
+        return public
+    account = _plan_one(runtime, call.provider_id, account=True)
+    store = secret_store.default_store(runtime.gateway_environ())
+    if not store.is_set(account.secret_name):
+        notice("OpenRouter: public listing only (no key configured); stealth ids can be added directly.")
+        return public
+    if not confirm(discovery.consent_text([account])):
+        notice("OpenRouter: account-filtered listing declined; keeping the public listing.")
+        return public
+    try:
+        result = _execute(runtime, account)
+    except proxy_mod.ProxyError as exc:
+        notice(f"OpenRouter: account-filtered listing failed ({exc}); keeping the public listing.")
+        return public
+    return proxy_mod.ListingResult(discovery.merge_listings(public.entries, result.entries),
+                                   public.complete and result.complete)
+
+
+def listing(runtime, provider_id, *, confirm, notice):
+    """Shared CLI/TUI listing journey, with every request disclosed separately."""
+
+    consent.require_human(f"discover {provider_id}", runtime.gateway_environ())
+    call = _plan_one(runtime, provider_id)
+    if call.secret_name is not None and not secret_store.default_store(runtime.gateway_environ()).is_set(call.secret_name):
+        raise providers_cmd.OperatorCommandError(
+            f"discover {provider_id}: credential {call.secret_name} is not set — nothing sent; "
+            f"claude-multi providers set-key {provider_id}")
+    if not confirm(discovery.consent_text([call])):
+        return None
+    result = _execute(runtime, call)
+    result = account_listing(runtime, call, result, confirm=confirm, notice=notice)
+    return call, result
+
+
+def lookup_stealth(runtime, wire, *, confirm, notice):
+    """Anonymous add-by-id lookup. Failure leaves facts unknown, never guessed."""
+
+    consent.require_human("discover openrouter", runtime.gateway_environ())
+    call = _plan_one(runtime, "openrouter", wire=wire)
+    unknown = {"id": wire, "display_name": "", "context_length": None, "openrouter": True}
+    if not confirm(discovery.consent_text([call])):
+        notice("OpenRouter: model lookup declined; facts unknown; manual declaration remains available.")
+        return call, unknown
+    try:
+        result = _execute(runtime, call)
+    except proxy_mod.ProxyError as exc:
+        notice(f"OpenRouter: model lookup failed ({exc}); facts unknown; manual declaration remains available.")
+        return call, unknown
+    return call, result.entries[0]
 
 
 def _marks_inputs(runtime: runtime_mod.Runtime) -> dict[str, Any]:
@@ -173,8 +242,8 @@ def _report_listing(
                                       operator=inputs["operator"], today=_today()):
         report(output_stream, line)
     if not result.complete:
-        report(output_stream, f"{call.provider_id}: listing incomplete (the provider reported more pages); "
-                              "absence is not concluded")
+        reason = "single-model lookup" if call.wire is not None else "listing incomplete (the provider reported more pages)"
+        report(output_stream, f"{call.provider_id}: {reason}; absence is not concluded")
     return marked
 
 
@@ -198,25 +267,30 @@ def _discover_provider(
 ) -> int:
     provider_id = args.provider
     verb = f"discover {provider_id}"
+    adds = args.discover_add or []
+    confirm = lambda text: consent.confirm(text, input_stream=input_stream)
+    notice = lambda text: report(output_stream, text)
+    if provider_id == "openrouter" and adds and all(discovery.stealth_id(wire) for wire in adds):
+        code = 0
+        for wire in adds:
+            call, entry = lookup_stealth(runtime, wire, confirm=confirm, notice=notice)
+            marked = _report_listing(runtime, call, proxy_mod.ListingResult((entry,), False),
+                                     output_stream, heading=False)
+            one = argparse.Namespace(**vars(args))
+            one.discover_add = [wire]
+            result = _declare(runtime, one, call, marked, output_stream=output_stream)
+            code = code or result
+        return code
     try:
-        call = _plan_one(runtime, provider_id)
+        observed = listing(runtime, provider_id, confirm=confirm, notice=notice)
     except discovery.PlanRefusal as exc:
         return fail(exc.reason)
-    if call.secret_name is not None:
-        try:
-            present = secret_store.default_store(runtime.gateway_environ()).is_set(call.secret_name)
-        except secret_store.SecretStoreError as exc:
-            return fail(f"{verb}: {exc}")
-        if not present:
-            return fail(f"{verb}: credential {call.secret_name} is not set — nothing sent; "
-                        f"claude-multi providers set-key {provider_id}")
-    if not consent.confirm(discovery.consent_text([call]), input_stream=input_stream):
-        consent.prompt_stream().write(f"{verb}: declined — nothing sent\n")
-        return 0
-    try:
-        result = _execute(runtime, call)
     except proxy_mod.ProxyError as exc:
         return fail(f"{verb}: listing failed ({exc})")
+    if observed is None:
+        consent.prompt_stream().write(f"{verb}: declined — nothing sent\n")
+        return 0
+    call, result = observed
     marked = _report_listing(runtime, call, result, output_stream, heading=False)
     if args.discover_add:
         return _declare(runtime, args, call, marked, output_stream=output_stream)
@@ -256,6 +330,9 @@ def _declare(
     agent_efforts = runtime.catalog.agent_efforts
     code = 0
     for wire in args.discover_add:
+        if call.provider_id == "openrouter" and ":" in wire:
+            code = fail(f"{verb}: {wire}: not addable in this release")
+            continue
         item = by_id.get(wire)
         if item is None:
             code = fail(f"{verb}: {wire} is not in the listing — declare it manually: "
@@ -270,7 +347,8 @@ def _declare(
             code = fail(f"{verb}: no valid key derives from {wire!r} — name it with --as custom-<name>")
             continue
         model, registry_ref = _registry_model(runtime, provider, wire)
-        source_ref = f"{call.url} {_today()}"[:256]
+        source_url = discovery.OPENROUTER_MODELS_URL + "/user" if item.entry.get("account_only") else call.url
+        source_ref = f"{source_url} {_today()}"[:256]
         try:
             line = discovery.declaration_line(
                 item.entry, provider=provider, agent_efforts=agent_efforts, source_ref=source_ref,
@@ -329,6 +407,10 @@ def _discover_all(
             report(output_stream, f"{call.provider_id}: listing failed ({exc})")
             failed += 1
             continue
+        result = account_listing(
+            runtime, call, result,
+            confirm=lambda text: consent.confirm(text, input_stream=input_stream),
+            notice=lambda text: report(output_stream, text))
         _report_listing(runtime, call, result, output_stream, heading=True)
     return 1 if failed else 0
 

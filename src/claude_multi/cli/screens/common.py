@@ -550,8 +550,10 @@ class OnboardingActions:
         if mode is not None:
             mode = 1 if mode == "manual" else 0
         else:
-            mode = tui.SelectList("add models", [tui.SelectItem("List models (explicit consent)"),
-                                                tui.SelectItem("Manual entry (no listing)")],
+            items = [tui.SelectItem("List models (explicit consent)"), tui.SelectItem("Manual entry (no listing)")]
+            if provider_id == "openrouter":
+                items.append(tui.SelectItem("Add stealth id (optional metadata lookup)"))
+            mode = tui.SelectList("add models", items,
                                   footer=(("Enter", "choose"), ("?", "help"), ("Esc", "back"))).run(
                                       self.win, self.palette, help_text=cli_text.PROVIDERS_HELP)
         if mode is None:
@@ -559,8 +561,12 @@ class OnboardingActions:
         if mode == 1:
             self.model_form(provider_id)
             return
+        if mode == 2:
+            self.stealth_model()
+            return
         try:
-            observed = onboarding.listing(self.runtime, provider_id, confirm=self.confirm)
+            observed = onboarding.listing(self.runtime, provider_id, confirm=self.confirm,
+                                          notice=lambda text: self.show("OpenRouter listing", [text]))
             if observed is None:
                 return
             call, result = observed
@@ -571,12 +577,18 @@ class OnboardingActions:
         entries = result.entries
         # checked=None: the widget draws its own toggles ([x] after Space);
         # a fixed checked=False would toggle invisibly.
+        labels = [entry["id"] for entry in entries]
+        if provider_id == "openrouter":
+            labels = [discovery.entry_text(row).replace("\t", "  ")
+                      for row in onboarding.listing_rows(self.runtime, provider_id, entries)]
         picker = tui.SelectList("advertised models — nothing admitted",
-                                [tui.SelectItem(entry["id"]) for entry in entries], multi=True,
+                                [tui.SelectItem(label) for label in labels], multi=True,
                                 footer=(("Space", "select"), ("Enter", "declare"), ("M", "manual entry"),
                                         ("?", "help"), ("Esc", "back")))
         chosen = picker.run(self.win, self.palette, shortcuts={"M": "manual", "m": "manual"},
-                            help_text="Listings are observations, not admission. Select models, then review each declaration.")
+                            help_text="Listings are observations, not admission. Select models, then review each declaration."
+                            + ("\n\n" + discovery.OPENROUTER_HELP + "\n\n" + "\n\n".join(labels)
+                               if provider_id == "openrouter" else ""))
         if chosen == "manual":
             self.model_form(provider_id)
         elif chosen == []:
@@ -584,6 +596,9 @@ class OnboardingActions:
         elif chosen is not None:
             for index in chosen:
                 entry = entries[index]
+                if provider_id == "openrouter" and ":" in entry["id"]:
+                    self.show("Not addable", [entry["id"] + ": not addable in this release"])
+                    continue
                 try:
                     draft = onboarding.line_draft(self.runtime, provider_id, entry, call)
                 except (cli_errors.ClaudeMultiError, ValueError) as exc:
@@ -591,6 +606,34 @@ class OnboardingActions:
                     draft = {"wire_model": entry["id"]}
                 key = discovery.derived_key(entry["id"], set(self.runtime.lineup_catalog().lines)) or ""
                 self.model_form(provider_id, draft, key)
+
+    def stealth_model(self):
+        """Add one known id without depending on either listing advertising it."""
+        from claude_multi import discovery
+        import claude_multi.cli.onboarding as onboarding
+        values = tui.OnboardingForm(
+            "Add OpenRouter stealth id", (("wire", "stealth/<name>", "", ()),), palette=self.palette,
+            help_text=discovery.OPENROUTER_HELP).run(self.win)
+        if values is None:
+            return
+        wire = values["wire"]
+        if not discovery.stealth_id(wire):
+            self.show("Not addable", ["Use stealth/<name>; variant ids are not addable in this release."])
+            return
+        try:
+            call, entry = onboarding.lookup_stealth(
+                self.runtime, wire, confirm=self.confirm,
+                notice=lambda text: self.show("OpenRouter lookup", [text]))
+            row = onboarding.listing_rows(self.runtime, "openrouter", [entry])[0]
+            self.show("Model facts", [discovery.entry_text(row)])
+            try:
+                draft = onboarding.line_draft(self.runtime, "openrouter", entry, call)
+            except discovery.DeclarationRefusal:
+                draft = {"wire_model": wire, "display": entry.get("display_name") or wire, "family": "unknown"}
+            key = discovery.derived_key(wire, set(self.runtime.lineup_catalog().lines)) or ""
+            self.model_form("openrouter", draft, key)
+        except (cli_errors.ClaudeMultiError, ValueError, OSError) as exc:
+            self.show("Lookup unavailable", [str(exc)])
 
     def qualify(self, key):
         fields = views.qualification_form_fields()

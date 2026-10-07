@@ -16,9 +16,9 @@
   wire) — --all shows them
   other registry channels hidden: codex-free, gemini — --all shows them
   next: claude-multi models add PROVIDER WIRE --context N --source registry
-
-
-
-
-
+  OpenRouter listing: claude-multi discover openrouter (Providers → OpenRouter
+  → A).
+  Regular models remain visible; stealth/<name> models have a hidden maker,
+  are pre-release,
+  More below — arrows/PgDn scroll; Home/End
   Up/Down scroll · PgUp/PgDn page · Home/End  · Esc back

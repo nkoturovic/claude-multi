@@ -1,0 +1,24 @@
+  advertised models — nothing admitted
+
+  > [ ] vendor/regular  candidate context=200000 created=2025-06-15 price/token
+    [ ] vendor/bare  candidate context=unknown price/token: prompt=unknown comp
+    [ ] vendor/free:free  candidate [not addable in this release] context=unkno
+    [ ] openrouter/auto  candidate context=200000 [router] price/token: prompt=
+    [ ] vendor/malformed  candidate context=unknown price/token: prompt=unknown
+    [ ] stealth/space-bunny-alpha  candidate context=262144 [stealth: maker hid
+    [ ] vendor/account-only  candidate context=128000 [account-only] price/toke
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Space select · Enter declare · M manual entry · ? help · Esc back

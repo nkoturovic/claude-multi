@@ -69,12 +69,67 @@ still get an independent review from another family. The card and
 
 ## 4. Other OpenRouter models
 
-A model OpenRouter offers that is not a reviewed line can be added as a
-model of your own: list OpenRouter's models (one request you agree to;
-the listing needs no key), declare one, admit it, and qualify it before
-an agent role uses it. That is the advanced journey in
-[guides/models.md](../guides/models.md#add-a-model-of-your-own); the
-reviewed lines do not need it.
+List models with **G** Providers → OpenRouter → **A** → **List models**, or
+run this in a terminal outside Claude Code:
+
+```bash
+claude-multi discover openrouter
+```
+
+The public listing makes one anonymous request to `/api/v1/models`, after
+confirmation. Every regular model stays visible, even with missing facts.
+With a configured key, a **second, separately confirmed** request to
+`/api/v1/models/user` adds account-only rows. It uses the same key, in the
+Bearer header only. This listing is filtered by the account's provider
+preferences, privacy settings and guardrails; it is not a complete inventory.
+Declining or a failed account listing keeps the public rows. Without a key,
+only the public listing is requested. Each request is bounded to 20 seconds
+and 4 MiB, with no redirects or retries.
+
+Both surfaces show advertised context, modality, tool support and
+prompt/completion prices per token; missing or malformed facts are **unknown**.
+Zero prompt and completion prices are marked **free (advertised)**, not a
+promise that every feature or request is free. **?** in the TUI listing shows
+the full facts when a row is wider than the terminal.
+
+### Stealth models and add by id
+
+A `stealth/` id, such as `stealth/space-bunny-alpha`, is marked **stealth**:
+**maker hidden; pre-release; may retain prompts; may disappear**. Its family
+is `unknown`, so it cannot establish review independence. The `openrouter/`
+namespace instead contains **routers**, not stealth models. Stealth models
+use the same OpenRouter API and key, but the public listing may omit them.
+The account listing may also omit them; whether an account lists a stealth
+model is not established by the offline fixtures.
+
+Add a known stealth id directly, even when neither listing contains it:
+
+```bash
+claude-multi discover openrouter --add stealth/space-bunny-alpha
+```
+
+This asks to fetch the anonymous
+`/api/v1/models/stealth/space-bunny-alpha/endpoints` metadata, then explicitly
+declares that id. Its advertised name, modality, context and tools are used
+when present, otherwise left unknown. Facts stated per upstream endpoint
+are used only when every endpoint agrees; disagreements stay unknown.
+If the endpoint states no context,
+repeat with `--context N` using a bound you have verified in the provider's
+documentation; a declined or failed lookup also permits that manual bound.
+No inference request is made. In the TUI use **A** → **Add stealth id**;
+review the facts and the prefilled declaration before saving. **Manual entry**
+(and `models add … --context N --source docs --source-ref URL`) remains a
+no-lookup path.
+
+Ids with suffixes such as `vendor/model:free` stay visible with **not addable in
+this release**: the wire grammar does not accept `:`. Do not strip the
+suffix to declare a different model by accident.
+
+Listing alone never declares, enables, admits, binds or chooses a default.
+Only `--add` or the TUI declaration preview writes a model of your own;
+it changes no profile or provider enablement. Admission and qualification
+are optional badges, not prerequisites to explicit use on an available
+route. See [guides/models.md](../guides/models.md#add-a-model-of-your-own).
 
 ## 5. Replace or remove the key
 
@@ -88,8 +143,8 @@ key again.
 OpenRouter bills per token from your account's credit, at each model's
 listed price, and every agent of a profile bills separately: a profile
 that runs nine agents on OpenRouter can spend several times what a
-single-model session does. claude-multi shows no prices and enforces no
-cap. Use OpenRouter's own credit limits and per-key limits, and watch
+single-model session does. claude-multi shows listing prices as observations
+and enforces no spending cap. Use OpenRouter's own credit limits and per-key limits, and watch
 usage in its dashboard. `claude-multi usage` counts requests, not tokens
 or cost.
 
