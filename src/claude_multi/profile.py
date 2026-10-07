@@ -706,6 +706,8 @@ class AgentFacts:
     tools_variants: frozenset[str] = frozenset()
     pool: bool = False  # a first-party pool line: optional exact-client diagnostics
     exact_client: str = "not-required"  # not-required | current | contract-stale | missing | failed | unavailable
+    provider_enabled: bool = True  # current Settings, independent of the admission badge
+    ledger_error: str | None = None  # an unusable ledger, never merely an absent one
 
 
 @dataclass(frozen=True)
@@ -882,10 +884,16 @@ def agent_eligibility(
     lead = entry.get("lead")
     if isinstance(lead, Mapping) and lead.get("env"):
         warn("lead-env-ignored", "its lead-only environment is not applied to an agent")
-    if (facts is not None and facts.route not in ("approved", "keyless", "catalog")
-            and not (mode == AGENT_MODE_RECORD and recorded)):
-        reasons.append(f"the route of provider {facts.provider} is {facts.route}")
-        remedies.append(f"claude-multi providers approve {facts.provider}")
+    if facts is not None and not (mode == AGENT_MODE_RECORD and recorded):
+        if not facts.provider_enabled:
+            reasons.append(f"provider {facts.provider} is disabled in Settings")
+            remedies.append(f"enable provider {facts.provider} in Settings")
+        if facts.ledger_error is not None:
+            reasons.append(facts.ledger_error)
+            remedies.append("inspect operator-ledger.json and restore a valid ledger")
+        if facts.route not in ("approved", "keyless", "catalog"):
+            reasons.append(f"the route of provider {facts.provider} is {facts.route}")
+            remedies.append(f"claude-multi providers approve {facts.provider}")
     family = family if family is not None else str(entry.get("family", facts.family if facts else UNKNOWN_FAMILY))
     known = known_families if known_families is not None else (facts.t1_families if facts else ())
     if not recognized_family(family, known):

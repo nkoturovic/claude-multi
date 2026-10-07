@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import dataclasses
 import json
 import unittest
 from unittest import mock
 
-from claude_multi import launch, profile, scope, settings, state, strict_json
+from claude_multi import launch, operator, profile, scope, settings, state, strict_json, transition
 from claude_multi.cli import doctor, runtime, types
+from _v4 import V4Case
 import test_cli as fixtures
+import test_operator as operator_fixtures
 import test_scope_v2 as scope_fixtures
 
 
@@ -122,6 +125,124 @@ class PermissiveRuntimeTests(fixtures.OperatorCommandCase):
         self.assertEqual(blocks, [])
         self.assertTrue(any("0 qualified" in line and "1 usable for agents" in line for line in info))
         self.assertTrue(any("not qualified" in line for line in attention))
+
+
+class OperatorLedgerAvailabilityTests(V4Case):
+    KEYS = ("custom-lan-model", "custom-claude-fixture")
+    USES = ("lead", "agent", "workflow")
+    DAMAGE = ("malformed", "unreadable")
+
+    def setUp(self):
+        super().setUp()
+        self.ledger_file = operator.ledger_path(self.runtime.gateway_environ())
+        directory = state.ensure_private_dir(operator.providers_dir(self.runtime.gateway_environ()))
+        files = operator_fixtures._fixture_files()
+        files["lanbox"]["lines"]["custom-lan-model"]["context"]["declared_tokens"] = 200000
+        for name in ("lanbox", "anthropic"):
+            state.atomic_write(directory / f"{name}.json", strict_json.pretty_file_bytes(files[name]))
+
+    def target(self, key, use):
+        workflow = {"model": key, "effort": "high"} if use == "workflow" else None
+        self.runtime.settings_store.update(
+            lambda doc: doc.update(workflow_default_binding=workflow), catalog=self.runtime.lineup_catalog())
+        document = profile.ad_hoc_direct(key if use == "lead" else "opus", "high")
+        if use == "agent":
+            document["agents"] = {"cm-reviewer": {"model": key, "effort": "high"}}
+        return types.LaunchTarget("ad-hoc", document, None, False, "fixture")
+
+    @contextlib.contextmanager
+    def damaged_ledger(self, damage):
+        raw = b"{malformed\n" if damage == "malformed" else strict_json.canonical_file_bytes(operator.ledger_document(None))
+        state.atomic_write(self.ledger_file, raw)
+        failure = (mock.patch.object(operator, "load_ledger", side_effect=operator.OperatorError("fixture unreadable"))
+                   if damage == "unreadable" else contextlib.nullcontext())
+        try:
+            with failure:
+                snapshot = self.runtime.operator_snapshot()
+                self.assertTrue(snapshot.ledger_present)
+                self.assertIsNone(snapshot.ledger)
+                self.assertEqual(snapshot.ledger_error, operator.LEDGER_UNUSABLE)
+                yield
+        finally:
+            state.remove_private(self.ledger_file)
+
+    def state_bytes(self):
+        return {name: data for name, data in self.tree(self.root).items()
+                if not name.endswith((".lock", "/.in-use"))}
+
+    def assert_record_plan(self, record):
+        expected = transition.expected_plan(
+            record, docs=self.runtime.ordinary_docs, prompt_bodies=self.runtime.catalog.prompt_bodies,
+            state_root=self.store.root, hook_command=self.runtime.hook3_command,
+            token_helper_command=self.runtime.token_helper_command, live=self.live(record["managed_id"]),
+            environ=self.runtime.environ)
+        self.assertIsNotNone(expected.plan, expected.reason)
+        self.assertEqual(scope.live_drift(self.live(record["managed_id"]), expected.plan), [])
+
+    def test_corrupt_ledger_refuses_current_fresh_and_resume_use(self):
+        for key in self.KEYS:
+            for use in self.USES:
+                target = self.target(key, use)
+                # No ledger at all is valid for both routes, even without admission.
+                self.assertFalse(self.ledger_file.exists())
+                record = self.launch_fresh(target)
+                mid = record["managed_id"]
+                for damage in self.DAMAGE:
+                    for action in ("fresh", "resume"):
+                        with self.subTest(key=key, use=use, damage=damage, action=action), self.damaged_ledger(damage):
+                            before, execs = self.state_bytes(), len(self.execs)
+                            self.assert_record_plan(record)
+                            with self.assertRaisesRegex((types.LaunchPlanError, scope.ScopeError), "operator-ledger.json"):
+                                self.runtime.prepare(target, action=action, passthrough=[],
+                                                     session_id=mid if action == "resume" else None)
+                            eff = self.runtime.current_effective()
+                            self.assertEqual(eff.unavailable_lines[key], operator.LEDGER_UNUSABLE)
+                            self.assertEqual(self.state_bytes(), before)
+                            self.assertEqual(len(self.execs), execs)
+
+    def test_corrupt_ledger_refuses_prepared_launch_and_revalidation(self):
+        for key in self.KEYS:
+            for use in self.USES:
+                target = self.target(key, use)
+                for damage in self.DAMAGE:
+                    for check in (self.runtime.perform, self.runtime.revalidate_operator, self.runtime._revalidate_in_barrier):
+                        prepared = self.runtime.prepare(target, action="fresh", passthrough=[])
+                        self.runtime.revalidate_operator(prepared)  # absent ledger control
+                        with self.subTest(key=key, use=use, damage=damage, check=check.__name__), self.damaged_ledger(damage):
+                            before, execs = self.state_bytes(), len(self.execs)
+                            with self.assertRaisesRegex(launch.LaunchError, "unavailable"):
+                                check(prepared)
+                            self.assertEqual(self.state_bytes(), before)
+                            self.assertEqual(len(self.execs), execs)
+
+    def test_corrupt_ledger_after_preflight_refuses_real_commit(self):
+        for key in self.KEYS:
+            for use in self.USES:
+                record = self.launch_fresh(self.target(key, use))  # absent ledger launches
+                for damage in self.DAMAGE:
+                    with self.subTest(key=key, use=use, damage=damage), contextlib.ExitStack() as stack:
+                        record = self.store.load(record["managed_id"])
+                        prepared = self.prepare_resume(record["managed_id"])
+                        execs = len(self.execs)
+                        readiness = self.runtime._launch_readiness
+                        before = {}
+
+                        def corrupt_after_readiness(*args, **kwargs):
+                            token = readiness(*args, **kwargs)
+                            stack.enter_context(self.damaged_ledger(damage))
+                            before.update(self.state_bytes())
+                            self.assert_record_plan(record)
+                            return token
+
+                        with mock.patch.object(self.runtime, "_launch_readiness", side_effect=corrupt_after_readiness) as ready, \
+                                mock.patch.object(self.runtime, "revalidate_operator", wraps=self.runtime.revalidate_operator) as revalidate:
+                            with self.assertRaisesRegex(launch.LaunchError, "unavailable"):
+                                self.runtime.perform(prepared)
+                        ready.assert_called_once()
+                        self.assertEqual(revalidate.call_count, 2)
+                        self.assertEqual(self.state_bytes(), before)
+                        self.assertEqual(len(self.execs), execs)
+                        self.assertEqual(self.store.load(record["managed_id"]), record)
 
 
 class PermissiveScopeTests(unittest.TestCase):

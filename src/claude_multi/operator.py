@@ -3559,7 +3559,7 @@ def evidence_floor(evidence: OperatorEvidence | None, key: str, *, digest: str, 
 def agent_fact_fields(
     key: str, *, layer: OperatorLayer, ledger: OperatorLedger | None, evidence: OperatorEvidence | None,
     admitted_lines: Iterable[str], provider_enabled: bool, contracts: Mapping[str, Any], docs: Mapping[str, Any],
-    trusted_docs: Mapping[str, Any],
+    trusted_docs: Mapping[str, Any], ledger_error: str | None = None,
 ) -> dict[str, Any] | None:
     """The explicit facts ``profile.agent_eligibility`` needs for one
     operator line (current state; pure over the given inputs). None when
@@ -3586,6 +3586,8 @@ def agent_fact_fields(
     return {
         "key": key,
         "provider": line.provider_id,
+        "provider_enabled": provider_enabled,
+        "ledger_error": ledger_error,
         "admitted": operator_line_admitted(key, layer=layer, ledger=ledger, admitted_lines=admitted_lines),
         "route": route,
         "d60": agent_route_kind(provider, kind, gateway=trusted_docs["gateway"]) is None,
