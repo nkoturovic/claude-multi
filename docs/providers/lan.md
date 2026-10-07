@@ -2,8 +2,9 @@
 
 A model server on your own computer or local network (for example a local
 model runner) can be added as a keyless provider when it speaks the
-OpenAI chat protocol. Its models can lead a session; they cannot run
-agents in this release, because agents need a reviewed route.
+OpenAI chat protocol. Its valid models can lead a session or run `cm-*`
+agents without admission, qualification or declared agent roles. Tool and
+context compatibility are not guaranteed; missing or failed evidence warns.
 
 ## 1. What you need
 
@@ -48,29 +49,32 @@ use the Windows host's address
 
 ## 2. What is supported
 
-- A keyless OpenAI-compatible server (`openai-compatible-lan`), lead only.
-- There is no key and no route approval step: declaring the server and
-  admitting a line are enough.
-- Not supported on this keyless route: agents on a LAN line, and servers
-  that require a key. A keyed server needs an `https` address and must be
-  added as an [Anthropic-compatible](anthropic-compatible.md) or keyed
-  [OpenAI-compatible](openai-compatible.md) endpoint instead. Those are
-  separate routes with credential approval, admission and agent qualification.
+- A keyless OpenAI-compatible server (`openai-compatible-lan`), for leads
+  and agents. An enabled provider and a valid routable model are required;
+  admission is an optional local badge, qualification an optional diagnostic.
+- There is no key and no credential-route approval step on this route.
+  Local-host, endpoint and payload checks still apply.
+- Servers that require a key are not supported on this keyless route. A
+  keyed server needs an `https` address and must be added as an
+  [Anthropic-compatible](anthropic-compatible.md) or keyed
+  [OpenAI-compatible](openai-compatible.md) endpoint instead, with explicit
+  credential-route approval. There is no automatic protocol fallback.
 
 ## 3. Add it
 
 In the launcher: **G** Providers → **N** (or **W** Get started → **A**) →
 a server preset or "Server on your network"; give its name (`lan` unless
 you change it) and its address (Enter keeps the preset's). The flow then
-moves on to adding models and offers to admit them; later, **A** on the
-provider adds more and **M** → Enter admits. From a terminal (the
+moves on to adding models and offers optional admission; skipping it still
+lets you select the line. Later, **A** on the provider adds more; **M** →
+Enter changes the optional badge and **Q** offers diagnostics. From a terminal (the
 provider takes the preset's name unless `--as` gives another):
 
 ```bash
 claude-multi providers add --preset ollama                # Ollama on this computer
 claude-multi discover ollama                               # one listing request, after you agree
 claude-multi discover ollama --add <wire> --context <n> --as custom-local-model
-claude-multi models admit custom-local-model
+claude-multi profile edit <name>         # bind custom-local-model as a lead or agent
 ```
 
 Any other server, here one on another computer:
@@ -78,15 +82,25 @@ Any other server, here one on another computer:
 ```bash
 claude-multi providers add --preset lan-openai-compatible --as lanbox --base-url http://llm.example.lan:8000/v1
 claude-multi models add lanbox local-model --context 32768 --source operator --as custom-local-model
-claude-multi models admit custom-local-model
+claude-multi profile edit <name>         # bind custom-local-model as a lead or agent
 ```
 
 The context size is yours to state: use what the server is configured to
 serve (`--source operator`), since a local server's window depends on how
 you started it.
 
-Then choose the line as a lead: `claude-multi direct --model custom-local-model`,
-or a profile whose lead is that line.
+You can also choose a direct lead with
+`claude-multi direct --model custom-local-model`. Any nonempty, single-line
+printable family label up to 64 characters is accepted (not controls or
+secrets); an unrecognized label means **independence unknown** for reviews,
+not an agent-use ban.
+
+Optional `claude-multi models qualify custom-local-model --agents` checks
+need a human's explicit consent to the request plan at a terminal outside
+Claude Code, default **No**. They never run during selection or launch. A
+small local model can overflow before the client's shared compaction trigger;
+use the actual window and provider-bound warning, not an assumed per-agent
+window ([models](../guides/models.md#context-windows)).
 
 ## 4. Your network, not the gateway
 
@@ -100,12 +114,12 @@ Two different things are local here:
 
 ## 5. Reachability is network-scoped
 
-A server reachable at one place may be absent at another. Doctor reports
-an unreachable server as information (Attention when a live session is
-bound to it). Launching a session whose lead is on an unreachable server
-fails fast: connect to the server's network, or choose another model.
-claude-multi never substitutes another model by itself and never probes
-in the background.
+A server reachable at one place may be absent at another. An observed
+unreachable server produces an Attention warning for a launch that uses it,
+not a fast refusal; requests can still fail. Connect to the server's network
+or choose another model. Unknown reachability stays unknown, and local
+readiness is not upstream verification. claude-multi never substitutes
+another model by itself and never probes in the background.
 
 ## 6. Costs
 

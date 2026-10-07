@@ -261,7 +261,7 @@ class CardNoticeTests(_CardCase):
                     self.assertIn(part, config)
                 new = next(line for line in lines if "new model line(s)" in line)
                 self.assertIn("! 1 new model line(s)", new)
-                self.assertTrue(new.rstrip().endswith("— M → Enter admits"), new)
+                self.assertTrue(new.rstrip().endswith("— M → Enter adds an optional badge"), new)
                 worktree = next(line for line in lines if "Git repository" in line)
                 self.assertTrue(worktree.rstrip().endswith("(git init enables them)"), worktree)
                 self.assertIn("Status  Attention", "\n".join(lines))

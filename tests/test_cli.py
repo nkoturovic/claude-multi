@@ -7015,7 +7015,7 @@ class SingleModelPrepareTests(CLITestCase):
     def test_agent_only_line_is_refused_as_a_direct_lead(self) -> None:
         # 3.0 evaluation: a lead needs the lead capability even ad hoc
         # (gpt55 is agents-only in the fixture catalog); 2.x launched it.
-        with self.assertRaisesRegex(cli.LaunchPlanError, "'gpt55' lacks the lead capability"):
+        with self.assertRaisesRegex(cli.LaunchPlanError, "'gpt55' lacks the lead/context fields"):
             self._fresh("gpt55")
 
     def test_direct_fresh_records_null_profile(self) -> None:
@@ -8391,7 +8391,7 @@ class OperatorConsumerTests(CLITestCase):
             self.assertTrue(set(self.keys) <= keys, (slot, set(self.keys) - keys))
         agent = views_mod.picker_rows(tuple(rows.values()), slot="cm-analyst", bindings={}, lcat=lcat, eff=eff,
                                       current=None)
-        self.assertFalse(set(self.keys) & {item.key for item in agent.items if item.selectable})
+        self.assertTrue(set(self.keys) <= {item.key for item in agent.items if item.selectable})
 
     def test_list_and_map_operator_lines_are_direct_profile_and_named_leads(self) -> None:
         for key in self.keys:
@@ -8415,40 +8415,43 @@ class OperatorConsumerTests(CLITestCase):
         context = claude_multi.compiler.lead_set_context(prepared.result.fence, 90)
         self.assertFalse(context.custom_bound)  # custom_bound is legacy-custom only
 
-    def test_operator_lines_are_lead_only(self) -> None:
+    def test_operator_lead_recommendation_does_not_block_agents(self) -> None:
         document = profile_mod.ad_hoc_direct("opus", "high")
         document["name"] = "admitted"
         document["agents"] = {"cm-analyst": {"model": "custom-acme-large", "effort": "high"}}
-        with self.assertRaises(cli.LaunchPlanError) as raised:
-            self.prepare(document, profile="admitted")
-        self.assertIn("lacks the agents capability", str(raised.exception))
+        prepared = self.prepare(document, profile="admitted")
+        self.assertIn("custom-acme-large", str(prepared.notices))
+        self.assertIn("capability-recommendation", {finding.code for finding in prepared.lineup.warnings})
+        self.assertIn(prepared.lineup.agents["cm-analyst"].binding.selector,
+                      prepared.result.fence.available_models)
 
-    def test_current_authority_needs_ledger_digest_and_route(self) -> None:
-        """At launch/resume: settings admission alone never offers."""
+    def test_current_badge_needs_digest_and_use_separately_needs_route(self) -> None:
+        """A badge never authorizes a route; losing a badge never disables one."""
 
         self.assertTrue(set(self.keys) <= self.runtime.current_effective().admitted_lines)
         self.grant(*self.keys, digests={"custom-acme-small": "0" * 64})
         self.assertNotIn("custom-acme-small", self.runtime.current_effective().admitted_lines)
         self.assertIn("custom-acme-large", self.runtime.current_effective().admitted_lines)
         self.grant(*self.keys, routes=("legacybox",))
-        admitted = self.runtime.current_effective().admitted_lines
-        self.assertFalse({"custom-acme-small", "custom-acme-large"} & admitted)
-        self.assertIn("custom-oldbox", admitted)
+        effective = self.runtime.current_effective()
+        self.assertTrue(set(self.keys) <= effective.admitted_lines)
+        self.assertTrue({"custom-acme-small", "custom-acme-large"} <= effective.unavailable_lines.keys())
+        self.assertNotIn("custom-oldbox", effective.unavailable_lines)
         with self.assertRaises(cli.LaunchPlanError):
             self.prepare(profile_mod.ad_hoc_direct("custom-acme-small", "high"))
 
-    def test_stale_runtime_refuses_a_revoked_or_edited_line(self) -> None:
+    def test_stale_runtime_allows_badge_changes_but_refuses_an_edited_line(self) -> None:
         prepared = self.prepare(profile_mod.ad_hoc_direct("custom-acme-large", "high"))
-        self.grant("custom-acme-small", "custom-oldbox")  # the ledger grant of the lead is gone
-        with self.assertRaisesRegex(claude_multi.launch.LaunchError, "operator line custom-acme-large changed"):
-            self.runtime.perform(prepared)
-        self.assertEqual(self.launches, [])
+        self.grant("custom-acme-small", "custom-oldbox")  # only the optional badge is gone
+        self.runtime.perform(prepared)
+        self.assertEqual(len(self.launches), 1)
+        self.launches.clear()
         self.grant(*self.keys)
         prepared = self.prepare(profile_mod.ad_hoc_direct("custom-acme-large", "high"))
         files = copy.deepcopy(self.files["acme"])
         files["lines"]["custom-acme-large"]["context"]["declared_tokens"] = 131072
         state.atomic_write(self.pdir / "acme.json", strict_json.pretty_file_bytes(files))
-        with self.assertRaisesRegex(claude_multi.launch.LaunchError, "changed or lost its admission"):
+        with self.assertRaisesRegex(claude_multi.launch.LaunchError, "changed or its route/provider became unavailable"):
             self.runtime.perform(prepared)
         self.assertEqual(self.launches, [])
         state.atomic_write(self.pdir / "acme.json", strict_json.pretty_file_bytes(self.files["acme"]))
@@ -8492,7 +8495,7 @@ class OperatorConsumerTests(CLITestCase):
         self.assertNotIn("operator", json.dumps(first[1]))
         self.assertEqual(first[2]["key"], "custom-acme-large")
 
-    def test_legacy_custom_stays_direct_only(self) -> None:
+    def test_legacy_custom_can_be_bound_in_a_profile_without_renaming(self) -> None:
         os.unlink(self.pdir / operator_mod.MIGRATION_MARKER)
         os.unlink(self.pdir / "legacybox.json")
         claude_multi.custom.save_registry(self.env, {"version": 1, "providers": {
@@ -8504,9 +8507,9 @@ class OperatorConsumerTests(CLITestCase):
         self.prepare(profile_mod.ad_hoc_direct("lm", "high"))  # ad-hoc Direct keeps working
         document = profile_mod.ad_hoc_direct("lm", "high")
         document["name"] = "admitted"
-        with self.assertRaises(cli.LaunchPlanError) as raised:
-            self.prepare(document, profile="admitted")
-        self.assertIn("cannot be bound in a profile", str(raised.exception))
+        prepared = self.prepare(document, profile="admitted")
+        self.assertEqual(prepared.lineup.lead.binding.key, "lm")
+        self.assertEqual(prepared.lineup.lead.binding.selector, lcat.lines["lm"]["selector"])
 
     def test_models_new_off_operator_enter_is_guarded(self) -> None:
         self.runtime.settings_store.update(lambda doc: doc.__setitem__("admitted_lines", []),
@@ -8788,9 +8791,9 @@ class OperatorGuardTests(OperatorCommandCase):
         self.assertFalse(os.path.lexists(self.ledger_file) and self.ledger().routes)
         code, out, err = self.op(SMALL_ADD, env={"CLAUDECODE": "1"})
         self.assertEqual(code, 0, err)
-        self.assertIn("declared custom-acme-small — New · Off · selectors custom-acme-small · class custom-131072\n"
-                      "lead-only · validated floor 131072 (not near-limit measured)", out)
-        self.assertIn("next: claude-multi models admit custom-acme-small", out)
+        self.assertIn("declared custom-acme-small — New · not admitted · selectors custom-acme-small · class custom-131072\n"
+                      "lead recommended; explicit agent bindings are allowed · validated floor 131072 (not near-limit measured)", out)
+        self.assertIn("optional: claude-multi models admit custom-acme-small", out)
         config = (claude_multi.proxy.config_dir(self.runtime.home) / "config.yaml").read_text()
         self.assertNotIn("custom-acme-small", config)
 
@@ -8831,90 +8834,77 @@ class OperatorGuardTests(OperatorCommandCase):
 
 
 class OperatorLifecycleTests(OperatorCommandCase):
-    def test_approve_declare_admit_smoke_revoke(self) -> None:
-        code, out, err = self.op(ACME_ADD, "y\n")
-        self.assertEqual(code, 0, err)
-        self.assertIn("approve the credential route of provider acme:\n  origin: https://api.acme.example", err)
-        self.assertIn("auth: bearer from ACME_API_KEY (value not shown; present)", err)
-        self.assertIn("approved route acme: bearer env:ACME_API_KEY → https://api.acme.example", out)
-        self.assertIn("gateway: reloaded", out)
+    def test_approve_declare_admit_revoke_without_inference_or_render(self) -> None:
+        self.declare_small()
         layer = self.runtime.operator_snapshot().layer
         self.assertEqual(self.ledger().routes["acme"]["rd"], layer.providers["acme"].route_digest)
-        code, out, err = self.op(SMALL_ADD)
-        self.assertEqual(code, 0, err)
-        config = (claude_multi.proxy.config_dir(self.runtime.home) / "config.yaml").read_text()
-        self.assertIn('alias: "custom-acme-small"', config)  # New·Off lines are served before admission
+        config = claude_multi.proxy.config_dir(self.runtime.home) / "config.yaml"
+        before = config.read_bytes()
+        routes = dict(self.ledger().routes)
+        digest = layer.lines["custom-acme-small"].definition_digest
+        with mock.patch.object(self.runtime, "render_gateway", side_effect=AssertionError("badge must not render")), \
+                mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("badge must not infer")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("badge must not qualify")):
+            code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
+            self.assertEqual(code, 0, out + err)
+            self.assertIn("no requests are sent", err)
+            self.assertIn("Optional badge recorded", out)
+            grant = self.ledger().admissions["custom-acme-small"]
+            self.assertEqual((grant["digest"], grant["via"]), (digest, "admit"))
+            self.assertIn("custom-acme-small", self.runtime.current_effective().admitted_lines)
+            self.assertIsNone(operator_mod.load_evidence(self.runtime.gateway_environ(),
+                                                       operator_mod.load_schemas(CATALOG_ROOT)))
+            code, out, err = self.op(["models", "revoke", "custom-acme-small"])
+            self.assertEqual(code, 3, err)
+            self.assertIn("line remains usable", err)
+            self.assertIn("qualification evidence is unchanged", err)
+            self.assertIn("custom-acme-small", self.ledger().admissions)
+            code, out, err = self.op(["models", "revoke", "custom-acme-small"], "y\n")
+            self.assertEqual(code, 0, err)
+            self.assertIn("use availability and qualification unchanged", out)
+        self.assertNotIn("custom-acme-small", self.ledger().admissions)
         self.assertNotIn("custom-acme-small", self.runtime.current_effective().admitted_lines)
+        self.assertEqual(self.ledger().routes, routes)
+        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.http_calls, [])
+        self.assertTrue(settings_mod.line_offered("custom-acme-small", layer.lines["custom-acme-small"].core_entry,
+                                                 self.runtime.current_effective()))
+
+    def test_admission_needs_no_served_alias_health_or_credential(self) -> None:
+        self.declare_small()
+        # Declining the optional attestation still changes nothing.
+        code, _out, err = self.op(["models", "admit", "custom-acme-small"], "n\n")
+        self.assertEqual(code, 3)
+        self.assertIn("not admitted — nothing changed", err)
+        self.assertNotIn("custom-acme-small", self.ledger().admissions)
+        state.atomic_write(self.secret_file, b"KIMI_CLAUDE_API_KEY=cli-test-dummy\n")
+        self.served.clear()
+        with mock.patch.object(self.runtime, "check_readiness", side_effect=AssertionError("health observation")), \
+                mock.patch.object(self.runtime, "served_models", side_effect=AssertionError("served observation")):
+            code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("custom-acme-small", self.ledger().admissions)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.http_calls, [])
+
+    def test_failed_optional_smoke_stays_failed_after_admission(self) -> None:
+        from claude_multi import qualify
+
+        self.declare_small()
         self.serve_current()
+        self.runtime.qualify_http = lambda *_args: qualify.HttpResult(400, b'{"error":"fixture"}')
+        code, out, err = self.op(["models", "qualify", "custom-acme-small", "--smoke"], "y\n")
+        self.assertEqual(code, 1, out + err)
+        evidence = operator_mod.evidence_path(self.runtime.gateway_environ())
+        before = evidence.read_bytes()
+        recorded = json.loads(before)["lines"]["custom-acme-small"]["checks"]["smoke"]["result"]
+        self.assertEqual(recorded, "failed")
+        self.assertNotIn("custom-acme-small", self.ledger().admissions)
         code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.calls, ["custom-acme-small"])
-        self.assertIn("claude-multi will make ONE request to a provider:\n  gateway alias: custom-acme-small\n"
-                      "  upstream origin: https://api.acme.example\n"
-                      "  auth: bearer from ACME_API_KEY (value not shown)\n"
-                      "  why: admission smoke for custom-acme-small\n"
-                      "  approximately 40 input tokens; 120 s wall-clock cap; 256 KiB response cap\nProceed? [y/N] ",
-                      err)
-        digest = self.runtime.operator_snapshot().layer.lines["custom-acme-small"].definition_digest
-        self.assertIn(f"smoke custom-acme-small: pass (HTTP 200); evidence recorded for {digest[:16]}", out)
-        self.assertIn("admitted custom-acme-small. Usable as a Direct lead and as a profile lead.", out)
-        grant = self.ledger().admissions["custom-acme-small"]
-        self.assertEqual((grant["digest"], grant["via"]), (digest, "admit"))
-        self.assertIn("custom-acme-small", self.runtime.current_effective().admitted_lines)
-        evidence = operator_mod.load_evidence(self.runtime.gateway_environ(), operator_mod.load_schemas(CATALOG_ROOT))
-        record = evidence.lines["custom-acme-small"]
-        self.assertEqual((record["digest"], record["checks"]["smoke"]["result"], record["host"]),
-                         (digest, "pass", "api.acme.example"))
-        self.assertEqual(set(record), {"digest", "host", "versions", "checks"})  # verdict only
-        # A current passing smoke is reused: a second admit makes no call.
-        code, out, err = self.op(["models", "admit", "custom-acme-small"])
-        self.assertEqual(code, 0, err)
-        self.assertEqual(self.calls, ["custom-acme-small"])
-        code, out, err = self.op(["models", "revoke", "custom-acme-small"])
-        self.assertEqual(code, 3, err)
-        self.assertIn("Revoke custom-acme-small? It stops being offered", err)
         self.assertIn("custom-acme-small", self.ledger().admissions)
-        code, out, err = self.op(["models", "revoke", "custom-acme-small"], "y\n")
-        self.assertEqual(code, 0, err)
-        self.assertIn("revoked custom-acme-small. Running sessions keep their fence until relaunch.", out)
-        self.assertNotIn("custom-acme-small", self.ledger().admissions)
-        self.assertNotIn("custom-acme-small", self.runtime.current_effective().admitted_lines)
-
-    def test_admission_refusals_make_zero_calls(self) -> None:
-        self.declare_small()
-        # E12: an alias not served.
-        code, _out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
-        self.assertEqual(code, 1)
-        self.assertIn("does not serve the current render", err)
-        snap = gateway_facts._gateway_snapshot(self.runtime, self.runtime.gateway_token())
-        self.served |= {snap.sentinel}
-        code, _out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
-        self.assertEqual(code, 1)
-        self.assertIn("admit custom-acme-small: 0/1 aliases served — claude-multi providers apply", err)
-        self.serve_current()
-        # Declined consent: nothing sent, nothing admitted.
-        code, _out, err = self.op(["models", "admit", "custom-acme-small"], "n\n")
-        self.assertEqual(code, 1)
-        self.assertIn("smoke declined — nothing admitted", err)
-        self.assertEqual(self.calls, [])
-        # A missing credential refuses before any request.
-        state.atomic_write(self.secret_file, b"KIMI_CLAUDE_API_KEY=cli-test-dummy\n")
-        code, _out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
-        self.assertEqual(code, 1)
-        self.assertIn("credential ACME_API_KEY is not set — claude-multi providers set-key acme", err)
-        self.assertEqual(self.calls, [])
-        self.assertNotIn("custom-acme-small", self.ledger().admissions)
-
-    def test_failed_smoke_is_evidence_but_never_admission(self) -> None:
-        self.declare_small()
-        self.serve_current()
-        self.outcome = operator_mod.SmokeOutcome("degenerate", 200, "the response exceeded the byte cap")
-        code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
-        self.assertEqual(code, 1)
-        self.assertIn("smoke custom-acme-small: degenerate (HTTP 200: the response exceeded the byte cap)", out)
-        self.assertIn("the smoke did not pass — nothing admitted", err)
-        self.assertNotIn("custom-acme-small", self.ledger().admissions)
-        self.assertNotIn("custom-acme-small", self.runtime.settings_store.load().get("admitted_lines", []))
+        self.assertEqual(evidence.read_bytes(), before)
 
     def test_definition_change_during_the_smoke_records_nothing(self) -> None:
         self.declare_small()
@@ -8927,10 +8917,10 @@ class OperatorLifecycleTests(OperatorCommandCase):
             state.atomic_write(path, strict_json.pretty_file_bytes(document))
 
         self.during_smoke = edit
-        code, _out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
+        code, _out, err = self.op(["models", "qualify", "custom-acme-small", "--smoke"], "y\n")
         self.assertEqual(code, 1)
-        self.assertIn("configuration changed during the smoke — evidence not recorded; retry", err)
-        self.assertEqual(len(self.calls), 1)
+        self.assertIn("configuration changed", err)
+        self.assertEqual(len(self.http_calls), 1)
         self.assertIsNone(operator_mod.load_evidence(self.runtime.gateway_environ(), operator_mod.load_schemas(CATALOG_ROOT)))
         self.assertNotIn("custom-acme-small", self.ledger().admissions)
 
@@ -8951,8 +8941,8 @@ class OperatorLifecycleTests(OperatorCommandCase):
         self.assertEqual(json.loads(out)["entry"]["status"], "new")
         self.assertEqual(out, strict_json.pretty_file_bytes(json.loads(out)).decode())
         code, out, err = self.op(["models", "show", "custom-acme-small"])
-        self.assertIn("status New · Off · lead-only · class custom-131072", out)
-        self.assertIn("smoke evidence: pass (current)", out)
+        self.assertIn("status New · not admitted · lead recommended; explicit agent bindings are allowed · class custom-131072", out)
+        self.assertIn("smoke evidence: pass (ok)", out)
 
     def test_models_rm_refuses_live_and_bound_then_keeps_captures(self) -> None:
         self.declare_small()
@@ -9030,7 +9020,7 @@ class OperatorLifecycleTests(OperatorCommandCase):
         code, out, err = self.op(["providers", "list"])
         self.assertEqual(code, 0, err)
         self.assertIn("acme\toperator provider · anthropic-compatible · https://api.acme.example · route approved", out)
-        self.assertIn("  custom-acme-small\tNew · Off", out)
+        self.assertIn("  custom-acme-small\tNew · not admitted", out)
         code, out, err = self.op(["providers", "show", "acme", "--resolved"])
         self.assertEqual(code, 0, err)
         shown = json.loads(out)
@@ -9048,7 +9038,7 @@ class OperatorLifecycleTests(OperatorCommandCase):
             code, out, err = self.op(["models", "edit", "custom-acme-small"], "y\n")
         self.assertEqual(code, 0, err)
         self.assertIn("custom-acme-small: definition changed (", out)
-        self.assertIn("its admission lapses; re-admit: claude-multi models admit custom-acme-small", out)
+        self.assertIn("its optional admission badge lapses (not a use restriction); re-admit: claude-multi models admit custom-acme-small", out)
         self.assertNotIn("custom-acme-small", self.runtime.current_effective().admitted_lines)
 
 
@@ -9060,7 +9050,7 @@ class OperatorDoctorWiringTests(OperatorCommandCase):
         blocks, attention, info = doctor_mod._doctor_operator_report(self.runtime, None)
         self.assertEqual(blocks, [])
         self.assertIn("provider acme: route unapproved; not rendered — claude-multi providers approve acme", attention)
-        self.assertIn("operator: 1 providers · 1 lines (0 admitted, 1 New·Off, 0 agent-eligible)", info)
+        self.assertIn("operator: 1 providers · 1 lines (0 admitted, 1 not admitted, 0 qualified, 0 usable for agents)", info)
         sessions_dir = state.ensure_private_dir(self.runtime.session_store.root / "sessions")
         record = {"version": 4, "applied": {"lead": {"key": "custom-acme-small", "selector": "custom-acme-small"},
                                             "agents": {}}, "last_event_source": "start"}

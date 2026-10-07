@@ -1,14 +1,10 @@
-"""The ``models`` listing and the lifecycle of the models you add.
+"""The ``models`` listing and optional admission and qualification badges.
 
-``claude-multi models`` and ``models list`` print the listing (``--json``
-gives one document). ``add`` declares a New · Off model (allowed anywhere:
-declaring grants nothing); ``admit`` runs the checklist and, without a
-current passing smoke, one consented smoke through the loopback gateway
-before the grant; ``qualify`` records verdict-only evidence. Admission and
-the smoke are bound to the currently loaded render: the expected render
-sentinel must be served with no config drift (the current selector-to-wire
-mapping) before the request, after it and again under the lock, or nothing
-is recorded. No lock is held across a prompt or the network call.
+``add`` declares a model without approving its credential route. ``admit``
+and ``revoke`` change local metadata only, never inference or render state.
+``qualify`` records verdict-only evidence after explicit request-plan consent;
+its render/route identity is revalidated before sends and evidence commits.
+No lock is held across a prompt or a network call.
 Exit statuses: 0 ok, 1 refused, 2 usage, 3 declined, 130 cancelled.
 """
 
@@ -384,7 +380,7 @@ def declare_line(
     """The declaration transaction (``models add``; ``discover
     --add`` reuses it): validate the whole proposed layer, write one
     providers.d file under the frozen lock order, re-render or undo. A
-    declared line is New · Off; existing lines are never edited here."""
+    declared line has no admission badge; existing lines are never edited here."""
 
     ctx = providers_cmd.operator_context(runtime)
     providers_cmd.require_ledger(ctx, verb)
@@ -430,27 +426,27 @@ def declare_line(
     entry = resolved.core_entry
     selectors = ", ".join(selector for _level, selector, _contract in catalog.line_selectors(dict(entry)))
     declared = entry["context"]["declared_tokens"]
-    report(output_stream, f"declared {key} — New · Off · selectors {selectors} · class custom-{declared}")
+    report(output_stream, f"declared {key} — New · not admitted · selectors {selectors} · class custom-{declared}")
     report(output_stream, f"{_agent_status(resolved)} · validated floor {entry['context']['validated_tokens']} (not near-limit measured)")
     status = layer.route_status.get(provider_id)
     if status in ("unapproved", "changed"):
         report(output_stream, f"provider {provider_id}: route {status} — not served until "
                               f"claude-multi providers approve {provider_id}")
-    report(output_stream, f"next: claude-multi models admit {key}")
+    report(output_stream, f"select this model on a configured route; optional: claude-multi models admit {key} "
+                          f"or claude-multi models qualify {key} --smoke")
     providers_cmd.verify(runtime, result, output_stream)
     return 0
 
 
 def _agent_status(line: operator_mod.ResolvedOperatorLine) -> str:
-    """lead-only, or the staged agent request (granted only by the
-    use-time gate after qualification)."""
+    """Declaration recommendations, not permission to bind an agent."""
 
     entry = line.core_entry
     if "agents" not in entry["capabilities"]:
-        return "lead-only"
+        return "lead recommended; explicit agent bindings are allowed"
     roles = entry["roles"]
-    shown = "all roles" if roles == "all" else ", ".join(roles)
-    return (f"agents requested ({shown}; the agent gate needs claude-multi models qualify {line.key} --agents)")
+    shown = "all roles" if roles == "all" else ", ".join(roles) or "no roles declared"
+    return f"agent recommendation: {shown}; qualification is optional"
 
 
 def _checklist(output_stream: TextIO, text: str) -> None:
@@ -458,91 +454,52 @@ def _checklist(output_stream: TextIO, text: str) -> None:
 
 
 def _models_admit(runtime: runtime_mod.Runtime, key: str, *, input_stream: TextIO, output_stream: TextIO) -> int:
+    from claude_multi.setup import model as setup_model
+
     verb = f"admit {key}"
     consent.require_human(f"models admit {key}", runtime.gateway_environ())
+    ctx = None
+    line = None
     if key in runtime.catalog.lines:
-        # T1 New admission delegates to the existing catalog admission, through
-        # the shared authority preview and one served-change phase.
-        preflight = providers_cmd.served_preflight(runtime, f"models admit {key}", admit=(key,))
-        with providers_cmd.operator_write(runtime, preflight=preflight):
-            runtime.settings_store.admit_line(key, catalog=runtime.catalog)
-        report(output_stream, f"admitted {key}.")
-        return 0
-    ctx = _qualification_context(runtime, key, verb)
-    providers_cmd.require_ledger(ctx, verb)
-    line = _operator_line(ctx, key, verb)
-    report(output_stream, f"admit {key}:")
-    _checklist(output_stream, f"declaration valid ({line.source})")
-    pid = line.provider_id
-    eff = runtime.current_effective()
-    if not settings_mod.provider_enabled(eff, pid):
-        raise OperatorCommandError(f"{verb}: provider {pid} is off in Settings — enable it first")
-    route = ctx.layer.route_status.get(pid, "catalog")
-    if route not in operator_mod.ROUTE_USABLE:
-        raise OperatorCommandError(f"{verb}: " + operator_mod.route_status_text(pid, route))
-    _checklist(output_stream, f"provider {pid} enabled; route {route}")
-    effective_docs = operator_mod.apply_transports(ctx.docs, operator_mod.transport_selections(ctx.docs, ctx.ledger))
-    provider = (ctx.layer.providers[pid].entry if pid in ctx.layer.providers
-                else effective_docs["providers"]["providers"][pid])
-    transport = provider["transport"]
-    ref = (transport.get("auth") or {}).get("secret_ref")
-    if ref is not None:
-        name = ref.removeprefix("env:")
-        if not _credential_present(ctx, provider, name):
-            raise OperatorCommandError(f"{verb}: credential {name} is not set — claude-multi providers set-key {pid}")
-        _checklist(output_stream, f"credential {name} usable (value not shown)" if catalog.is_keyed_compat(provider)
-                   else f"credential {name} present (value not read)")
-    sentinel, served, problem = render_identity(runtime)
-    if problem:
-        raise OperatorCommandError(f"{verb}: {problem}")
-    unserved = _served_check(key, line, served)
-    if unserved:
-        raise OperatorCommandError(f"{verb}: {unserved}")
-    _checklist(output_stream, f"served: every alias of {key}; render current (sentinel {sentinel})")
-    evidence = operator_mod.load_evidence(ctx.env, ctx.schemas)
-    if operator_mod.smoke_current(evidence, key, line.definition_digest):
-        _checklist(output_stream, "smoke: a passing smoke is recorded for the current definition")
+        if runtime.catalog.lines[key].get("status", "active") != "new":
+            raise OperatorCommandError(f"{verb}: only status new catalog lines are admitted")
     else:
-        outcome = _run_smoke(runtime, ctx, key, verb, input_stream=input_stream, output_stream=output_stream)
-        if outcome is None:
-            raise OperatorCommandError(f"{verb}: smoke declined — nothing admitted")
-        if outcome.result != "pass":
-            raise OperatorCommandError(f"{verb}: the smoke did not pass — nothing admitted")
-    report(output_stream, f"  class {line.core_entry['context']['ordinary_profile']} · {_agent_status(line)}")
-    # The admission commit is a separate phase from the smoke-evidence
-    # commit; its preview shows the authority diff even when no served
-    # selector changes.
-    preflight = providers_cmd.served_preflight(
-        runtime, f"models admit {key}", admit=(key,),
-        ledger_edit=lambda doc: doc["admissions"].__setitem__(
-            key, operator_mod.admission_record(ctx.layer, key, at=operator_mod.utc_stamp(), via="admit")),
-    )
-    with providers_cmd.operator_write(runtime, preflight=preflight):
-        fresh = providers_cmd.operator_context(runtime)
-        providers_cmd.require_ledger(fresh, verb)
-        now = fresh.layer.lines.get(key)
-        after, served_after, problem_after = render_identity(runtime)
-        if (now is None or now.definition_digest != line.definition_digest
-                or fresh.layer.route_status.get(pid, "catalog") != route or problem_after or after != sentinel
-                or _served_check(key, now, served_after)
-                or not operator_mod.smoke_current(operator_mod.load_evidence(fresh.env, fresh.schemas), key,
-                                                  now.definition_digest)):
-            raise OperatorCommandError(f"{verb}: configuration changed while awaiting confirmation — "
-                                       "nothing admitted; retry")
+        ctx = providers_cmd.operator_context(runtime)
+        providers_cmd.require_ledger(ctx, verb)
+        line = _operator_line(ctx, key, verb)
+        _checklist(output_stream, f"declaration valid ({line.source})")
+    if not consent.confirm(
+        f"Admit {key}? Record an optional local attestation only; no requests are sent, "
+        "route approval and qualification are unchanged. [y/N] ", input_stream=input_stream,
+    ):
+        raise setup_model.Declined(f"models {verb}: not admitted — nothing changed")
+    # No served preview: neither badge changes selectors, routes or credentials.
+    # Keep the normal writer barrier, store locks and definition revalidation.
+    with providers_cmd.operator_write(runtime, preflight=None):
+        if line is None:
+            runtime.settings_store.admit_line(key, catalog=runtime.catalog)
+        else:
+            fresh = providers_cmd.operator_context(runtime)
+            providers_cmd.require_ledger(fresh, verb)
+            now = fresh.layer.lines.get(key)
+            if now is None or now.definition_digest != line.definition_digest:
+                raise OperatorCommandError(f"{verb}: configuration changed while awaiting confirmation — "
+                                           "nothing admitted; retry")
 
-        def grant_then_enable(document: dict[str, Any]) -> None:
-            # Settings lock (held by update) -> api-key leaf: the ledger grant
-            # is written before the settings key, so a crash between stays off.
-            operator_mod.update_ledger(fresh.env, fresh.schemas, lambda ledger: ledger["admissions"].__setitem__(
-                key, operator_mod.admission_record(fresh.layer, key, at=operator_mod.utc_stamp(), via="admit")))
-            document["admitted_lines"] = sorted(set(document.get("admitted_lines", [])) | {key})
+            def record_badge(document: dict[str, Any]) -> None:
+                # Settings lock -> api-key leaf. Both bits are required for a
+                # badge, so an interrupted first admission cannot invent one.
+                operator_mod.update_ledger(fresh.env, fresh.schemas, lambda ledger: ledger["admissions"].__setitem__(
+                    key, operator_mod.admission_record(fresh.layer, key, at=operator_mod.utc_stamp(), via="admit")))
+                document["admitted_lines"] = sorted(set(document.get("admitted_lines", [])) | {key})
 
-        runtime.settings_store.update(grant_then_enable, catalog=_catalog_view(runtime))
-    report(output_stream, f"admitted {key}. Usable as a Direct lead and as a profile lead.")
+            runtime.settings_store.update(record_badge, catalog=_catalog_view(runtime))
+    report(output_stream, f"admitted {key}. Optional badge recorded; route approval and qualification unchanged.")
     return 0
 
 
-REVOKE_QUESTION = "Revoke {key}? It stops being offered; running sessions keep it until relaunch. [y/N] "
+REVOKE_QUESTION = ("Revoke the optional admission badge for {key}? The line remains usable on a configured route; "
+                   "qualification evidence is unchanged. [y/N] ")
 
 
 def _confirm_revoke(key: str, *, input_stream: TextIO, interactive: bool, yes: bool) -> None:
@@ -563,28 +520,32 @@ def _models_revoke(runtime: runtime_mod.Runtime, key: str, *, input_stream: Text
                    interactive: bool, yes: bool) -> int:
     if key in runtime.catalog.lines:
         _confirm_revoke(key, input_stream=input_stream, interactive=interactive, yes=yes)
-        preflight = providers_cmd.served_preflight(runtime, f"models revoke {key}", revoke=(key,))
-        with providers_cmd.operator_write(runtime, preflight=preflight):
+        with providers_cmd.operator_write(runtime, preflight=None):
             runtime.settings_store.revoke_line(key, catalog=runtime.catalog)
-        report(output_stream, f"revoked {key}. Running sessions keep their fence until relaunch.")
-        return 0
-    ctx = providers_cmd.operator_context(runtime)
-    providers_cmd.require_ledger(ctx, f"revoke {key}")
-    granted = ctx.ledger is not None and key in ctx.ledger.admissions
-    if not granted and key not in providers_cmd.admitted_keys(runtime):
-        return fail(f"revoke {key}: {key} is not admitted")
-    _confirm_revoke(key, input_stream=input_stream, interactive=interactive, yes=yes)
-    preflight = providers_cmd.served_preflight(
-        runtime, f"models revoke {key}", revoke=(key,),
-        ledger_edit=lambda doc: doc["admissions"].pop(key, None),
-    )
-    with providers_cmd.operator_write(runtime, preflight=preflight):
-        fresh = providers_cmd.operator_context(runtime)
-        if fresh.ledger is not None and key in fresh.ledger.admissions:
-            # The ledger grant goes first: a crash leaves the line off.
-            operator_mod.update_ledger(fresh.env, fresh.schemas, lambda doc: doc["admissions"].pop(key, None))
-        runtime.settings_store.revoke_line(key, catalog=_catalog_view(runtime))
-    report(output_stream, f"revoked {key}. Running sessions keep their fence until relaunch.")
+    else:
+        ctx = providers_cmd.operator_context(runtime)
+        providers_cmd.require_ledger(ctx, f"revoke {key}")
+        grant = ctx.ledger.admissions.get(key) if ctx.ledger is not None else None
+        if grant is None and key not in providers_cmd.admitted_keys(runtime):
+            return fail(f"revoke {key}: {key} is not admitted")
+        _confirm_revoke(key, input_stream=input_stream, interactive=interactive, yes=yes)
+        with providers_cmd.operator_write(runtime, preflight=None):
+            fresh = providers_cmd.operator_context(runtime)
+            providers_cmd.require_ledger(fresh, f"revoke {key}")
+            now = fresh.ledger.admissions.get(key) if fresh.ledger is not None else None
+            if now != grant:
+                raise OperatorCommandError(f"revoke {key}: admission changed while awaiting confirmation — "
+                                           "nothing revoked; retry")
+
+            def clear_badge(document: dict[str, Any]) -> None:
+                if now is not None:
+                    # Clear the digest-bound record first; neither write
+                    # changes the route or the qualification evidence.
+                    operator_mod.update_ledger(fresh.env, fresh.schemas, lambda doc: doc["admissions"].pop(key, None))
+                document["admitted_lines"] = sorted(set(document.get("admitted_lines", [])) - {key})
+
+            runtime.settings_store.update(clear_badge, catalog=_catalog_view(runtime))
+    report(output_stream, f"revoked {key}. Admission badge removed; use availability and qualification unchanged.")
     return 0
 
 
@@ -674,7 +635,8 @@ def _successor_rewrites(runtime: runtime_mod.Runtime, key: str,
     eff = runtime.current_effective()
     entry = lcat.lines[resolved]
     if not settings_mod.line_offered(resolved, entry, eff):
-        raise OperatorCommandError(f"models rm {key}: successor {resolved} is not offered (admit it first)")
+        reason = eff.unavailable_lines.get(resolved, f"provider {entry['provider']} is off in Settings")
+        raise OperatorCommandError(f"models rm {key}: successor {resolved} is not offered ({reason})")
     efforts = entry.get("efforts") or ()
     levels = set(efforts) if isinstance(efforts, list) else set(efforts)
     rewrites: list[tuple[str, str, str]] = []
@@ -776,14 +738,33 @@ def _models_show(runtime: runtime_mod.Runtime, key: str, resolved: bool, evidenc
         return fail(f"models show {key}: {status} (claude-multi providers validate)")
     entry = line.core_entry
     evidence = operator_mod.load_evidence(ctx.env, ctx.schemas)
-    smoke = "pass (current)" if operator_mod.smoke_current(evidence, key, line.definition_digest) else (
-        "stale or none")
+    found = evidence.lines.get(key) if evidence is not None else None
+    if found is None:
+        smoke = "not run"
+    elif found.get("digest") != line.definition_digest:
+        smoke = "stale definition"
+    else:
+        check = found.get("checks", {}).get("smoke")
+        smoke = f"{check['result']} ({check.get('reason', 'no reason')})" if check else "not run"
+    provider = lcat.providers[line.provider_id]
+    qualification = operator_mod.evidence_view(
+        evidence, key, digest=line.definition_digest, levels=entry["efforts"],
+        contracts=runtime.contract_identity().as_document(), pool_line=provider["transport"]["kind"] == "oauth-pool",
+    )
+    eff = runtime.current_effective()
+    use = ("usable" if settings_mod.line_offered(key, entry, eff) else
+           eff.unavailable_lines.get(key, f"provider {line.provider_id} is off in Settings"))
     selectors = ", ".join(selector for _level, selector, _c in catalog.line_selectors(dict(entry)))
     report(output_stream, f"{key}: {line.origin} line in {line.source} · {line.provider_id}/{entry['wire_model']}")
     report(output_stream, f"  status {providers_cmd.line_status(key, ctx, providers_cmd.admitted_keys(runtime))} · "
                           f"{_agent_status(line)} · class {entry['context']['ordinary_profile']} · validated floor "
                           f"{entry['context']['validated_tokens']}")
     report(output_stream, f"  selectors {selectors} · default effort {entry['default_effort']}")
+    report(output_stream, f"  use: {use} · family: {line.family}")
+    report(output_stream, f"  qualification: {qualification.state}"
+                          + (f" ({', '.join(qualification.gaps)})" if qualification.gaps else "")
+                          + (f" · exact-client: {qualification.exact_client}"
+                             if qualification.exact_client != "not-required" else ""))
     report(output_stream, f"  smoke evidence: {smoke} · definition {line.definition_digest[:16]}")
     return 0
 

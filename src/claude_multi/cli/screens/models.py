@@ -31,16 +31,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import claude_multi.cli.runtime as runtime_mod
 
-ROUTE_UNAPPROVED = "route unapproved"
-# An admission refused because the gateway does not serve the current setup.
-NOT_SERVED = screens_providers.NOT_SERVED
-
 
 class _ModelsScreen:
-    """The Models screen: lines, New admission, retired keys, candidates.
+    """The Models screen: lines, optional badges, retired keys, candidates.
 
-    The only admit surface: Enter on a New row admits it, Enter on an
-    admitted New row revokes it (default focus Cancel), both through
+    Enter on a New row records an optional badge; Enter on an admitted
+    New row revokes only that badge (default focus Cancel), both through
     ``SettingsStore``; Enter on any other line inspects it
     (``views.line_inspection``), V shows the same details everywhere.  Rows
     come from the merged view (``views.line_rows``). The candidates row
@@ -161,11 +157,15 @@ class _ModelsScreen:
                 if key in self.lifecycle:
                     row = list(cells[i])
                     row[2] += " op"
-                    row[-1] = self.lifecycle[key]
                     cells[i] = tuple(row)
         details = dict(model.details)
         for key, status in self.lifecycle.items():
-            details[key] = (f"op · {status} · qualification and agent eligibility are separate", *details.get(key, ()))
+            if status not in ("admitted", "New · not admitted"):
+                details[key] = (*details.get(key, ()), f"Attention: {status} — optional admission badge only.")
+        for row in self.line_rows:
+            if not row.offered:
+                details[row.key] = (*details.get(row.key, ()),
+                                    f"Use unavailable — Esc → G (Providers) → {row.provider} shows the remedy.")
         details["__candidates__"] = ("Advisory only — Enter inspects; nothing admitted.",)
         return dataclasses.replace(model, details=details, rows=(*main, ("candidates", label, "", "", "", "inspect")),
                                    keys=(*model.keys, "__candidates__"), new_rows=tuple(new))
@@ -199,9 +199,7 @@ class _ModelsScreen:
         if key is None or key == "__candidates__":
             return "none"
         if key in self.lifecycle:
-            if self.lifecycle[key] == ROUTE_UNAPPROVED:
-                return "unapproved"
-            return "admitted" if self.lifecycle[key] == "admitted" else "new"
+            return "admitted" if key in model.admitted else "new"
         if key in model.new_keys:
             return "new"
         if key in model.admitted:
@@ -210,8 +208,6 @@ class _ModelsScreen:
 
     def _keybar(self, model: views.ModelsModel) -> tui.KeyBar:
         kind = self._row_kind(self.selected_key, model)
-        if self.banner is None and kind == "unapproved":
-            return tui.KeyBar(cli_text.MODELS_KEYBAR_UNAPPROVED)
         if self.banner is None and kind == "new":
             return tui.KeyBar(cli_text.MODELS_KEYBAR_NEW)
         if self.banner is None and kind == "admitted":
@@ -243,8 +239,7 @@ class _ModelsScreen:
         retired = max(2, len(model.retired.split("\n")))
         chrome = 3 + len(self._banner_lines(width)) + 1 + 1 + retired + 1
         reserve = self._detail_reserve(model) - 1 + 1  # extra detail lines + the message row
-        bars = [cli_text.MODELS_KEYBAR, cli_text.MODELS_KEYBAR_NEW, cli_text.MODELS_KEYBAR_ADMITTED,
-                cli_text.MODELS_KEYBAR_UNAPPROVED]
+        bars = [cli_text.MODELS_KEYBAR, cli_text.MODELS_KEYBAR_NEW, cli_text.MODELS_KEYBAR_ADMITTED]
         bar_rows = max(tui.KeyBar(bar).rows(width) for bar in bars)
         floor = views.ScreenFloor.compute(
             chrome=chrome,
@@ -314,7 +309,7 @@ class _ModelsScreen:
             row += 1
         key = self.selected_key
         for line in model.details.get(key, ()) if key is not None else ():
-            tui.safe_add(win, row, 2, views.clip(line, width - 3), palette.attr("normal"))
+            tui.safe_add(win, row, 2, views.fit_text((line,), width - 3), palette.attr("normal"))
             row += 1
         if self.message:
             tui.safe_add(win, message_row, 2, views.clip(self.message, width - 3),
@@ -360,31 +355,32 @@ class _ModelsScreen:
         if key in model.guarded:
             action = screens_common.OnboardingActions(self.runtime, win, self.palette)
             verb = "revoke" if kind == "admitted" else "admit"
-            if action.confirm(f"{verb.title()} {key}? Admission and qualification are separate."):
-                if verb == "admit":
-                    self._admit_operator(win, key)
-                else:
-                    action.invoke(["models", verb, key])
-                self._load()
-                self.index = self.keys.index(key) if key in self.keys else self._first_index()
+            if verb == "admit":
+                self._admit_operator(win, key)
+            else:
+                action.invoke(["models", verb, key])
+            self._load()
+            self.index = self.keys.index(key) if key in self.keys else self._first_index()
             return
         wrap = max(20, min(60, win.getmaxyx()[1] - 8))
         if kind == "new":
             title = f"Admit {key}?"
             body = (
-                f"{row.display} becomes offered in pickers and session fences at the next "
-                "launch or resume. Stored in Settings (admitted_lines)."
+                f"Record an optional local admission badge for {row.display}. "
+                "Use availability is unchanged; no diagnostic request is sent. "
+                "Stored in Settings (admitted_lines)."
             )
             buttons = (("Admit", True), ("Cancel", False))
         else:
             title = f"Revoke {key}?"
             body = (
-                f"{row.display} stops being offered in pickers and session fences at the next "
-                "launch or resume. Stored in Settings (admitted_lines)."
+                f"Remove only the optional admission badge for {row.display}. "
+                "The line remains usable where its provider/route allows; qualification "
+                "evidence is unchanged. Stored in Settings (admitted_lines)."
             )
             buttons = (("Cancel", False), ("Revoke", True))
-        # A revoke (destructive) opens on Cancel; an admit on Admit.
-        confirmed = tui.Modal(title, textwrap.wrap(body, wrap), buttons=buttons, default=kind == "new").run(
+        # Both optional metadata actions default to Cancel.
+        confirmed = tui.Modal(title, textwrap.wrap(body, wrap), buttons=buttons, default=False).run(
             win, self.palette, background=self._draw
         )
         if not confirmed:
@@ -401,36 +397,12 @@ class _ModelsScreen:
         self._load()
         self.index = self.keys.index(key) if key in self.keys else self._first_index()
         verb = "admitted" if kind == "new" else "revoked"
-        self._say(f"{verb} {key} — {cli_text._APPLIES_NEXT}")
+        self._say(f"{verb} {key} — badge only; use and qualification unchanged")
 
     def _admit_operator(self, win: Any, key: str) -> None:
-        """Admit a model you added (the shared flow: its own consent and
-        test request, Apply and retry when the gateway does not serve it)."""
+        """Record a badge through the shared local-only admission flow."""
 
-        _code, applied = screens_providers.ConnectActions(self.runtime, win, self.palette,
-                                                          background=self._draw).admit(key)
-        if applied is not None:
-            self._say(applied.text, applied.role)
-
-    def _approve(self, win: Any, key: str) -> None:
-        """Enter on a model whose provider's route is not approved."""
-
-        entry = self.lcat.lines.get(key) or {}
-        pid = str(entry.get("provider", ""))
-        origin = ""
-        try:
-            provider = self.runtime.operator_snapshot().layer.providers.get(pid)
-            origin = provider.origin if provider is not None else ""
-        except (cli_errors.ClaudeMultiError, OSError, ValueError):
-            pass
-        body = screens_common.modal_lines(cli_text.MODELS_APPROVE_BODY.format(key=key, pid=pid, origin=origin), win)
-        if not tui.Modal(cli_text.MODELS_APPROVE_TITLE, body, buttons=cli_text.MODELS_APPROVE_BUTTONS).run(
-                win, self.palette, background=self._draw):
-            return
-        outcome = screens_providers.ConnectActions(self.runtime, win, self.palette, background=self._draw).approve(pid)
-        self._load()
-        self.index = self.keys.index(key) if key in self.keys else self._first_index()
-        self._say(outcome.text, outcome.role)
+        screens_providers.ConnectActions(self.runtime, win, self.palette, background=self._draw).admit(key)
 
     def _remove(self, win: Any) -> None:
         """X: remove a model you added; where profiles use it, choose its
@@ -613,8 +585,6 @@ class _ModelsScreen:
                 model = self.model(width)
                 if self.selected_key == "__candidates__":
                     self._candidates(win)
-                elif self.lifecycle.get(self.selected_key or "") == ROUTE_UNAPPROVED:
-                    self._approve(win, str(self.selected_key))
                 elif self.banner is None and self._row_kind(self.selected_key, model) in ("new", "admitted"):
                     self._toggle_admission(win)
                 elif self.selected_key is not None:

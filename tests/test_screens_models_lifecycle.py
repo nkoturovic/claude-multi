@@ -1,9 +1,7 @@
-"""The Models screen's actions on models you added: Enter on a model whose
-provider route is not approved offers Approve now, X removes a model (a
-shipped one is refused; where profiles use it a replacement is chosen
-first), an admission the running gateway cannot serve offers Apply and
-retry, and keys in either letter case. A fixture gateway on a temp home;
-no provider request is sent."""
+"""Models actions keep optional badges separate from provider/route usability.
+Enter admits/revokes without inference or apply, Q is an explicit diagnostic,
+and X removes a model with replacement where needed. Hermetic fixtures only.
+"""
 
 from __future__ import annotations
 
@@ -117,19 +115,25 @@ class ApproveTests(ModelsCase):
         code, _out, err = self.op(test_cli.SMALL_ADD)
         self.assertEqual(code, 0, err)
 
-    def test_enter_on_an_unapproved_route_offers_approve_now(self) -> None:
+    def test_enter_on_an_unapproved_route_still_changes_only_the_badge(self) -> None:
         screen = self.screen()
-        self.assertEqual(screen.lifecycle[KEY], models_screen.ROUTE_UNAPPROVED)
-        win = self.run_screen(screen, [ENTER, ENTER])
-        modal = next(frame for frame in win.frames if cli_text.MODELS_APPROVE_TITLE in frame)
-        self.assertIn("[ Approve now ]", modal)
-        self.assertIn("Enter approve route", win.frames[0])
+        self.assertEqual(screen._row_kind(KEY, screen.model(80)), "new")
+        with mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("inference")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("inference")), \
+                mock.patch.object(providers_screen.ConnectActions, "approve", side_effect=AssertionError("route approval")), \
+                mock.patch.object(screens_common.OnboardingActions, "show"):
+            win = self.run_screen(screen, [ENTER, "y"])
+        self.assertIn("Enter admit badge", win.frames[0])
+        self.assertIn("Providers", " ".join(screen.model(80).details[KEY]))
         self.assertNotIn("acme", getattr(self.ledger(), "routes", {}))
-        # Approve now, then the route approval itself.
-        win = self.run_screen(screen, [ENTER, RIGHT, ENTER, RIGHT, ENTER])
-        self.assertTrue(any(cli_text.APPROVE_TITLE.format(id="acme") in frame for frame in win.frames))
-        self.assertIn("acme", self.ledger().routes)
-        self.assertNotEqual(screen.lifecycle.get(KEY), models_screen.ROUTE_UNAPPROVED)
+        self.assertIn(KEY, self.ledger().admissions)
+        self.assertEqual(screen._row_kind(KEY, screen.model(80)), "admitted")
+        self.assertFalse(next(row.offered for row in screen.line_rows if row.key == KEY))
+        with mock.patch.object(screens_common.OnboardingActions, "show"):
+            self.run_screen(screen, [ENTER, "y"])
+        self.assertNotIn(KEY, self.ledger().admissions)
+        self.assertNotIn("acme", self.ledger().routes)
+        self.assertEqual(self.http_calls, [])
 
 
 class AdmitTests(ModelsCase):
@@ -151,25 +155,30 @@ class AdmitTests(ModelsCase):
 
         return KEY in provider_commands.admitted_keys(self.runtime)
 
-    def test_an_unserved_admission_offers_apply_and_retry(self) -> None:
-        applied: list[str] = []
-
-        def apply(_self, *, not_served=False):
-            # The admission saw the model not served: the apply must run.
-            applied.append(f"apply not_served={not_served}")
-            self.serve_current()
-            return providers_screen.Outcome("applied")
-
+    def test_an_unserved_admission_is_metadata_only_without_apply_or_retry(self) -> None:
         screen = self.screen()
-        # Cancel keeps the failure on screen and changes nothing.
-        win = self.run_screen(screen, [ENTER, ENTER])
-        self.assertTrue(any(cli_text.ADMIT_APPLY_TITLE in frame for frame in win.frames))
-        self.assertEqual(self.shown[-1][0], "Action result")
+        with mock.patch.object(providers_screen.ConnectActions, "apply", side_effect=AssertionError("apply")), \
+                mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("inference")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("inference")):
+            self.run_screen(screen, [ENTER])
+            self.assertTrue(self.admitted())
+            self.run_screen(screen, [ENTER])
         self.assertFalse(self.admitted())
-        with mock.patch.object(providers_screen.ConnectActions, "apply", apply):
-            self.run_screen(screen, [ENTER, RIGHT, ENTER])
-        self.assertEqual(applied, ["apply not_served=True"])
-        self.assertTrue(self.admitted())
+        self.assertEqual(self.http_calls, [])
+        self.assertEqual([title for title, _lines in self.shown], ["Action result", "Action result"])
+
+    def test_an_admission_failure_never_offers_apply_and_retry(self) -> None:
+        import claude_multi.cli.onboarding as onboarding
+
+        def refused(_runtime, _argv, *, confirm, output):
+            output.write("0/1 aliases served — claude-multi providers apply")
+            return 1
+
+        with mock.patch.object(onboarding, "invoke", side_effect=refused) as invoke, \
+                mock.patch.object(providers_screen.ConnectActions, "apply", side_effect=AssertionError("apply")):
+            self.run_screen(self.screen(), [ENTER])
+        self.assertEqual(invoke.call_count, 1)
+        self.assertFalse(self.admitted())
 
     def test_a_served_admission_needs_no_apply(self) -> None:
         self.serve_current()
@@ -177,6 +186,31 @@ class AdmitTests(ModelsCase):
                                side_effect=AssertionError("nothing to apply")):
             self.run_screen(self.screen(), [ENTER])
         self.assertTrue(self.admitted())
+
+
+class ContinueTests(ModelsCase):
+    def test_skip_admit_after_manual_declaration_names_ordinary_profile_selection(self) -> None:
+        from test_tui import DOWN
+        from claude_multi import profile
+
+        code, _out, err = self.op(test_cli.ACME_ADD, "y\n")
+        self.assertEqual(code, 0, err)
+        keys = [DOWN, ENTER, *"acme-small-1", ENTER, *KEY, ENTER, *"131072", ENTER,
+                ENTER, *"fixture docs, date", ENTER, *([ENTER] * 6), ENTER, ESC, ENTER]
+        win = FakeWindow(keys, height=30, width=90)
+        actions = providers_screen.ConnectActions(self.runtime, win, tui.MONO_PALETTE)
+        with mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("inference")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("inference")):
+            summary = actions.continue_to_models("acme")
+        self.assertIn("not admitted", summary)
+        self.assertIn("Profiles", summary)
+        self.assertIn("Optional diagnostics", summary)
+        self.assertNotIn(KEY, self.ledger().admissions)
+        self.assertIn(KEY, self.runtime.lineup_catalog().lines)
+        self.assertEqual(self.http_calls, [])
+        result = profile.evaluate(profile.ad_hoc_direct(KEY), self.runtime.lineup_catalog(),
+                                  effective=self.runtime.current_effective(), ad_hoc=True)
+        self.assertFalse(result.errors, result.errors)
 
 
 class LetterTests(ModelsCase):
@@ -190,6 +224,46 @@ class LetterTests(ModelsCase):
         bar = " ".join(win.frames[0].splitlines()[-2:])
         for key, label in cli_text.MODELS_KEYBAR_NEW[:-1]:
             self.assertIn(f"{key} {label}", bar)
+
+    def test_e_persists_a_nonaggregator_family_and_empty_role_recommendations(self) -> None:
+        self.assertNotIn("family", self.declaration()["lines"][KEY])
+        code, _out, err = self.op(["models", "admit", KEY], "y\n")
+        self.assertEqual(code, 0, err)
+        screen = self.screen()
+        keys = ["E", *([ENTER] * 5), *(["\x7f"] * len("acme")), *"Mistral Labs", ENTER,
+                ENTER, ENTER, ENTER, RIGHT, ENTER, ENTER, ENTER, "y"]
+        with mock.patch.object(screens_common.OnboardingActions, "show"), \
+                mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("inference")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("inference")):
+            self.run_screen(screen, keys, height=30, width=90)
+        saved = self.declaration()["lines"][KEY]
+        self.assertEqual(saved["family"], "Mistral Labs")
+        self.assertEqual(saved["capabilities"], ["lead", "agents"])
+        self.assertEqual(saved["roles"], [])
+        details = " ".join(screen.model(90).details[KEY])
+        self.assertIn("Attention: changed since admission", details)
+        self.assertEqual(screen._row_kind(KEY, screen.model(90)), "new")
+        self.assertTrue(next(row.offered for row in screen.line_rows if row.key == KEY))
+        self.assertEqual(self.http_calls, [])
+
+    def test_q_defaults_to_no_and_deferring_sends_no_inference(self) -> None:
+        before = self.state_bytes()
+        with mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("inference")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("inference")), \
+                mock.patch.object(screens_common.OnboardingActions, "show"):
+            self.run_screen(self.screen(), ["Q", ESC])
+            win = self.run_screen(self.screen(), ["Q", RIGHT, ENTER, ENTER, ENTER, ENTER, "n"])
+        self.assertTrue(any("Confirm explicit action" in frame for frame in win.frames))
+        self.assertEqual(self.state_bytes(), before)
+        self.assertEqual(self.http_calls, [])
+
+    def test_narrow_screen_keeps_badge_and_diagnostic_actions_accessible(self) -> None:
+        screen = self.screen()
+        height, _cols = screen.min_size(60)
+        win = self.run_screen(screen, [], height=max(24, height), width=60)
+        self.assertNotIn("too small", win.frames[0])
+        self.assertIn("Enter admit badge", win.frames[0])
+        self.assertIn("Q diagnostics", win.frames[0])
 
     def test_both_letter_cases(self) -> None:
         for letter in ("v", "V"):

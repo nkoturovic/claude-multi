@@ -276,7 +276,7 @@ class ProvidersDispatchTests(_ProvidersCase):
         self.assertIn("Logical secret name", frames)
         for piece in (synthetic, "sk-", "Dummy0", "api03"):
             self.assertNotIn(piece, frames)
-        self.assertNotIn("Independence family", frames, "the form stayed on the key-name step")
+        self.assertNotIn("Model family label", frames, "the form stayed on the key-name step")
         self.assertIn(tui.FIELD_HIDDEN, frames)
         self.assertIn("looks like an API key", frames)
         self.assertEqual(self.shown, [])
@@ -286,7 +286,7 @@ class ProvidersDispatchTests(_ProvidersCase):
                                   width=100)
         frames = "\n".join(win.frames)
         self.assertIn("ACME_API_KEY_", frames)
-        self.assertIn("Independence family", frames)
+        self.assertIn("Model family label", frames)
 
     def test_an_invalid_secret_name_is_refused_by_name_only(self) -> None:
         from test_tui import END
@@ -468,9 +468,10 @@ class ZeroModelProviderTests(_ProvidersCase):
         screen = self.screen(pid)
         with mock.patch.object(screens_common.OnboardingActions, "model_form", autospec=True,
                                side_effect=by_hand), \
-                mock.patch.object(operator_mod, "smoke_current", return_value=True):
-            # K, the key, Save; then "Enter a model by hand"; then Admit.
-            win = self.run_screen(screen, ["K", *"fresh-dummy-key", ENTER, ENTER, DOWN, ENTER, ENTER])
+                mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("unexpected inference")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("unexpected inference")):
+            # K, the key, Save; then "Enter a model by hand"; move from Skip to Admit badge.
+            win = self.run_screen(screen, ["K", *"fresh-dummy-key", ENTER, ENTER, DOWN, ENTER, RIGHT, ENTER])
         self.assertTrue(any(cli_text.ADD_MODELS_TITLE.format(id=pid) in frame for frame in win.frames))
         self.assertTrue(any(cli_text.ADMIT_NOW_TITLE.format(key=key) in frame for frame in win.frames))
         self.assertEqual(declared, [pid])
@@ -479,6 +480,8 @@ class ZeroModelProviderTests(_ProvidersCase):
         from claude_multi.cli.commands import providers as provider_commands
 
         self.assertIn(key, provider_commands.admitted_keys(self.runtime))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.http_calls, [])
         # The provider alone now gives a usable starter.
         plan, _warnings = self.runtime.starter_plan("starter")
         self.assertIsNotNone(plan.document, plan.refusal)

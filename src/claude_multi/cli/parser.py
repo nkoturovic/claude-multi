@@ -515,7 +515,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover_modes.add_argument("--feed", dest="discover_feed", action="store_true",
                                 help="compare the public model feed with the pinned registry (advisory)")
     discover_parser.add_argument("--add", dest="discover_add", nargs="+", action="extend", default=[],
-                                 metavar="WIRE", help="declare listed WIRE(s) New · Off (declared, not admitted)")
+                                 metavar="WIRE", help="declare listed WIRE(s); admission and diagnostics are optional")
     discover_parser.add_argument("--as", dest="discover_as", default=None, metavar="KEY",
                                  help="line key for exactly one --add WIRE (custom-...)")
     discover_parser.add_argument("--context", dest="discover_context", type=int, default=None, metavar="N",
@@ -766,7 +766,7 @@ def _add_providers_commands(parser: argparse.ArgumentParser) -> None:
     add.add_argument("--header", default=None, help="header name for --auth header (x-api-key only)")
     add.add_argument("--secret-ref", default=None, metavar="env:NAME",
                      help="logical credential reference in the secret store (never the value)")
-    add.add_argument("--family", default=None, help="independence family (lower-case id)")
+    add.add_argument("--family", default=None, help="family label (1–64 printable single-line characters; unrecognized labels do not establish independence)")
     add.add_argument("--display", default=None, help="display name")
     add.add_argument("--contracts", default=None, metavar="CONTRACT,...", help="reviewed payload contracts it uses")
     add.add_argument("--listing-url", default=None, metavar="URL", help="model listing URL (with --listing-shape)")
@@ -836,7 +836,7 @@ def _add_models_commands(parser: argparse.ArgumentParser) -> None:
     models_list = sub.add_parser("list", help="the listing (same as claude-multi models)")
     models_list.add_argument("--json", action="store_true", dest="json_output",
                              help="one JSON document (stable fields)")
-    add = sub.add_parser("add", help="declare a model of yours (New · Off; allowed anywhere)")
+    add = sub.add_parser("add", help="declare a model of yours (New · not admitted; allowed anywhere)")
     add.add_argument("provider", metavar="PROVIDER", help="catalog or providers.d provider id")
     add.add_argument("wire", metavar="WIRE", help="upstream model id")
     add.add_argument("--as", dest="key", default=None, metavar="KEY", help="line key (custom-...; derived from WIRE)")
@@ -847,8 +847,8 @@ def _add_models_commands(parser: argparse.ArgumentParser) -> None:
                      help="declared effort (repeatable; with contracts a map, else a list)")
     add.add_argument("--default-effort", default=None, metavar="LEVEL", help="default effort (a declared one)")
     add.add_argument("--display", default=None, help="display name")
-    for verb, text in (("admit", "admit a New · Off line (checklist, one consented smoke; terminal, outside sessions)"),
-                       ("revoke", "revoke a line's admission (running sessions keep their fence until relaunch)"),
+    for verb, text in (("admit", "record an optional local admission badge (zero inference; terminal, outside sessions)"),
+                       ("revoke", "remove only the admission badge (use and qualification unchanged)"),
                        ("edit", "edit a model of yours in $VISUAL/$EDITOR (shows the admission consequences)")):
         item = sub.add_parser(verb, help=text)
         item.add_argument("key", metavar="KEY", help="line key")
@@ -866,8 +866,8 @@ def _add_models_commands(parser: argparse.ArgumentParser) -> None:
     show.add_argument("--evidence", action="store_true", help="print the tool-owned evidence as JSON")
     qualify = sub.add_parser(
         "qualify",
-        help="qualify a model of yours: consented, bounded checks through the gateway (evidence only)",
-        description="Run the consented qualification battery on a model of yours (its own aliases) through the "
+        help="optional diagnostics for a model of yours: consented, bounded checks (evidence only)",
+        description="Run the optional, consented qualification battery on a model of yours (its own aliases) through the "
         "loopback gateway. Every request is listed before one y/N; no retries; 120 s and 256 KiB per "
         "request (context 300 s). Evidence only: it never admits a line or edits its declaration. No flag "
         "means --smoke. Your models only (shipped models carry reviewed evidence).",

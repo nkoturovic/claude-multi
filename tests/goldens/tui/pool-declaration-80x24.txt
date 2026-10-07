@@ -2,10 +2,10 @@
   declare model
   ─────────────────────────────────────────────────────────────────────────────
 
-  Step 10/11 — Requested capabilities
+  Step 10/11 — Recommended uses (bindings may override)
 
-    lead only
-  > lead + agents (qualification required)
+    lead recommended
+  > lead + agents recommended
 
 
 

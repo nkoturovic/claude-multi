@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
 import io
 import json
 import shutil
@@ -226,6 +227,39 @@ class NamedBindingsTests(ProfilesCase):
         self.assertIn(("B", "bindings"), cli_text.PROFILES_KEYBAR_YOURS)
         self.assertIn(("B", "bindings"), screens_profiles.keybar(None, fallback_only=False))
         self.assertIn("B edits named bindings", cli_text.PROFILES_HELP)
+
+
+class PermissiveEditorTests(ProfilesCase):
+    def test_enter_picker_binds_new_line_despite_role_recommendations(self) -> None:
+        lcat = self.runtime.lineup_catalog()
+        key = next(key for key, entry in lcat.lines.items()
+                   if entry.get("status") == "active" and isinstance(entry.get("lead"), dict))
+        lines = copy.deepcopy(lcat.lines)
+        lines[key].update(status="new", capabilities=[], roles=[])
+        lcat = dataclasses.replace(lcat, lines=lines)
+        eff = self.runtime.current_effective()
+        document = copy.deepcopy(self.runtime.profiles.load(catalog.DEFAULT_SEED))
+        document["name"] = "permissive-editor"
+        document.pop("seed", None)
+        for slot, focus in ((catalog.LEAD_ROLE, "lead"), ("cm-implementer-strong", "cm-implementer-strong")):
+            with self.subTest(slot=slot):
+                editor_state = tui.ProfileEditorState(document, cat=lcat, bindings={}, effective=eff,
+                                                      origin=None, is_seed=False)
+                editor = tui.ProfileEditorScreen(editor_state, palette=tui.MONO_PALETTE)
+                editor.focus = focus
+                rows = views.line_rows(lcat, eff, custom_ids=frozenset())
+                picker = views.picker_rows(rows, slot=slot, bindings={}, lcat=lcat, eff=eff, current=None)
+                target = next(item for item in picker.items if item.kind == "line" and item.key == key)
+                self.assertTrue(target.selectable)
+                steps = sum(item.selectable for item in picker.items[:picker.items.index(target)])
+                with mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("no automatic smoke")), \
+                        mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("no automatic diagnostics")):
+                    self.run_screen(editor, [ENTER, HOME, *([DOWN] * steps), ENTER, CTRL_S, ESC], height=40, width=100)
+                bound = editor_state.document["lead"] if slot == catalog.LEAD_ROLE else editor_state.document["agents"][slot]
+                self.assertEqual(bound["model"], key)
+                self.assertFalse(editor_state.evaluation.errors)
+                self.assertTrue(any("admi" in warning.code for warning in editor_state.evaluation.lineup.warnings))
+                self.assertNotIn(key, eff.admitted_lines)
 
 
 class UseTests(ProfilesCase):

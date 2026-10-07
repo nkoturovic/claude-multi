@@ -698,6 +698,135 @@ class QualifyCommandCase(test_cli.OperatorCommandCase):
         return operator_mod.load_evidence(self.runtime.gateway_environ(), operator_mod.load_schemas(FIXTURE_ROOT))
 
 
+class AdmissionMetadataTests(test_cli.OperatorCommandCase):
+    """Badges never send inference, require credentials or change served state."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.key = "custom-acme-small"
+        self.document = operator_fixtures._fixture_files()["acme"]
+        state.ensure_private_dir(self.pdir)
+        self.declaration = self.pdir / "acme.json"
+        state.atomic_write(self.declaration, strict_json.pretty_file_bytes(self.document))
+        state.atomic_write(self.secret_file, b"")
+        self.runtime.settings_store.set_provider_enabled("acme", False, catalog=self.runtime.lineup_catalog())
+        self.served.clear()
+
+    def test_admit_and_revoke_only_change_badges_even_with_failed_evidence(self) -> None:
+        from claude_multi.cli.commands import models, providers
+
+        schemas = operator_mod.load_schemas(FIXTURE_ROOT)
+        snapshot = self.runtime.operator_snapshot()
+        record = operator_mod.merge_checks(
+            None, digest=snapshot.layer.lines[self.key].definition_digest, host="fixture",
+            versions={"launcher": "1.0.0", "client": "1.0.0", "gateway": "1.0.0"},
+            results=[(("smoke",), {"result": "failed", "at": AT, "reason": "no-acknowledgement", "http": 200})],
+        )
+        operator_mod.write_evidence(self.runtime.gateway_environ(), schemas, self.key, record)
+        evidence_path = operator_mod.evidence_path(self.runtime.gateway_environ())
+        evidence_before = evidence_path.read_bytes()
+        before = self.state_bytes()
+        with mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("admit inferred")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("admit qualified")), \
+                mock.patch.object(self.runtime, "render_gateway", side_effect=AssertionError("badge rendered")), \
+                mock.patch.object(models, "render_identity", side_effect=AssertionError("badge needs serving")), \
+                mock.patch.object(models, "_credential_present", side_effect=AssertionError("badge needs a key")), \
+                mock.patch.object(providers, "served_preflight", side_effect=AssertionError("badge preview rendered")):
+            code, out, err = self.op(["models", "admit", self.key], "y\n")
+            self.assertEqual(code, 0, out + err)
+            self.assertIn("optional local attestation", err)
+            snapshot = self.runtime.operator_snapshot()
+            self.assertTrue(operator_mod.operator_line_admitted(
+                self.key, layer=snapshot.layer, ledger=snapshot.ledger,
+                admitted_lines=self.runtime.settings_store.load()["admitted_lines"]))
+            self.assertEqual(snapshot.layer.route_status["acme"], "unapproved")
+            self.assertEqual(snapshot.ledger.routes, {})
+            self.assertFalse(self.runtime.settings_store.load()["providers"]["acme"]["enabled"])
+            changed = {Path(path).name for path in set(before) | set(self.state_bytes())
+                       if before.get(path) != self.state_bytes().get(path)}
+            self.assertEqual(changed, {"settings.json", "operator-ledger.json"})
+            code, out, err = self.op(["models", "revoke", self.key], "y\n")
+            self.assertEqual(code, 0, out + err)
+            self.assertIn("line remains usable", err)
+            self.assertIn("qualification evidence is unchanged", err)
+        self.assertNotIn(self.key, self.runtime.settings_store.load()["admitted_lines"])
+        self.assertNotIn(self.key, self.ledger().admissions)
+        self.assertEqual(evidence_path.read_bytes(), evidence_before)
+        code, out, err = self.op(["models", "show", self.key])
+        self.assertEqual(code, 0, err)
+        self.assertIn("qualification: failed", out)
+        self.assertIn("smoke evidence: failed (no-acknowledgement)", out)
+        self.assertIn("not admitted", out)
+        self.assertEqual((self.calls, self.http_calls), ([], []))
+
+    def test_catalog_badges_are_metadata_only_too(self) -> None:
+        from claude_multi.cli.commands import providers
+
+        key, entry = next(iter(self.runtime.catalog.lines.items()))
+        before = self.state_bytes()
+        with mock.patch.dict(entry, {"status": "new"}), \
+                mock.patch.object(self.runtime, "render_gateway", side_effect=AssertionError("badge rendered")), \
+                mock.patch.object(providers, "served_preflight", side_effect=AssertionError("badge preview rendered")):
+            code, out, err = self.op(["models", "admit", key], "y\n")
+            self.assertEqual(code, 0, out + err)
+            self.assertIn(key, self.runtime.settings_store.load()["admitted_lines"])
+            code, out, err = self.op(["models", "revoke", key, "--yes"])
+            self.assertEqual(code, 0, out + err)
+        changed = {Path(path).name for path in set(before) | set(self.state_bytes())
+                   if before.get(path) != self.state_bytes().get(path)}
+        self.assertEqual(changed, {"settings.json"})
+        self.assertFalse(self.ledger_file.exists())
+        self.assertEqual((self.calls, self.http_calls), ([], []))
+
+    def test_default_no_and_human_guard_keep_state_unchanged(self) -> None:
+        for text, tty, env, code in (("\n", True, {}, 3), ("y\n", False, {}, 1),
+                                     ("y\n", True, {"CLAUDECODE": "1"}, 1)):
+            with self.subTest(tty=tty, env=env, answer=text):
+                before = self.state_bytes()
+                actual, _out, _err = self.op(["models", "admit", self.key], text, tty=tty, env=env)
+                self.assertEqual(actual, code)
+                self.assertEqual(self.state_bytes(), before)
+                self.assertEqual((self.calls, self.http_calls), ([], []))
+
+    def test_definition_or_route_change_while_prompt_open_refuses_badge(self) -> None:
+        from claude_multi.cli import consent
+
+        for field in ("wire", "route"):
+            with self.subTest(field=field):
+                def confirm(_text, **_kw):
+                    document = json.loads(self.declaration.read_bytes())
+                    if field == "wire":
+                        document["lines"][self.key]["wire_model"] = "changed-fixture-model"
+                    else:
+                        document["provider"]["base_url"] = "https://changed.example/anthropic"
+                    state.atomic_write(self.declaration, strict_json.pretty_file_bytes(document))
+                    return True
+
+                with mock.patch.object(consent, "confirm", side_effect=confirm):
+                    code, _out, err = self.op(["models", "admit", self.key], "y\n")
+                self.assertEqual(code, 1, err)
+                self.assertIn("configuration changed while awaiting confirmation", err)
+                self.assertFalse(self.ledger_file.exists())
+                self.assertNotIn(self.key, self.runtime.settings_store.load().get("admitted_lines", ()))
+                self.assertEqual((self.calls, self.http_calls), ([], []))
+
+    def test_corrupt_ledger_and_invalid_definition_still_refuse(self) -> None:
+        state.atomic_write(self.ledger_file, b"not json")
+        before = self.state_bytes()
+        code, _out, _err = self.op(["models", "admit", self.key], "y\n")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.state_bytes(), before)
+        state.atomic_write(self.ledger_file, strict_json.pretty_file_bytes(operator_mod.ledger_document(None)))
+        document = copy.deepcopy(self.document)
+        document["lines"][self.key]["efforts"] = ["not-native"]
+        state.atomic_write(self.declaration, strict_json.pretty_file_bytes(document))
+        before = self.state_bytes()
+        code, _out, err = self.op(["models", "admit", self.key], "y\n")
+        self.assertEqual(code, 1, err)
+        self.assertEqual(self.state_bytes(), before)
+        self.assertEqual((self.calls, self.http_calls), ([], []))
+
+
 class CommitTests(QualifyCommandCase):
     def test_qualification_changes_only_evidence(self) -> None:
         before = self.state_bytes()

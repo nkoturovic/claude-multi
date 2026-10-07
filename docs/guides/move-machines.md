@@ -15,9 +15,11 @@ them on the new computer, deliberately.
 | the providers you declared | the gateway's state and local key |
 | re-approval requests: the route approvals, admissions and transport choices you held | your host preferences and the choices on this computer |
 
-Imported trust is never active: a route approval or an admission in the
-file is a request to approve or admit again on the new computer, with the
-command that does it.
+Imported trust is never active: a credential-route approval must be obtained
+locally on the new computer. Any carried admission request is only an optional
+badge reminder, not a prerequisite for importing or binding the model.
+Qualification evidence is never imported as trusted evidence, and import
+never sends a diagnostic request or implicitly approves a key's destination.
 
 A provider you added from a preset travels as its declaration, with the
 key name it uses (its own, such as `DASHSCOPE_API_KEY_STUDIO_2`, when the
@@ -57,9 +59,9 @@ claude-multi import <file>
 
 The preview checks every item against the new computer (its release,
 its stores and its providers) and writes nothing. It ends with a
-**reconnect checklist**: the API keys to set, the accounts to sign in,
-the routes to approve, the models to admit and qualify again, each with
-its command.
+**reconnect checklist**: the API keys to set, the accounts to sign in and
+the routes to approve, each with its command. Valid local lines do not wait
+for admission or qualification; any suggested diagnostics are optional.
 
 ## 4. Apply
 
@@ -75,8 +77,10 @@ with the reason.
 
 Work through the checklist: set keys (`claude-multi providers set-key
 <provider>`), sign in (`claude-multi providers sign-in anthropic`, or
-`openai`), select an API-key transport again, approve routes, admit and
-qualify your own models again. Then:
+`openai`), select an API-key transport again and approve credential routes.
+Admission is optional; qualification can be run separately with human consent
+to its request plan, default **No**. Neither is required for leads or agents.
+Then:
 
 ```bash
 claude-multi doctor
@@ -95,3 +99,17 @@ file privately into a folder sessions cannot read (mode 0600, under
 Moving stops nothing on the old computer: its gateway and sessions keep
 running there until you stop them or uninstall
 ([uninstall.md](../uninstall.md)).
+
+## Moving to an older release or rolling back
+
+The record and configuration formats have not been migrated for permissive
+bindings. That does not guarantee older behavior: an older binary may refuse
+broader family labels, unadmitted or unqualified bindings, legacy custom agents
+or other newly allowed profiles. Review those bindings before rollback; do not
+edit session records to bypass a refusal. Running sessions keep their recorded
+selectors, classes and launch fence until normal resume.
+
+`models revoke` now removes only the admission badge. It does not disable a
+model or erase evidence, and cannot be used to preserve an older release's
+per-model off behavior. Disable a provider or remove the binding/declaration
+if you want to stop using it.

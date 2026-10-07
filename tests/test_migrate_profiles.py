@@ -965,11 +965,12 @@ class WarningsCaptureTests(HomeCase):
 
 class EvaluateFailureTests(HomeCase):
     def test_every_evaluate_error_fails_the_target_and_apply_writes_nothing(self) -> None:
-        # opus admits only cm-reviewer; qwen-flash-next has no agents role at all.
+        # A lead-only native effort and a missing gateway-effort mapping
+        # are routing errors, not capability or role recommendations.
         self.rules = {"fx-team": rule("fx-convert", kind=mm.RULE_EXPLICIT,
                                       lead=("opus55", "ultracode"),
-                                      overrides={"cm-analyst": ("opus", "xhigh"),
-                                                 "cm-implementer": ("qwen-flash-next", "high")})}
+                                      overrides={"cm-analyst": ("opus", "ultracode"),
+                                                 "cm-implementer": ("sol", "medium")})}
         self.targets = {"fx-convert": (mm.CONVERT, "fx-team")}
         self.write(golden_documents()["fx-convert"])
         team = self.target(self.plan(), "fx-team")
@@ -981,6 +982,26 @@ class EvaluateFailureTests(HomeCase):
         self.assertEqual(code, 1)
         self.assertIn("    errors: " + "; ".join(evaluation.errors) + "\n", out)
         self.assertFalse((self.config_root / "profiles").exists())
+
+    def test_capability_and_role_recommendations_warn_without_blocking_apply(self) -> None:
+        self.rules = {"fx-team": rule("fx-convert", kind=mm.RULE_EXPLICIT,
+                                      lead=("opus55", "ultracode"),
+                                      overrides={"cm-analyst": ("opus", "xhigh"),
+                                                 "cm-implementer": ("qwen-flash-next", "high")})}
+        self.targets = {"fx-convert": (mm.CONVERT, "fx-team")}
+        self.write(golden_documents()["fx-convert"])
+        source_before = tree_snapshot(self.compositions)
+        team = self.target(self.plan(), "fx-team")
+        self.assertEqual(team.status, "write")
+        self.assertEqual(team.errors, ())
+        self.assertTrue({"capability-recommendation", "role-recommendation"}
+                        <= {warning.code for warning in team.warnings})
+        code, out = self.main("--apply")
+        self.assertEqual(code, 0, out)
+        self.assertIn("capability-recommendation", out)
+        self.assertIn("role-recommendation", out)
+        self.assertEqual(self.store().load("fx-team"), profile.parse(team.document))
+        self.assertEqual(tree_snapshot(self.compositions), source_before)
 
 
 class NotCarriedTests(unittest.TestCase):

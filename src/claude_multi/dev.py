@@ -182,8 +182,8 @@ def _entry_id(entry: dict[str, Any], what: str) -> str:
 
 
 _NEW_OFF_REFUSAL = (
-    'promoted lines start New · Off (status "new"); local admission is a '
-    "separate operator action (claude-multi models admit KEY), not a draft field"
+    'promoted lines start New · not admitted (status "new"); local admission is an optional '
+    "operator badge (claude-multi models admit KEY), not a draft field"
 )
 
 
@@ -192,7 +192,7 @@ def _new_line_entry(
 ) -> dict[str, Any]:
     """The post-image line for ``key``: always ``status: new``.
 
-    A promoted line starts New · Off; an explicit other status is refused
+    A promoted line starts New · not admitted; an explicit other status is refused
     (activation is a reviewed catalog edit). The key must be a fresh line
     key: never containing ``@``, never a retired key, never a live line.
     """
@@ -368,7 +368,7 @@ def _check_selector_shape(docs: dict[str, Any], key: str, entry: dict[str, Any])
 
 
 def _check_new_entry_policy(docs: dict[str, Any], draft: dict[str, Any]) -> None:
-    """New entries are New · Off: status new, catalog-33 selector shape,
+    """New entries are New · not admitted: status new, catalog-33 selector shape,
     never bound in a seed profile.
 
     ``docs`` are the candidate (post-image) raw docs. The catalog carries no
@@ -398,7 +398,7 @@ def _check_new_entry_policy(docs: dict[str, Any], draft: dict[str, Any]) -> None
             if key in bound_models:
                 raise DevError(
                     f"new model {key!r} must not be bound in seed profile {name!r}; "
-                    "it is New · Off"
+                    "it is New · not admitted"
                 )
         bound_providers = {models[m]["provider"] for m in bound_models if m in models}
         bound_providers |= set(seed.get("lead_providers", []))
@@ -408,7 +408,7 @@ def _check_new_entry_policy(docs: dict[str, Any], draft: dict[str, Any]) -> None
             if provider_id in bound_providers:
                 raise DevError(
                     f"new provider {provider_id!r} must not be bound in seed profile "
-                    f"{name!r}; it is New · Off"
+                    f"{name!r}; it is New · not admitted"
                 )
 
 
@@ -1143,7 +1143,7 @@ class DraftMigration:
 def v1_draft_entry_to_v2(
     key: str, entry: dict[str, Any], provider: dict[str, Any], role_ids: list[str]
 ) -> dict[str, Any]:
-    """A catalog-32 (lane-shaped) draft entry as a v2 New · Off line.
+    """A catalog-32 (lane-shaped) draft entry as a v2 New · not admitted line.
 
     Mirrors the fixture converter (spec Appendix B,
     ``tests/fixtures/convert_models_v1_to_v2.py``) with the migrate
@@ -1490,9 +1490,9 @@ Two tracks:
     mutually exclusive.
 
 Then:  check DRAFT → review DRAFT → promote DRAFT --repo PATH
-Developer promotion installs a New · Off catalog line (status "new"); operator
-admission enables that installed line locally (Models, or `claude-multi models
-admit KEY`). Selectors follow the catalog-33 shape: Anthropic =
+Developer promotion installs a New · not admitted catalog line (status "new"); operator
+admission is only an optional local badge (Models, or `claude-multi models
+admit KEY`), not permission to use it. Selectors follow the catalog-33 shape: Anthropic =
 canonical wire[1m], gateway-effort = <prefix><key>-<effort>[1m].
 `check` also reports every OAuth-pool line whose wire is absent from the
 pinned gateway registry (package data; a report, never a refusal).
@@ -1541,8 +1541,8 @@ writes trusted repository JSON only.
 
 PREFILL_REVIEW = ("Registry/listing values and operator qualification are review context, "
                   "not catalog verification.")
-PREFILL_PROMOTION = ("Promotion installs a New · Off catalog line; local admission is a separate "
-                     "operator action.")
+PREFILL_PROMOTION = ("Promotion installs a New · not admitted catalog line; local admission is an optional "
+                     "operator badge, not permission to use it.")
 _ROUTE_PREREQUISITE = ("prerequisite: this pool wire needs a reviewed passthrough-route change before "
                        "check can pass")
 _NOTES_MAX = 1024
@@ -1908,7 +1908,7 @@ def _scaffold_model_entry(
     explicit QUALIFY markers the author fills before check: generation,
     display, qualification evidence, routing_note; validated_tokens is
     capped at a conservative bound and any user-attested bound is stripped.
-    The line lands ``status: "new"`` (New · Off) with ``roles`` inherited
+    The line lands ``status: "new"`` (New · not admitted) with ``roles`` inherited
     unchanged — review them.
     """
 

@@ -917,7 +917,7 @@ def _check_account_pools(providers: dict[str, Any], errors: list[str]) -> None:
                           f"{pool.provider!r}")
 
 
-def _check_context(where: str, entry: dict[str, Any], errors: list[str]) -> None:
+def _check_context(where: str, entry: dict[str, Any], errors: list[str], *, recommendations: bool = True) -> None:
     context = entry["context"]
     client_tokens = context["client_tokens"]
     provider_tokens = context["provider_tokens"]
@@ -957,12 +957,12 @@ def _check_context(where: str, entry: dict[str, Any], errors: list[str]) -> None
             f"provider_tokens {provider_tokens}"
         )
     ordinary_profile = context["ordinary_profile"]
-    if "lead" in entry["capabilities"] and ordinary_profile is None:
+    if recommendations and "lead" in entry["capabilities"] and ordinary_profile is None:
         errors.append(
             f"{where}.context.ordinary_profile: lead-capable models must belong "
             "to an ordinary gateway profile"
         )
-    if "lead" not in entry["capabilities"] and ordinary_profile is not None:
+    if recommendations and "lead" not in entry["capabilities"] and ordinary_profile is not None:
         errors.append(
             f"{where}.context.ordinary_profile: agents-only models cannot be "
             "ordinary gateway leads"
@@ -1226,7 +1226,7 @@ def validate_line(
             f"{where}.wire_model: Anthropic line wire {entry['wire_model']} must be "
             "a passthrough route"
         )
-    _check_context(where, entry, errors)
+    _check_context(where, entry, errors, recommendations=not operator)
     if operator:
         shape_ok = _check_operator_effort_shape(
             where, entry, provider_id, provider, agent, origin, errors
@@ -1292,9 +1292,9 @@ def validate_line(
                 errors.append(
                     f"{where}.lead.env: {env_key!r} must be a positive integer"
                 )
-    if "lead" in entry["capabilities"] and lead is None:
+    if not operator and "lead" in entry["capabilities"] and lead is None:
         errors.append(f"{where}: lead capability requires a lead block")
-    if "lead" not in entry["capabilities"] and lead is not None:
+    if not operator and "lead" not in entry["capabilities"] and lead is not None:
         errors.append(f"{where}.lead: an agents-only line must have lead: null")
 
     line_roles = entry["roles"]
@@ -1307,7 +1307,7 @@ def validate_line(
                 )
             elif role_id not in roles_known:
                 errors.append(f"{where}.roles: unknown role {role_id!r}")
-    if ("agents" in entry["capabilities"]) != (line_roles != []):
+    if not operator and ("agents" in entry["capabilities"]) != (line_roles != []):
         errors.append(
             f"{where}.roles: the agents capability requires at least one role "
             "(and roles require the agents capability)"

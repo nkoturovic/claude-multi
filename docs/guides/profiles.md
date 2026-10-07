@@ -18,9 +18,10 @@ The agent ids are fixed: a function, then a grade.
 | designer | `cm-designer` | interface and documentation structure; reports first |
 
 `-light` is for work you can specify exactly and check; `-strong` is for
-work you cannot specify exactly or where a mistake is costly. A grade
-needs its plain grade bound. No role prompt names a model: the lineup
-tells the lead which model each agent runs. Implementers need a Git
+work you cannot specify exactly or where a mistake is costly. Binding a
+light or strong grade without its recommended plain companion warns but
+is allowed. No role prompt names a model: the lineup tells the lead which
+model each agent runs. Implementers need a Git
 repository: in a directory that is not one they are unavailable (`git
 init` enables them).
 
@@ -45,8 +46,11 @@ others mix providers. For any other single provider (DeepSeek, Kimi,
 Meta, Qwen, a preset or an endpoint of your own), the starter is the
 way: it takes the roles of the shipped `balanced` profile and fills each
 one with a model that is ready now, leaving unbound a role that no ready
-model can take. A model you added can lead once admitted; it takes agent
-roles once qualified ([models.md](models.md#add-a-model-of-your-own)).
+model can take. A valid model you added can lead or take agent roles on a
+usable route without admission or qualification
+([models.md](models.md#add-a-model-of-your-own)). Starter selection prefers
+local readiness, not provider-verified success; it can choose unqualified
+lines and shows their warnings. Manual choice remains available.
 With OpenAI on its API key, only the models reviewed for that key are
 ready ([providers/api-keys.md](../providers/api-keys.md#openai)).
 
@@ -118,6 +122,27 @@ where reviews route, `^S` saves (`^O` too; only a valid profile saves),
 (asking when there are unsaved edits). Checks read ✓ valid, ! warning
 (never blocks) and ✗ error (Enter jumps to its field).
 
+### Recommendations and technical limits
+
+An explicit binding overrides a model's capability and role recommendations
+with a warning. This applies to leads, every `cm-*` grade and named bindings,
+including legacy custom lines (no migration or selector rename is needed)
+and supported keyless LAN models. Admission badges and qualification are
+optional, not eligibility grants; absent, failed or stale evidence stays
+visible. Unrecognized family labels remain bindable.
+
+Technical errors still refuse: an unknown role or model, malformed declaration,
+disabled provider, unapproved credential route, absent required credential,
+unusable selected transport or missing selector/effort mapping. A lead needs
+usable lead/context fields. Agents never receive a model's lead-only environment.
+Read-only tools, role prompts, `--no-subagents` and writer worktree isolation
+remain enforced; unavailable isolation is not permission to write unisolated.
+
+For a client-effort line with one selector, you may choose a native-supported
+effort it does not declare, with an **effort unverified for this line** warning.
+The client's effort vocabulary is still the limit. Gateway-effort bindings
+need the exact declared selector/contract mapping; no effort is invented.
+
 ### Backups and conflicts
 
 - Removing one of your profiles, or reseeding a shipped profile you
@@ -164,14 +189,27 @@ guarantees about workflows (the card's `?` panel):
 - no cm-role contract; ≤16 concurrent / 1000 per run
 - a cm-* agentType keeps its model and effort, but isolation is per call: a workflow writer must pass isolation:'worktree' itself
 
+A workflow default uses the same permissive model rules, but a one-selector
+client-effort line can supply only its default effort: a separately chosen
+nondefault effort cannot be represented there. Missing forced-tool or
+exact-client evidence warns; it does not fix or waive that limit. If you
+configure an Explore replacement without binding `cm-explorer`, the profile
+warns that Explore remains disabled; it is never silently re-enabled.
+
 ## Warnings on the card
 
-A profile's card shows warnings, never errors, for: a review by the same
-model family as the writer, `-strong` agents concentrated on the lead's
-provider, a `-strong` grade not stronger than its plain grade, the
-explorer and every implementer on one provider's quota, and any slot on a
-route with strict tool schemas. The review routing (who reviews each
-writer grade and the lead) is derived from the model families.
+A profile's card warns about missing/stale admission, missing/failed/stale
+qualification, capability or role recommendations, missing companion grades,
+provider concentration, weak strong grades and strict tool schemas. It also
+warns when the actual shared client window or compaction trigger can exceed
+a model's provider bound. A small provider limit does not create a smaller
+per-agent window ([context windows](models.md#context-windows)).
+
+Review routing prefers **recognized different families**. For a recognized
+equal pair it reports **same-family**; when either family is unknown or
+unrecognized it reports **independence unknown** and uses the usual preferred
+bound reviewer. Merely choosing different labels cannot certify independence.
+Without a bound reviewer, review remains the lead-only path.
 
 ## Cost
 

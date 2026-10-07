@@ -488,10 +488,11 @@ class OnboardingActions:
         values = tui.OnboardingForm("edit model" if edit else "declare model", fields,
                                    palette=self.palette, help_text=(
             "models add PROVIDER WIRE --as custom-NAME --context N --source docs --source-ref 'URL, date'\n"
-            "Declare requested agents/roles before admission and qualification. Editing invalidates admission.\n"
-            "Aggregators need the model's family, not the provider's. unknown is never independent.\n"
-            "models admit KEY; models qualify KEY --agents --tool-choice forced|auto.\n"
-            "Below-200K declarations have a smaller agent window. No silent protocol fallback."
+            "Capabilities and roles are recommendations, not requirements for explicit bindings.\n"
+            "Family labels are preserved; unknown/unrecognized labels do not establish review independence.\n"
+            "Optional: models admit KEY; models qualify KEY --agents --tool-choice forced|auto.\n"
+            "Editing can stale admission/evidence. A smaller declared bound is not a per-agent window:\n"
+            "the client may still use its 200K class and overflow that bound. No silent protocol fallback."
         )).run(self.win)
         if values is None:
             return
@@ -524,15 +525,12 @@ class OnboardingActions:
                 drafted["context"].pop("source_ref")
                 if "output" in drafted:
                     drafted["output"].pop("source_ref", None)
-            if provider_id in operator.AGGREGATOR_PROVIDERS or "family" in line:
-                drafted["family"] = values["family"]
+            drafted["family"] = values["family"]
             agents = values["capabilities"] == "agents"
             drafted["capabilities"] = ["lead", "agents"] if agents else ["lead"]
             drafted["roles"] = ("all" if values["roles"] == "all" else
-                                [x.strip() for x in values["roles"].split(",") if x.strip()]) if agents else []
-            if agents and not drafted["roles"]:
-                raise ValueError("Choose requested agent roles (all or cm-* ids); no grant is implied")
-            if self.preview("Declaration preview — off until admitted; requested roles are not grants.\n" +
+                                [x.strip() for x in values["roles"].split(",") if x.strip()])
+            if self.preview("Declaration preview — admission and diagnostics are optional; route approval is separate.\n" +
                             operator.document_bytes({values["key"]: drafted}).decode()):
                 if edit:
                     onboarding.edit_line(self.runtime, key, drafted, confirm=self.confirm, output=output)
@@ -600,7 +598,8 @@ class OnboardingActions:
                                    footer=views.QUALIFY_FORM_FOOTER,
                                    help_text="models qualify KEY --agents --tool-choice forced|auto\n"
                                    "Pool agents also run the offline exact-client check (zero provider calls).\n"
-                                   "Unavailable proof means ineligible, not pass. The next consent lists every request.").run(self.win)
+                                   "Unavailable proof is a warning, never a pass. Diagnostics are optional;\n"
+                                   "the next default-No consent lists every request.").run(self.win)
         if values is None:
             return
         argv = ["models", "qualify", key, "--tool-choice", values["variant"], "--" + values["checks"]]

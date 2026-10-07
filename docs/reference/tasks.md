@@ -132,7 +132,7 @@ In full: [providers/api-keys.md](../providers/api-keys.md).
 | Task | TUI | CLI | In-session | Notes |
 | --- | --- | --- | --- | --- |
 | set or replace a provider's API key (a key other providers share is replaced for each of them, after a question naming them) | card → G → K: a provider with an API key; card → G → Enter: a provider whose key is missing; card → G → K on OpenAI: OpenAI with its API key in use; card → G → K on Anthropic: Anthropic's API key in use and not saved; card → G → K on a shared key: another provider uses the saved key | `claude-multi providers set-key <provider>`; `claude-multi providers set-key <provider> --yes` | not a `/cm` request | asks first: y/N, default No |
-| after a key for a provider with no models, add and admit one before the starter | card → G → K on a provider with no models → add models: no model lines | `claude-multi models add <provider> <wire> --context <n> --source docs\|operator\|registry`; `claude-multi models admit <line>` | not a `/cm` request | asks nothing |
+| after a key for a provider with no models, add one and optionally record an admission badge | card → G → K on a provider with no models → add models: no model lines | `claude-multi models add <provider> <wire> --context <n> --source docs\|operator\|registry`; `claude-multi models admit <line>` | not a `/cm` request | asks nothing |
 | remove a provider's saved API key | card → G → X: a shipped provider with a key set | `claude-multi providers remove-key <provider>` | not a `/cm` request | asks first: y/N, default No |
 | remove a key kept after its provider was removed | not in the launcher: a key without a provider has no row to select; removing the provider (X) offers its key at that moment | `claude-multi providers remove-key <provider> --name <key-name>` | not a `/cm` request | asks first: y/N, default No |
 | read a key from a private 0600 file | not in the launcher: a key file is a scripting input; the TUI takes the key in a masked field | `claude-multi providers set-key <provider> --secret-file <file>`; `claude-multi providers add --preset <preset> --secret-file <file>`; `claude-multi providers transport <provider> api-key --secret-file <file>` | not a `/cm` request | for scripts; asks nothing |
@@ -153,14 +153,14 @@ In full: [guides/models.md](../guides/models.md).
 | inspect one line: origin, selectors, efforts, context, admission | card → M → Enter: a catalog line; card → M → V: a line; profile editor → Enter on an agent → V: a model in the picker | `claude-multi models show <line>` | not a `/cm` request | asks nothing |
 | the resolved entry or its evidence as JSON | not in the launcher: a machine-readable report for scripts and issue reports; the screens show the same facts | `claude-multi models show <line> --resolved`; `claude-multi models show <line> --evidence` | not a `/cm` request | for scripts; asks nothing |
 | advisory candidates from the registry and the gateway | card → M → Enter on candidates: the candidates row | `claude-multi models --candidates`; `claude-multi models --candidates --all` | not a `/cm` request | asks nothing |
-| declare a model of yours (New · Off) | card → G → A → enter a model by hand: a provider row | `claude-multi models add <provider> <wire> --context <n> --source docs\|operator\|registry` | not a `/cm` request | asks nothing |
+| declare a model of yours (New · not admitted) | card → G → A → enter a model by hand: a provider row | `claude-multi models add <provider> <wire> --context <n> --source docs\|operator\|registry` | not a `/cm` request | asks nothing |
 | declare a candidate, its form prefilled | card → M → Enter on candidates → Declare…: an attributed candidate | `claude-multi discover <provider> --add <wire> [--as <new-id>]` | not a `/cm` request | asks nothing |
 | edit a model you declared | card → M → E: a model you declared | `claude-multi models edit <line>` | not a `/cm` request | asks nothing |
-| admit a New · Off line (checklist and one consented smoke) | card → M → Enter: a New line | `claude-multi models admit <line>` | not a `/cm` request | asks first: consent naming every request |
-| revoke a line's admission | card → M → Enter: an admitted line | `claude-multi models revoke <line>`; `claude-multi models revoke <line> --yes` | not a `/cm` request | asks first: y/N, default No; --yes off a terminal |
+| record an optional local admission badge (zero inference) | card → M → Enter: a New line | `claude-multi models admit <line>` | not a `/cm` request | asks first: y/N, default No |
+| remove only the admission badge (use and evidence unchanged) | card → M → Enter: an admitted line | `claude-multi models revoke <line>`; `claude-multi models revoke <line> --yes` | not a `/cm` request | asks first: y/N, default No; --yes off a terminal |
 | remove a line you added | card → M → X: a model you declared | `claude-multi models rm <line>` | not a `/cm` request | asks first: y/N, default No |
 | remove a line and rewrite what uses it to a successor | card → M → X → choose a replacement: a model a profile uses | `claude-multi models rm <line> --successor <line>` | not a `/cm` request | asks first: y/N, default No |
-| qualify a model of yours (consented, bounded checks) | card → M → Q: a model you declared | `claude-multi models qualify <line>`; `claude-multi models qualify <line> --smoke`; `claude-multi models qualify <line> --efforts`; `claude-multi models qualify <line> --tools`; `claude-multi models qualify <line> --stream`; `claude-multi models qualify <line> --context <n>`; `claude-multi models qualify <line> --agents` | not a `/cm` request | asks first: consent naming every request |
+| optional model diagnostics (consented, bounded checks) | card → M → Q: a model you declared | `claude-multi models qualify <line>`; `claude-multi models qualify <line> --smoke`; `claude-multi models qualify <line> --efforts`; `claude-multi models qualify <line> --tools`; `claude-multi models qualify <line> --stream`; `claude-multi models qualify <line> --context <n>`; `claude-multi models qualify <line> --agents` | not a `/cm` request | asks first: consent naming every request |
 
 ## Model listings
 
@@ -171,7 +171,7 @@ In full: [guides/models.md](../guides/models.md).
 | list the models a provider offers (one consented request) | card → G → A → list its models: a provider with a listing | `claude-multi discover <provider>` | not a `/cm` request | asks first: consent naming every request |
 | list every enabled provider's models | not in the launcher: advanced discovery: every enabled provider in one consented pass; A lists one provider at a time | `claude-multi discover [<provider>] --all` | not a `/cm` request | asks first: consent naming every request |
 | compare the public model feed with the pinned registry | not in the launcher: advanced discovery: a feed comparison for maintainers of the catalog | `claude-multi discover [<provider>] --feed` | not a `/cm` request | asks first: consent naming every request |
-| declare listed models New · Off | card → G → A → list → Space → Enter: a listing was read | `claude-multi discover <provider> --add <wire>… [--as <new-id>]` | not a `/cm` request | asks nothing |
+| declare listed models New · not admitted | card → G → A → list → Space → Enter: a listing was read | `claude-multi discover <provider> --add <wire>… [--as <new-id>]` | not a `/cm` request | asks nothing |
 | declare a context above the listed one, with a reason | not in the launcher: a context above the listing needs a written justification; the TUI form refuses raising a listed context | `claude-multi discover <provider> --add <wire> --context <n> --over-listed <text>` | not a `/cm` request | asks nothing |
 
 ## Profiles
@@ -308,7 +308,7 @@ In full: [guides/lineup.md](../guides/lineup.md).
 
 | Task | TUI | CLI | In-session | Notes |
 | --- | --- | --- | --- | --- |
-| ask another model family for a review | not in the launcher: it runs inside a managed session, where the lead asks for it | no command: it runs inside a managed session, where the lead asks for it | `/cm review [high-stakes] [<range>]` | asks nothing |
+| request a review, preferring a recognized different family | not in the launcher: it runs inside a managed session, where the lead asks for it | no command: it runs inside a managed session, where the lead asks for it | `/cm review [high-stakes] [<range>]` | asks nothing |
 
 ## The interface
 

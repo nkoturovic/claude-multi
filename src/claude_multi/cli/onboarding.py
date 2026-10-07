@@ -194,9 +194,7 @@ def details(runtime, key, *, output):
 
 
 def statuses(runtime):
+    """Optional admission badges; route usability is a separate fact."""
     ctx = providers.operator_context(runtime)
     admitted = providers.admitted_keys(runtime)
-    return {key: ("route unapproved" if ctx.layer.route_status.get(line.provider_id, "catalog") not in operator.ROUTE_USABLE
-                  else {"New · Off": "off", "changed since admission (re-admit)": "changed — re-admit"}.get(
-                      providers.line_status(key, ctx, admitted), providers.line_status(key, ctx, admitted)))
-            for key, line in ctx.layer.lines.items()}
+    return {key: providers.line_status(key, ctx, admitted) for key in ctx.layer.lines}

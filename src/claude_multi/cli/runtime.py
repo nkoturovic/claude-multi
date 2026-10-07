@@ -923,12 +923,14 @@ class Runtime:
 
     def agent_gate(self, snapshot: operator_mod.OperatorSnapshot | None = None,
                    docs: dict[str, Any] | None = None) -> profile_mod.AgentGate:
-        """The current-mode operator agent gate: facts for every operator
-        line that requests agents (nothing read otherwise)."""
+        """Current diagnostic facts for every valid operator line.
+
+        Capability and role declarations are recommendations: an explicit
+        binding may choose any routable line, with its evidence shown as-is.
+        """
 
         snapshot = snapshot if snapshot is not None else self.operator_snapshot()
-        wanting = [key for key, line in snapshot.layer.lines.items()
-                   if "agents" in line.core_entry["capabilities"] or line.core_entry["roles"]]
+        wanting = sorted(snapshot.layer.lines)
         if not wanting:
             return profile_mod.AgentGate(profile_mod.AGENT_MODE_CURRENT, {})
         docs = docs if docs is not None else operator_mod.merge_docs(
@@ -963,14 +965,9 @@ class Runtime:
     def operator_agent_findings(
         self, snapshot: operator_mod.OperatorSnapshot, live: frozenset[str],
     ) -> tuple[list[str], int]:
-        """Doctor's (Attention, I01
-        eligible count) for operator agents.
-
-        A live session keeps an operator agent it recorded (record mode:
-        never revoked by mutable evidence); stale evidence under it is
-        Attention with the re-qualify command. The count is the operator
-        lines requesting agents whose current gate passes for a requested
-        role at the default effort."""
+        """Doctor's (Attention, usable agent count), independently of badges
+        and diagnostic results. Every valid declaration may be explicitly
+        bound; a failed or stale check stays visible, even while unused."""
 
         try:
             gate = self.agent_gate(snapshot)
@@ -980,14 +977,23 @@ class Runtime:
             return [], 0
         agent_efforts = tuple(self.catalog.docs["native-contract"]["agent_efforts"]["values"])
         eligible = 0
+        attention: set[str] = set()
+        try:
+            eff = self.settings_effective()
+            providers = self.effective_transport_docs()["providers"]["providers"]
+        except cli_errors.CLIError:
+            eff, providers = None, {}
         for key, facts in sorted(gate.facts.items()):
             entry = snapshot.layer.lines[key].core_entry
-            roles = entry.get("roles")
-            slot = roles[0] if isinstance(roles, list) and roles else None
-            if profile_mod.agent_eligibility(entry, key=key, slot=slot, effort=entry["default_effort"],
-                                             facts=facts, agent_efforts=agent_efforts).eligible:
-                eligible += 1
-        attention: set[str] = set()
+            verdict = profile_mod.agent_eligibility(entry, key=key, slot=None, effort=entry["default_effort"],
+                                                    facts=facts, agent_efforts=agent_efforts)
+            if verdict.eligible and eff is not None and settings_mod.line_offered(key, entry, eff):
+                credentials = proxy_mod.selected_secret_problems(
+                    _SecretAdapter(_SecretModel(key), ()), {key: {"provider": entry["provider"]}},
+                    providers, environ=self.environ)
+                if not credentials:
+                    eligible += 1
+            attention.update(finding.message for finding in verdict.warnings)
         store = self.session_store
         for path in store.scan_uuid_records():
             if path.stem not in live:
@@ -1007,8 +1013,7 @@ class Runtime:
                     snapshot.layer.lines[key].core_entry, key=key, slot=None, effort=str(binding.get("effort")),
                     facts=facts, agent_efforts=agent_efforts, mode=profile_mod.AGENT_MODE_RECORD, recorded=True,
                 )
-                if verdict.attention:
-                    attention.add(verdict.attention)
+                attention.update(finding.message for finding in verdict.warnings)
         return sorted(attention), eligible
 
     def operator_key_references(self) -> dict[str, list[str]]:
@@ -1069,12 +1074,14 @@ class Runtime:
             self.catalog.docs, snapshot.layer, legacy=custom.load_registry(self.environ),
         )
 
-    def lineup_catalog(self) -> profile_mod.LineupCatalog:
-        """The merged (catalog + custom) lineup catalog every lineup evaluation uses,
-        with the current-mode operator agent gate."""
+    def lineup_catalog(self, *, snapshot: operator_mod.OperatorSnapshot | None = None,
+                       docs: dict[str, Any] | None = None) -> profile_mod.LineupCatalog:
+        """The merged catalog and current diagnostic facts. A preparation
+        supplies its snapshot so the remembered definitions match its compile."""
 
-        snapshot = self.operator_snapshot()
-        docs = operator_mod.merge_docs(self.catalog.docs, snapshot.layer, legacy=custom.load_registry(self.environ))
+        snapshot = snapshot if snapshot is not None else self.operator_snapshot()
+        docs = docs if docs is not None else operator_mod.merge_docs(
+            self.catalog.docs, snapshot.layer, legacy=custom.load_registry(self.environ))
         return profile_mod.LineupCatalog.from_docs(docs, agent_gate=self.agent_gate(snapshot, docs))
 
     def reload_catalog(self) -> None:
@@ -1174,7 +1181,7 @@ class Runtime:
             raise cli_errors.CLIError(
                 f"cannot read operator settings: {exc}; fix or remove {store.path}"
             ) from exc
-        return operator_effective(eff, snapshot)
+        return operator_effective(eff, snapshot, docs=docs)
 
     def window_ceiling(self) -> choices_mod.WindowCeiling:
         """The configured context window ceiling (``choices.json``); never raises."""
@@ -1578,7 +1585,10 @@ class Runtime:
             # for it (the first launch otherwise compiles the packaged port).
             self.provision_endpoint()
         store = self.session_store
-        lcat = self.lineup_catalog()
+        operator_snapshot = self.operator_snapshot()
+        docs = operator_mod.merge_docs(self.catalog.docs, operator_snapshot.layer,
+                                       legacy=custom.load_registry(self.environ))
+        lcat = self.lineup_catalog(snapshot=operator_snapshot, docs=docs)
         # One read of the window ceiling: the plan is compiled with it and
         # states it, and perform refuses when it changed before the commit.
         ceiling = self.window_ceiling()
@@ -1795,7 +1805,7 @@ class Runtime:
         restated = _restated_document(lineup, profile_name)
         compiled = self._evaluate(restated, profile_name=profile_name, effective=eff, lcat=lcat)
         result = self.compile_callback(
-            docs=self.ordinary_docs,
+            docs=docs,
             prompt_bodies=self.catalog.prompt_bodies,
             lineup=compiled,
             effective=eff,
@@ -1852,17 +1862,18 @@ class Runtime:
             new_record = sessions.make_v4_record(managed_id=mid, cwd=cwd, **common)
         else:
             new_record = sessions.next_v4_record(record, **common)
-        # Readiness never blocks a launch,
-        # except a slot on a known-unreachable LAN line (fast, network-
-        # scoped refusal); every other unready bound slot is a warning.
+        # Readiness is an observation, never route permission. A known
+        # unreachable LAN route is a warning too; credentials and actual
+        # route/transport usability have their own hard checks.
         if action == "fresh":
             notices.extend(f"! {line}" for line in self.selection_notices)
             self.selection_notices = []
         rows = self.lineup_readiness(compiled)
-        refusals = readiness_mod.lan_refusals(rows)
-        if refusals and not read_only:
-            raise cli_types.LaunchPlanError(tuple(refusals))
         notices.extend(f"! {line}" for line in readiness_mod.unready_texts(rows))
+        notices.extend(f"! {finding.message}" for finding in lineup.warnings
+                       if finding.code in profile_mod.MODEL_WARNING_CODES)
+        notices.extend(f"! {finding.message}" for finding in scope_mod.workflow_default_warnings(
+            lcat, eff, policy=context.policy))
         notices.extend(f"! {line}" for line in self.settings_skew(cwd, passthrough))
         prepared = cli_types.PreparedLaunch(
             result,
@@ -1885,37 +1896,43 @@ class Runtime:
         )
         # Remember the operator definitions this plan was
         # compiled from; perform revalidates them before anything commits.
-        keys = [compiled.lead.binding.key, *(agent.binding.key for agent in compiled.agents.values())]
-        self.__dict__.setdefault("_operator_prepared", {})[id(prepared)] = (
-            prepared, operator_launch_digests(self.operator_snapshot(), keys),
+        keys = prepared_line_keys(prepared, lcat)
+        self.__dict__.setdefault("_operator_prepared", {})[id(prepared.result)] = (
+            prepared.result, operator_launch_digests(operator_snapshot, keys),
+            launch_route_digests(operator_snapshot, docs, keys),
         )
         return prepared
 
     def revalidate_operator(self, prepared: cli_types.PreparedLaunch) -> None:
-        """Stale-Runtime refusal: before a prepared launch commits, the
-        operator lines it binds must still be offered (current admission
-        predicate) with the definition digest the plan was compiled from."""
+        """Before either launch commit, definitions and selected routes must
+        still match the prepared plan and be usable. Badge/evidence changes
+        alone never invalidate it. Workflow defaults can send requests too.
+        """
 
         lineup = prepared.lineup
         if lineup is None:
             return
-        keys = [lineup.lead.binding.key, *(agent.binding.key for agent in lineup.agents.values())]
-        stored = self.__dict__.get("_operator_prepared", {}).get(id(prepared))
-        planned = stored[1] if stored is not None and stored[0] is prepared else None
         snapshot = self.operator_snapshot()
+        docs = operator_mod.merge_docs(self.catalog.docs, snapshot.layer, legacy=custom.load_registry(self.environ))
+        lcat = profile_mod.LineupCatalog.from_docs(docs)
+        keys = prepared_line_keys(prepared, lcat)
+        # Card/Direct adapters may replace presentation fields of a plan;
+        # the immutable compile result is the identity of its routing proof.
+        stored = self.__dict__.get("_operator_prepared", {}).get(id(prepared.result))
+        stored = stored if stored is not None and stored[0] is prepared.result else None
+        planned = stored[1] if stored is not None else None
         current = operator_launch_digests(snapshot, keys)
-        try:
-            # The admission predicate is Settings-level; the window ceiling
-            # has its own check (:meth:`revalidate_ceiling`).
-            admitted = self.settings_effective().admitted_lines
-        except cli_errors.CLIError:
-            admitted = frozenset()
-        planned_keys = set(planned or {}) | set(current)
-        for key in sorted(planned_keys):
+        routes = launch_route_digests(snapshot, docs, keys)
+        eff = self.settings_effective()
+        for key in sorted(set(keys) | set(planned or {}) | set(current)):
             changed = planned is not None and planned.get(key) != current.get(key)
-            if changed or key not in admitted:
+            if stored is not None:
+                changed = changed or stored[2].get(key) != routes.get(key)
+            entry = lcat.lines.get(key)
+            usable = entry is not None and settings_mod.line_offered(key, entry, eff)
+            if changed or not usable:
                 raise launch.LaunchError(
-                    f"operator line {key} changed or lost its admission since this launch was "
+                    f"operator line {key} changed or its route/provider became unavailable since this launch was "
                     "prepared — nothing launched; run the command again"
                 )
 
@@ -2187,24 +2204,85 @@ def default_qualify_transport(
 
 
 def operator_effective(
-    eff: settings_mod.Effective, snapshot: operator_mod.OperatorSnapshot,
+    eff: settings_mod.Effective, snapshot: operator_mod.OperatorSnapshot, *, docs: dict[str, Any] | None = None,
 ) -> settings_mod.Effective:
-    """Current authority (launch, resume, pickers): an
-    admitted operator line stays admitted only while the ledger grant's
-    digest equals its current definition and its keyed route is approved.
-    Record-authority compiles use the record snapshot instead."""
+    """Separate optional digest-bound badges from current route usability.
+
+    Every valid operator line is checked, admitted or not. The route map
+    is in-memory only; record-authority compiles keep their launch facts.
+    """
 
     layer = snapshot.layer
     lapsed = {
         key for key in eff.admitted_lines
-        if key in layer.lines and not operator_mod.operator_line_offered(
-            key, layer=layer, ledger=snapshot.ledger, admitted_lines=eff.admitted_lines,
-            provider_enabled=True,
-        )
+        if key in layer.lines and not operator_mod.operator_line_admitted(
+            key, layer=layer, ledger=snapshot.ledger, admitted_lines=eff.admitted_lines)
     }
-    if not lapsed:
-        return eff
-    return dataclasses.replace(eff, admitted_lines=frozenset(eff.admitted_lines - lapsed))
+    unavailable = dict(eff.unavailable_lines)
+    for key, line in layer.lines.items():
+        if not operator_mod.operator_line_offered(
+                key, layer=layer, ledger=snapshot.ledger, provider_enabled=True):
+            status = layer.route_status.get(line.provider_id, "unapproved")
+            unavailable[key] = (f"provider {line.provider_id}: route {status}; route approval required — "
+                                f"claude-multi providers approve {line.provider_id}")
+    if docs is not None:
+        lines = (docs["models-v2"] if "models-v2" in docs else docs["models"])["models"]
+        for pid, selected in operator_mod.transport_selections(docs, snapshot.ledger).items():
+            for key, entry in lines.items():
+                if entry["provider"] != pid:
+                    continue
+                problem = selected.problem
+                if problem is None and selected.alternative is not None and selected.alternative.explicit_models:
+                    if catalog.key_route(entry) is None:
+                        problem = (f"line {key} is not served by the selected {pid} {selected.choice} transport — "
+                                   f"choose a reviewed line or claude-multi providers transport {pid} oauth-pool")
+                if problem is not None:
+                    unavailable[key] = problem
+    return dataclasses.replace(eff, admitted_lines=frozenset(eff.admitted_lines - lapsed),
+                               unavailable_lines=unavailable)
+
+
+def prepared_workflow_binding(prepared: cli_types.PreparedLaunch) -> dict[str, str] | None:
+    """The Settings binding this plan actually compiled, not today's choice."""
+
+    return ((prepared.record or {}).get("applied", {}).get("settings", {}).get("workflow_default_binding"))
+
+
+def prepared_line_keys(prepared: cli_types.PreparedLaunch, lcat: profile_mod.LineupCatalog) -> tuple[str, ...]:
+    """Every explicitly selected line capable of sending a request."""
+
+    if prepared.lineup is None:
+        return ()
+    keys = [prepared.lineup.lead.binding.key, *(a.binding.key for a in prepared.lineup.agents.values())]
+    binding = prepared_workflow_binding(prepared)
+    if binding is not None:
+        try:
+            key = lcat.resolve_key(binding["model"]).key or binding["model"]
+        except catalog.CatalogError:
+            key = binding["model"]
+        keys.append(key)
+    return tuple(dict.fromkeys(keys))
+
+
+def launch_route_digests(snapshot: operator_mod.OperatorSnapshot, docs: dict[str, Any],
+                         keys: Iterable[str]) -> dict[str, str]:
+    """Non-secret route identities, independent of attestations and evidence."""
+
+    selected = operator_mod.transport_selections(docs, snapshot.ledger)
+    lines = (docs["models-v2"] if "models-v2" in docs else docs["models"])["models"]
+    providers = docs["providers"]["providers"]
+    result = {}
+    for key in keys:
+        if key not in lines:
+            continue
+        pid = lines[key]["provider"]
+        route = selected.get(pid)
+        result[key] = strict_json.bundle_digest({
+            "provider": pid, "transport": providers[pid]["transport"],
+            "choice": route.choice if route is not None else operator_mod.TRANSPORT_POOL,
+            "route": route.alternative.route_digest if route is not None and route.alternative is not None else None,
+        })
+    return result
 
 
 def operator_launch_digests(

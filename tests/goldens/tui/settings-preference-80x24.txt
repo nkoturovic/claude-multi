@@ -16,7 +16,7 @@
   kept environment            none       default none                    next
   Providers & models
   providers enabled           8 of 8     G opens providers               next
-  New lines admitted          0          M opens models                  next
+  Optional admission badges   0          M opens models                   now
   Gateway
   off: managed sessions never offer Claude Code's SendFeedback tool; notify:
   the client's own default. Plain claude is never changed (preferences.json).

@@ -2,11 +2,14 @@
   implementer — choose model
   implementer (plain): Normal bounded implementation. Default implementer grad…
   ─────────────────────────────────────────────────────────────────────────────
-    anthropic   Fable 5          anthropic 1M    efforts max
-                Opus 5           anthropic 1M    efforts xhigh
-                Opus 5.5         anthropic 1M    efforts xhigh
+    anthropic   Fable 5          anthropic 1M    efforts low mediu… — V details
+                Opus 4.8         anthropic 1M    efforts low mediu… — V details
+                Opus 5           anthropic 1M    efforts low mediu… — V details
+                Opus 5.5         anthropic 1M    efforts low mediu… — V details
     kimi        Kimi K3          moonshot  1M    efforts max
-  › openai      GPT-5.6 Sol      openai    1M    efforts high xhigh
+    llm-local   Qwen3.8 Flash Next (local) local     320K  efforts… — V details
+    openai      GPT-5.5          openai    258K  efforts high  Att… — V details
+  ›             GPT-5.6 Sol      openai    1M    efforts high xhigh
     openrouter  Grok 4.6         x-ai      500K  efforts high xhigh
                 DeepSeek V4 Flash deepseek  1M    efforts high xhigh
                 Gemini 3 Flash   google    1M    efforts high xhigh
@@ -15,9 +18,6 @@
                 Opus 5.5         anthropic 1M    efforts high xhigh
     qwen        Qwen3.8 Max      alibaba   1M    efforts max
     deepseek · meta     configured · no models
-
-
-
 
 
   ← → effort: [high]

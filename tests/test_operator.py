@@ -256,6 +256,55 @@ class LoaderResolutionTests(unittest.TestCase):
         self.assertEqual(layer.lines["custom-claude-fixture"].family, "anthropic")
         self.assertEqual(layer.providers["acme"].entry["origin"], "operator")
 
+    def test_free_family_labels_preserve_explicit_values_on_every_provider(self) -> None:
+        cases = (("acme", "custom-acme-small"), ("kimi", "custom-kimi-next"),
+                 ("anthropic", "custom-claude-fixture"), ("openrouter", "custom-family"))
+        for family in ("mistral", "unknown", "custom", "A new family / modèle (β)", "A" * 64):
+            for pid, key in cases:
+                with self.subTest(family=family, provider=pid):
+                    files = _fixture_files()
+                    files["openrouter"] = {"version": 1, "lines": {"custom-family": _acme_line()}}
+                    files[pid]["lines"][key]["family"] = family
+                    layer = _layer(files)
+                    self.assertEqual(layer.problems, ())
+                    self.assertEqual(layer.lines[key].family, family)
+                    self.assertEqual(layer.lines[key].origin, "operator")
+                    self.assertFalse(catalog.is_legacy_custom_entry(layer.lines[key].core_entry))
+        files = {"openrouter": {"version": 1, "lines": {"custom-family": _acme_line()}}}
+        self.assertEqual(_layer(files).lines["custom-family"].family, "unknown")
+
+    def test_family_safety_bounds_and_secret_scan_apply_to_provider_and_line(self) -> None:
+        for field in ("provider", "line"):
+            for family in ("", "x" * 65, "a\nb", "a\rb", "a\tb", "x\x00", "x\x7f", "x\x85",
+                           "x ", "x‮", "x​", "sk-" + "x" * 50, "private-family-fixture"):
+                with self.subTest(field=field, family=repr(family)):
+                    doc = _fixture_files()["acme"]
+                    target = doc["provider"] if field == "provider" else doc["lines"]["custom-acme-small"]
+                    target["independence_family" if field == "provider" else "family"] = family
+                    layer = _layer({"acme": doc}, secret_values=frozenset({"private-family-fixture"}))
+                    self.assertNotIn("custom-acme-small", layer.lines)
+                    self.assertTrue(layer.problems)
+                    if family.startswith("sk-") or family == "private-family-fixture":
+                        self.assertNotIn(family, "\n".join(_texts(layer)))
+        doc = _fixture_files()["acme"]
+        doc["provider"]["independence_family"] = "Modèle local / v2"
+        self.assertEqual(_layer({"acme": doc}).lines["custom-acme-small"].family, "Modèle local / v2")
+
+    def test_operator_family_cannot_certify_its_own_recognition(self) -> None:
+        from claude_multi import profile
+
+        docs = _docs()
+        files = {"acme": _fixture_files()["acme"]}
+        files["acme"]["provider"]["independence_family"] = "Unreviewed maker"
+        layer = _layer(files, docs=docs)
+        merged = operator.merge_docs(docs, layer)
+        expected = operator.t1_families(docs)
+        self.assertEqual(merged[profile.OPERATOR_KNOWN_FAMILIES_KEY], sorted(expected))
+        cat = profile.LineupCatalog.from_docs(merged)
+        self.assertEqual(cat.known_families, expected)
+        self.assertNotIn("unreviewed maker", cat.known_families)
+        self.assertNotIn(profile.OPERATOR_KNOWN_FAMILIES_KEY, docs)
+
     def test_channels_come_from_the_pool_not_provider_ids(self) -> None:
         providers = _docs()["providers"]["providers"]
         self.assertEqual(operator.overlay_channel(providers["anthropic"]), "claude")
@@ -281,37 +330,26 @@ class LoaderResolutionTests(unittest.TestCase):
         self.assertFalse([k for k in layer.lines if k.startswith("custom-acme")])
         self.assertIn("custom-beta-one", layer.lines)
 
-    def test_agent_requests_are_staged_and_only_static_problems_refuse(self) -> None:
-        """Requested agents/roles load inert; a role without
-        the capability, an unknown role and agents on an unaudited route
-        (the LAN kind, E07) still refuse to load."""
-
+    def test_capabilities_and_roles_are_preserved_recommendations(self) -> None:
         files = {"acme": _fixture_files()["acme"], "lanbox": _fixture_files()["lanbox"]}
         for extra in ({"capabilities": ["lead", "agents"], "roles": ["cm-reviewer"]},
-                      {"capabilities": ["lead", "agents"], "roles": ["cm-explorer"]},
+                      {"capabilities": ["agents"], "roles": []},
+                      {"capabilities": ["lead"], "roles": ["cm-explorer"]},
+                      {"capabilities": ["lead", "agents"], "roles": []},
                       {"capabilities": ["lead", "agents"], "roles": "all"}):
             with self.subTest(extra=extra):
-                files["acme"]["lines"]["custom-acme-small"] = _acme_line(**extra)
+                for pid, key in (("acme", "custom-acme-small"), ("lanbox", "custom-lan-model")):
+                    files[pid]["lines"][key] = _acme_line(**extra)
                 layer = _layer(files)
-                self.assertIn("custom-acme-small", layer.lines)
-                entry = layer.lines["custom-acme-small"].core_entry
-                self.assertEqual(entry["capabilities"], extra["capabilities"])
-                self.assertEqual(entry["roles"], extra.get("roles", []))
-        for extra, text in (({"roles": ["cm-explorer"]}, 'roles need the "agents" capability'),
-                            ({"capabilities": ["lead", "agents"], "roles": ["cm-nobody"]},
-                             "unknown agent role(s) cm-nobody"),
-                            ({"capabilities": ["lead", "agents"]}, "requires at least one role")):
-            with self.subTest(extra=extra):
-                files["acme"]["lines"]["custom-acme-small"] = _acme_line(**extra)
-                layer = _layer(files)
-                self.assertNotIn("custom-acme-small", layer.lines)
-                self.assertTrue(any(text in t for t in _texts(layer)), _texts(layer))
-        files["acme"]["lines"]["custom-acme-small"] = _acme_line()
-        files["lanbox"]["lines"]["custom-lan-model"]["capabilities"] = ["lead", "agents"]
+                self.assertEqual(layer.problems, ())
+                for key in ("custom-acme-small", "custom-lan-model"):
+                    entry = layer.lines[key].core_entry
+                    self.assertEqual(entry["capabilities"], extra["capabilities"])
+                    self.assertEqual(entry["roles"], extra["roles"])
+        files["acme"]["lines"]["custom-acme-small"] = _acme_line(roles=["cm-nobody"])
         layer = _layer(files)
-        self.assertNotIn("custom-lan-model", layer.lines)
-        self.assertIn('providers.d/lanbox.json: lines.custom-lan-model.capabilities: "agents" needs a '
-                      "retention-audited route; openai-compatible-lan is lead-only until the compat audit", _texts(layer))
+        self.assertNotIn("custom-acme-small", layer.lines)
+        self.assertTrue(any("unknown agent role(s) cm-nobody" in t for t in _texts(layer)))
 
     def test_provenance_needs_a_source_ref(self) -> None:
         files = {"acme": _fixture_files()["acme"]}
@@ -349,7 +387,6 @@ class TrustVocabularyTests(unittest.TestCase):
             "authored lead": lambda f: f["acme"]["lines"]["custom-acme-small"].__setitem__("lead", {"effort": "high", "env": {"CLAUDE_CODE_X": "1"}}),
             "ultracode": lambda f: f["acme"]["lines"]["custom-acme-small"].update(efforts=["ultracode"], default_effort="ultracode"),
             "unused contract on line": lambda f: f["acme"]["lines"]["custom-acme-large"].__setitem__("efforts", {"high": "output-config-max"}),
-            "pool family change": lambda f: f["anthropic"]["lines"]["custom-claude-fixture"].__setitem__("family", "other"),
         }
         for name, mutate in cases.items():
             with self.subTest(case=name):
@@ -903,7 +940,7 @@ class ProvidersDirTests(unittest.TestCase):
         self.assertEqual((layer.providers, layer.lines, layer.problems), ({}, {}, ()))
         docs = _docs()
         merged = operator.merge_docs(docs, layer)
-        self.assertEqual(merged, docs)
+        self.assertEqual(merged, {**docs, "_operator_known_families": sorted(operator.t1_families(docs))})
 
     def test_paths_are_home_relative(self) -> None:
         environ = {"HOME": "/h", "XDG_CONFIG_HOME": "/x", "XDG_STATE_HOME": "/s"}
@@ -949,7 +986,7 @@ class LedgerEvidenceTests(unittest.TestCase):
 
 
 class AdmissionPredicateTests(unittest.TestCase):
-    def test_offered_needs_every_condition(self) -> None:
+    def test_offered_checks_routes_not_admission_badges(self) -> None:
         files = _fixture_files()
         first = _layer(files)
         grant = lambda key: {"digest": first.lines[key].definition_digest, "at": "2026-09-30T00:00:00Z", "via": "admit",
@@ -963,14 +1000,41 @@ class AdmissionPredicateTests(unittest.TestCase):
         self.assertTrue(offered("custom-acme-small"))
         self.assertTrue(offered("custom-kimi-next"))
         self.assertTrue(offered("custom-lan-model"))
-        self.assertFalse(offered("custom-acme-small", admitted=set()))
+        self.assertTrue(offered("custom-acme-small", admitted=set()))
         self.assertFalse(offered("custom-acme-small", enabled=False))
         self.assertFalse(offered("custom-acme-small", ledger=None))
-        self.assertFalse(offered("custom-acme-large"))  # no grant
+        self.assertTrue(offered("custom-kimi-next", ledger=None, admitted=set()))
+        self.assertTrue(offered("custom-lan-model", ledger=None, admitted=set()))
+        self.assertTrue(offered("custom-acme-large"))  # no badge
         self.assertFalse(offered("custom-beta-one"))  # route unapproved
+        self.assertFalse(offered("custom-missing"))
+        admitted = lambda key, **kw: operator.operator_line_admitted(
+            key, layer=kw.get("layer", layer), ledger=kw.get("ledger", ledger),
+            admitted_lines=kw.get("admitted", {key}))
+        self.assertTrue(admitted("custom-acme-small"))
+        self.assertFalse(admitted("custom-acme-small", admitted=set()))
+        self.assertFalse(admitted("custom-acme-small", ledger=None))
+        self.assertFalse(admitted("custom-acme-large"))
         edited = copy.deepcopy(files)
         edited["acme"]["lines"]["custom-acme-small"]["wire_model"] = "acme-small-2"
+        changed = _layer(edited, ledger=ledger)
+        self.assertTrue(offered("custom-acme-small", layer=changed))
+        self.assertFalse(admitted("custom-acme-small", layer=changed))
+        edited["acme"]["provider"]["base_url"] = "https://another.example/anthropic"
         self.assertFalse(offered("custom-acme-small", layer=_layer(edited, ledger=ledger)))
+
+    def test_agent_facts_use_the_badge_not_usability(self) -> None:
+        first = _layer()
+        key = "custom-acme-small"
+        ledger = _ledger(admissions={key: operator.admission_record(first, key, at="2026-09-30T00:00:00Z", via="admit")})
+        layer = _layer(ledger=ledger)  # unapproved keyed route, disabled provider
+        facts = operator.agent_fact_fields(key, layer=layer, ledger=ledger, evidence=None,
+                                          admitted_lines={key}, provider_enabled=False, contracts={},
+                                          docs=_docs(), trusted_docs=_docs())
+        self.assertTrue(facts["admitted"])
+        self.assertEqual(facts["route"], "unapproved")
+        self.assertEqual(facts["evidence"], operator.EVIDENCE_MISSING)
+        self.assertFalse(operator.operator_line_offered(key, layer=layer, ledger=ledger, provider_enabled=False))
 
 
 class DisplacedLinesTests(unittest.TestCase):
@@ -2452,8 +2516,10 @@ class MigrationApplyTests(OperatorHomeCase):
         snapshot = proxy.operator_snapshot(self.environ, _docs(), custom_mod.load_registry(self.environ))
         line = snapshot.layer.lines["custom-zeta-pro"]
         self.assertNotEqual(line.definition_digest, admitted_digest)
-        self.assertFalse(operator.operator_line_offered("custom-zeta-pro", layer=snapshot.layer, ledger=snapshot.ledger,
-                                                        admitted_lines=self.KEYS, provider_enabled=True))
+        self.assertFalse(operator.operator_line_admitted("custom-zeta-pro", layer=snapshot.layer, ledger=snapshot.ledger,
+                                                         admitted_lines=self.KEYS))
+        self.assertTrue(operator.operator_line_offered("custom-zeta-pro", layer=snapshot.layer, ledger=snapshot.ledger,
+                                                       admitted_lines=self.KEYS, provider_enabled=True))
         self.assertEqual(operator.read_marker(self.environ)["custom_sha256"],
                          strict_json.sha256_hex(self.registry.read_bytes()))
         # A hand-edited target is never overwritten by a later reconciliation.
@@ -2654,7 +2720,7 @@ class DoctorFindingsTests(unittest.TestCase):
         ok = self.findings(self.snapshot(files, ledger=_ledger(routes=routes, admissions={"custom-acme-small": grant})),
                            admitted={"custom-acme-small"}, served=frozenset())
         self.assertIn("custom-acme-small: 0/1 aliases served — claude-multi providers apply", ok.attention)
-        self.assertIn("operator: 1 providers · 2 lines (1 admitted, 1 New·Off, 0 agent-eligible)", ok.info)
+        self.assertIn("operator: 1 providers · 2 lines (1 admitted, 1 not admitted, 0 qualified, 0 usable for agents)", ok.info)
         self.assertFalse(any("candidates" in line for line in ok.info))
         files["acme"]["lines"]["custom-acme-small"]["wire_model"] = "acme-small-2"
         lapsed = self.findings(self.snapshot(files, ledger=_ledger(routes=routes, admissions={"custom-acme-small": grant})),
@@ -3130,12 +3196,16 @@ class OnboardingRefusalCatalogueTests(unittest.TestCase):
         self.assertEqual(self.problem(doc, "E06", pid=pid).text(),
                          f'providers.d/{pid}.json: lines.custom-duplicate: {pid}/{line["wire_model"]} is the catalog line "{key}" — admit or bind that line instead')
 
-    def test_E07_unaudited_agent_route(self):
+    def test_keyless_agent_declaration_has_no_separate_route_refusal(self):
         doc = _fixture_files()["lanbox"]
         key = next(iter(doc["lines"]))
         doc["lines"][key].update(capabilities=["lead", "agents"], roles=["cm-reviewer"])
-        self.assertEqual(self.problem(doc, "E07", pid="lanbox").text(),
-                         f'providers.d/lanbox.json: lines.{key}.capabilities: "agents" needs a retention-audited route; openai-compatible-lan is lead-only until the compat audit')
+        layer = _layer({"lanbox": doc})
+        self.assertEqual(layer.problems, ())
+        self.assertIn(key, layer.lines)
+        self.assertTrue(operator.operator_line_offered(key, layer=layer, provider_enabled=True))
+        doc["provider"]["auth"] = {"kind": "bearer", "secret_ref": "env:LAN_API_KEY"}
+        self.assertNotIn(key, _layer({"lanbox": doc}).lines)
 
     def test_E08_secret_value_never_echoed(self):
         doc = _fixture_files()["acme"]

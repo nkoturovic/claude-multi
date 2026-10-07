@@ -1772,25 +1772,30 @@ PROFILE_FORM_NATIVE_HELP = (
 )
 BINDING_PICKER_KEYBAR = (("← →", "effort"), ("Enter", "choose"), ("V", "details"), ("?", "help"), ("Esc", "back"))
 BINDING_PICKER_HELP = (
-    "↑/↓ move; ← → pick the effort of the highlighted model (efforts are exactly the "
-    "model's declared set; ultracode is the lead's). Enter binds the model.\n\n"
-    "◇ operator-declared model. Dimmed operator lines explain their first gate refusal. "
-    "V shows the full reason. Below-200K models have a smaller agent window. "
-    "Listed: catalog lines whose roles admit this slot and operator lines (◇). Providers switched off in G "
-    "(providers) are dimmed; New models appear once admitted in M (models); custom "
-    "models never appear (they are direct-only). A named row binds the slot to that "
-    "named binding, so editing the binding moves every slot that uses it."
+    "↑/↓ move; ← → pick effort; Enter binds the model. Single-selector client lines "
+    "offer supported native efforts (undeclared efforts warn); gateway efforts need "
+    "an existing selector mapping. ultracode is the lead's; a client-effort workflow "
+    "default can use only its declared default.\n\n"
+    "All valid lines appear, including New, legacy custom and operator models (◇). "
+    "Admission badges, qualification and role recommendations do not block a binding. "
+    "Providers switched off in G and unusable routes are dimmed with remedies. "
+    "V shows full details. The actual shared client window may exceed a provider's "
+    "bound; a smaller declaration does not create a per-agent window. "
+    "A named row binds the slot to that named binding, so editing the binding moves "
+    "every slot that uses it."
 )
 BINDING_PICKER_MIN_COLS = 50
 ROUTING_KEYBAR = (("?", "help"), ("Esc", "back"))
 ROUTING_LEGEND = (
-    "✓ cross-family   ≈ same-family (allowed, labelled)   "
+    "✓ recognized cross-family   ≈ recognized same-family   ? independence unknown   "
     "° preferred reviewer shares the author's family"
 )
 ROUTING_HELP = (
     "Who reviews whose change. A normal change goes to the plain reviewer; a "
-    "high-stakes change to the strong one. A reviewer of another family than the "
-    "author is preferred (✓); a same-family review is allowed and labelled (≈). "
+    "high-stakes change to the strong one. A reviewer of a recognized different family "
+    "is preferred (✓); recognized same-family review is allowed and labelled (≈). "
+    "Unknown or unrecognized family labels mean independence unknown (?), not proven "
+    "cross-family review. "
     "° marks a cell where the preferred reviewer was skipped because it shares the "
     "author's family. The table is derived from the families of the bound models "
     "only; it is read-only."
@@ -2520,7 +2525,7 @@ class BindingPicker:
             attr = palette.attr(item.role) | (curses.A_REVERSE if focused else 0)
             if focused:
                 safe_add(win, row, 2, "›", palette.attr("accent"))
-            safe_add(win, row, 4, _clip_at(item.text, width, 4), attr)
+            safe_add(win, row, 4, views.fit_text((item.text,), max(0, width - 5)), attr)
         safe_add(win, height - bar_rows - 1, 2, _clip_at(self._effort_line(), width, 2), palette.attr("accent"))
         bar.draw(win, height - 1, palette)
         win.refresh()

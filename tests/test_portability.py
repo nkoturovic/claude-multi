@@ -83,6 +83,8 @@ class PortabilityCase(cli_tests.OperatorCommandCase):
 
         self.declare_small()
         self.serve_current()
+        code, out, err = self.op(["models", "qualify", "custom-acme-small", "--smoke"], "y\n")
+        self.assertEqual(code, 0, out + err)
         code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
         self.assertEqual(code, 0, out + err)
 
@@ -116,7 +118,9 @@ class PortabilityCase(cli_tests.OperatorCommandCase):
         out = io.StringIO()
         argv = ["import", str(path)] + (["--apply"] if apply else [])
         with mock.patch.object(consent_mod, "stdio_ttys", return_value=True), \
-                mock.patch.dict(self.runtime.environ, env or {}), contextlib.redirect_stderr(err):
+                mock.patch.dict(self.runtime.environ, env or {}), contextlib.redirect_stderr(err), \
+                mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("import ran smoke")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("import ran qualification")):
             code = cli.main(argv, runtime=self.runtime, input_stream=stream, output_stream=out, interactive=True)
         return code, out.getvalue(), err.getvalue(), stream
 
@@ -392,9 +396,10 @@ class ImportReaderTests(PortabilityCase):
         self.assertTrue(out.startswith(portability.PREVIEW_HEADER + "\n"))
         self.assertIn("  providers: 1 new, 0 unchanged, 0 conflicting, 0 blocked", out)
         self.assertIn("  route re-approvals required: 1", out)
-        self.assertIn("  model admissions required: 1", out)
-        self.assertIn("Imported trust is not active.\n  claude-multi providers approve acme\n"
-                      "  claude-multi models admit custom-acme-small\n", out)
+        self.assertNotIn("model admissions required", out)
+        self.assertNotIn("pending admission", out)
+        self.assertNotIn("models admit", out)
+        self.assertIn("Imported trust is not active.\n  claude-multi providers approve acme\n", out)
         self.assertIn("Nothing was written.", out)
         self.assertEqual(err, "")  # no prompt in a preview
 
@@ -428,7 +433,8 @@ class ImportTrustTests(PortabilityCase):
 
     def test_import_uses_target_digest_and_current_evidence(self) -> None:
         self.admitted_source()
-        self.assertEqual(self.calls, ["custom-acme-small"])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(len(self.http_calls), 1)
         source_grant = self.ledger().routes["acme"]
         document, _raw, _err = self.export_json()
         self.fresh_target()
@@ -441,15 +447,20 @@ class ImportTrustTests(PortabilityCase):
         grant = self.ledger().routes["acme"]
         self.assertEqual(grant["rd"], layer.providers["acme"].route_digest)
         self.assertGreaterEqual(grant["approved_at"], source_grant["approved_at"])
-        # Admission needs this host's own smoke: nothing was carried over.
+        # Optional diagnostics need this host's own requests: nothing was
+        # carried over, and import never sends one on the operator's behalf.
         self.assertIsNone(operator_mod.load_evidence(self.runtime.gateway_environ(),
                                                      operator_mod.load_schemas(FIXTURE_ROOT)))
+        self.assertEqual(len(self.http_calls), 1)
         self.serve_current()
-        code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
+        code, out, err = self.op(["models", "qualify", "custom-acme-small", "--smoke"], "y\n")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.calls, ["custom-acme-small", "custom-acme-small"])
-        self.assertEqual(self.ledger().admissions["custom-acme-small"]["digest"],
-                         self.runtime.operator_snapshot().layer.lines["custom-acme-small"].definition_digest)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(len(self.http_calls), 2)
+        evidence = operator_mod.load_evidence(self.runtime.gateway_environ(), operator_mod.load_schemas(FIXTURE_ROOT))
+        self.assertTrue(operator_mod.smoke_current(
+            evidence, "custom-acme-small", self.runtime.operator_snapshot().layer.lines["custom-acme-small"].definition_digest))
+        self.assertEqual(self.ledger().admissions, {})
         # An existing grant on the target is kept as is, never overwritten.
         before = self.ledger()
         code, out, err, _stream = self.importing(self.bundle_file(document, "again.json"), [True], apply=True)
@@ -513,7 +524,7 @@ class ImportValidationTests(PortabilityCase):
         lead.update(name="on-acme", lead={"model": "custom-acme-small", "effort": "high"})
         broken = copy.deepcopy(lead)
         broken.update(name="bad-effort", lead={**self.runtime.profiles.load(catalog.DEFAULT_SEED)["lead"],
-                                               "effort": "low"})
+                                               "effort": "unsupported"})
         document["profiles"].update({"on-acme": {"document": lead}, "bad-effort": {"document": broken}})
         document["bindings"]["fast"] = {"model": "custom-acme-small", "effort": "high"}
         calls = []
@@ -522,23 +533,91 @@ class ImportValidationTests(PortabilityCase):
             code, out, err, _stream = self.importing(self.bundle_file(document), [True], apply=True)
         self.assertEqual(code, 0, out + err)
         self.assertIn("on-acme", calls)  # the ordinary validator decided
-        self.assertRegex(out, r"blocked\s+profile on-acme: pending admission")
+        self.assertRegex(out, r"blocked\s+profile on-acme: invalid here — .*unknown model")
         self.assertRegex(out, r"blocked\s+profile bad-effort: invalid here")
-        self.assertRegex(out, r"blocked\s+binding fast: pending admission")
+        self.assertRegex(out, r"blocked\s+binding fast: invalid here — .*unknown model")
+        self.assertNotIn("pending admission", out)
+        self.assertNotIn("models admit", out)
         self.assertFalse(self.runtime.profiles.has_user("on-acme"))
         self.assertFalse(self.runtime.profiles.has_user("bad-effort"))
         self.assertNotIn("fast", self.runtime.bindings.bindings())
-        # After the target's own authority steps the rerun applies them.
+        # The declaration is now local, but an unapproved route still blocks.
+        code, out, err, _stream = self.importing(self.bundle_file(document, "unapproved.json"))
+        self.assertEqual(code, 0, out + err)
+        self.assertRegex(out, r"blocked\s+profile on-acme: invalid here — .*route")
+        self.assertRegex(out, r"blocked\s+binding fast: invalid here — .*route")
+        self.assertNotIn("pending admission", out)
+        # Target-host route approval is sufficient; no admission or diagnostic
+        # is required. New declarations still require the ordinary import rerun.
         code, out, err = self.op(["providers", "approve", "acme"], "y\n")
         self.assertEqual(code, 0, err)
         self.serve_current()
-        code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
-        self.assertEqual(code, 0, out + err)
         code, out, err, _stream = self.importing(self.bundle_file(document, "again.json"), [True], apply=True)
         self.assertEqual(code, 0, out + err)
         self.assertTrue(self.runtime.profiles.has_user("on-acme"))
         self.assertEqual(self.runtime.bindings.bindings()["fast"], {"model": "custom-acme-small", "effort": "high"})
         self.assertFalse(self.runtime.profiles.has_user("bad-effort"))
+        self.assertEqual(self.runtime.current_effective().admitted_lines, frozenset())
+        self.assertEqual((self.calls, self.http_calls), ([], []))
+        self.assertFalse(operator_mod.evidence_path(self.runtime.gateway_environ()).exists())
+
+    def test_import_local_unadmitted_lines_as_leads_and_agents(self) -> None:
+        self.declare_small()
+        state.atomic_write(self.pdir / "lanbox.json",
+                           (REPO_ROOT / "tests/fixtures/operator/providers.d/lanbox.json").read_bytes())
+        document, _raw, _err = self.export_json()
+        seed = copy.deepcopy(self.runtime.profiles.load(catalog.DEFAULT_SEED))
+        seed.pop("seed", None)
+        for name, key in (("on-acme", "custom-acme-small"), ("on-lan", "custom-lan-model")):
+            binding = {"model": key, "effort": "high"}
+            profile = copy.deepcopy(seed)
+            profile.update(name=name, lead=binding)
+            profile["agents"]["cm-implementer"] = binding
+            document["profiles"][name] = {"document": profile}
+            document["bindings"][name] = binding
+        # Even a source admission request is inert, never a required remedy.
+        document["trust_requests"]["admissions"] = ["custom-acme-small", "custom-lan-model"]
+        code, out, err, _stream = self.importing(self.bundle_file(document), [True], apply=True)
+        self.assertEqual(code, 0, out + err)
+        for name in ("on-acme", "on-lan"):
+            self.assertTrue(self.runtime.profiles.has_user(name), out)
+            self.assertEqual(self.runtime.bindings.bindings()[name], document["bindings"][name])
+            self.assertEqual(self.runtime.profiles.load(name)["agents"]["cm-implementer"],
+                             document["bindings"][name])
+        self.assertNotIn("pending admission", out)
+        self.assertNotIn("models admit", out)
+        self.assertNotIn(portability.APPLIED_RERUN, out)
+        self.assertEqual(self.runtime.current_effective().admitted_lines, frozenset())
+        self.assertEqual(self.ledger().admissions, {})
+        self.assertFalse(operator_mod.evidence_path(self.runtime.gateway_environ()).exists())
+        self.assertEqual((self.calls, self.http_calls), ([], []))
+
+    def test_import_disabled_local_provider_remains_blocked(self) -> None:
+        self.declare_small()
+        self.runtime.settings_store.set_provider_enabled("acme", False, catalog=self.runtime.lineup_catalog())
+        document, _raw, _err = self.export_json()
+        seed = copy.deepcopy(self.runtime.profiles.load(catalog.DEFAULT_SEED))
+        seed.pop("seed", None)
+        binding = {"model": "custom-acme-small", "effort": "high"}
+        document["bindings"]["on-acme"] = binding
+        for name in ("lead-on-acme", "agent-on-acme"):
+            profile = copy.deepcopy(seed)
+            profile["name"] = name
+            if name == "lead-on-acme":
+                profile["lead"] = binding
+            else:
+                profile["agents"]["cm-implementer"] = binding
+            document["profiles"][name] = {"document": profile}
+        code, out, err, _stream = self.importing(self.bundle_file(document), [True], apply=True)
+        self.assertEqual(code, 0, out + err)
+        # Named bindings save metadata; only actual profile use is blocked.
+        self.assertRegex(out, r"ready\s+binding on-acme")
+        for name in ("lead-on-acme", "agent-on-acme"):
+            self.assertRegex(out, rf"blocked\s+profile {name}: invalid here — .*provider.*disabled")
+            self.assertFalse(self.runtime.profiles.has_user(name))
+        self.assertEqual(self.runtime.bindings.bindings()["on-acme"], binding)
+        self.assertNotIn("pending admission", out)
+        self.assertNotIn("models admit", out)
 
     def test_import_refuses_hm_managed_target(self) -> None:
         document = self.base_bundle()
@@ -856,6 +935,8 @@ class KeyedPortabilityTests(keyed.KeyedServedCase, PortabilityCase):
                      value=keyed.KEYED_VALUE)
         self.publish()
         self.serve_current()
+        code, out, err = self.op(["models", "qualify", keyed.KEYED_KEY, "--smoke"], "y\n")
+        self.assertEqual(code, 0, out + err)
         code, out, err = self.op(["models", "admit", keyed.KEYED_KEY], "y\n")
         self.assertEqual(code, 0, out + err)
         self.assertTrue(self.ledger().aliases)
@@ -896,7 +977,7 @@ class KeyedPortabilityTests(keyed.KeyedServedCase, PortabilityCase):
         self.assertEqual(inventory(self.root), before)
         self.assertFalse((self.pdir / f"{keyed.KEYED_ID}.json").exists())
 
-    def test_keyed_import_open_target_requires_local_route_key_and_grants(self):
+    def test_keyed_import_open_target_requires_local_route_and_key_not_admission(self):
         bundle = self.bundle_file(self.source())
         self.fresh_target()
         state.atomic_write(self.secret_file, b"KIMI_CLAUDE_API_KEY=cli-test-dummy\n")
@@ -907,19 +988,19 @@ class KeyedPortabilityTests(keyed.KeyedServedCase, PortabilityCase):
         self.assertEqual(self.runtime.operator_snapshot().layer.route_status[keyed.KEYED_ID], "unapproved")
         self.assertNotIn(keyed.KEYED_KEY, self.runtime.current_effective().admitted_lines)
         self.assertNotIn(keyed.KEYED_KEY, self.config().read_text())
-        self.assertEqual(self.op(["models", "admit", keyed.KEYED_KEY], "y\n")[0], 1)
+        self.assertIn(keyed.KEYED_KEY, self.runtime.current_effective().unavailable_lines)
         code, out, err = self.op(["providers", "approve", keyed.KEYED_ID], "y\n")
         self.assertEqual(code, 0, out + err)
         self.publish()
-        self.assertNotIn(keyed.KEYED_KEY, self.config().read_text())
-        self.assertEqual(self.op(["models", "admit", keyed.KEYED_KEY], "y\n")[0], 1)
+        self.assertNotIn(keyed.KEYED_KEY, self.config().read_text())  # no local key yet
         state.atomic_write(self.secret_file, self.secret_file.read_bytes() +
                            f"{keyed.KEYED_SECRET}=target-fixture-key\n".encode())
         self.publish()
         self.serve_current()
-        code, out, err = self.op(["models", "admit", keyed.KEYED_KEY], "y\n")
-        self.assertEqual(code, 0, out + err)
-        self.assertIn(keyed.KEYED_KEY, self.runtime.current_effective().admitted_lines)
+        self.assertIn(keyed.KEYED_KEY, self.config().read_text())
+        self.assertNotIn(keyed.KEYED_KEY, self.runtime.current_effective().admitted_lines)
+        self.assertNotIn(keyed.KEYED_KEY, self.runtime.current_effective().unavailable_lines)
+        self.assertFalse(operator_mod.evidence_path(self.runtime.gateway_environ()).exists())
 
     def test_keyed_import_rechecks_headers_origins_collisions(self):
         document = self.source()

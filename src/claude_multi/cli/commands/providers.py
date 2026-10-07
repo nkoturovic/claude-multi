@@ -272,9 +272,9 @@ def line_status(key: str, ctx: OperatorContext, admitted: Iterable[str]) -> str:
     grant = ledger.admissions.get(key) if ledger is not None else None
     if key in set(admitted) and grant is not None:
         if grant["digest"] != line.definition_digest:
-            return "changed since admission (re-admit)"
+            return "changed since admission (optional re-admit)"
         return "admitted"
-    return "New · Off"
+    return "New · not admitted"
 
 
 # ------------------------------------------------------------ the shared preflight
@@ -293,8 +293,10 @@ class ServedPreflight:
 
 def _authority(layer: operator_mod.OperatorLayer, ledger: operator_mod.OperatorLedger | None,
                admitted: Iterable[str]) -> dict[str, str]:
-    """Offered/admitted state (never a served selector): line admissions,
-    route approvals and transport choices."""
+    """Separate admission badges, route approvals and transport choices.
+
+    A badge conveys no use authority and never changes a served selector.
+    """
 
     granted = set(admitted)
     found: dict[str, str] = {}
@@ -304,7 +306,7 @@ def _authority(layer: operator_mod.OperatorLayer, ledger: operator_mod.OperatorL
             found[f"line {key}"] = ("admitted" if grant["digest"] == line.definition_digest
                                     else "changed since admission")
         else:
-            found[f"line {key}"] = "New · Off"
+            found[f"line {key}"] = "New · not admitted"
     for key in granted - set(layer.lines):
         found[f"line {key}"] = "admitted"
     for pid, status in layer.route_status.items():
@@ -528,8 +530,8 @@ def operator_write(runtime: runtime_mod.Runtime, *, preflight: ServedPreflight |
     command). Inside the barrier the root authority and the
     ``preflight`` sample are revalidated: anything that moved after the
     confirmation refuses with nothing applied. The render inside the phase
-    asserts the yielded token. ``preflight`` is required by keyword: only the
-    evidence-only smoke phase passes None.
+    asserts the yielded token. ``preflight`` is required by keyword: local
+    admission and evidence-only phases pass None and revalidate their own metadata.
     """
 
     env = runtime.gateway_environ()
@@ -652,7 +654,7 @@ def definition_consequences(
     for key in sorted(set(keys)):
         old, new = before.lines.get(key), after.lines.get(key)
         if old is None and new is not None:
-            lines.append(f"{key}: declared (New · Off)")
+            lines.append(f"{key}: declared (New · not admitted)")
         elif old is not None and new is None:
             lines.append(f"{key}: removed or invalid — captured aliases stay served until pruned")
         elif old is not None and new is not None and old.definition_digest != new.definition_digest:
@@ -660,7 +662,7 @@ def definition_consequences(
                                                  after, key)
             text = f"{key}: definition changed ({', '.join(fields)})"
             if key in granted:
-                text += " — its admission lapses; re-admit: claude-multi models admit " + key
+                text += " — its optional admission badge lapses (not a use restriction); re-admit: claude-multi models admit " + key
             if old.core_entry["wire_model"] != new.core_entry["wire_model"] and scan is not None:
                 users = live_users(scan, operator_mod.line_aliases(old.core_entry))
                 if users:

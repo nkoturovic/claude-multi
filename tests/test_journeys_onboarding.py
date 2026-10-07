@@ -64,7 +64,7 @@ def child_runtime(root: Path, launch: Any, options: dict[str, Any]) -> Any:
     observed) and, for sign-ins, the fake gateway login program."""
 
     import _tui_fixture as fx
-    from claude_multi import operator as operator_mod, state
+    from claude_multi import state
     from test_screens_card_onboarding import disconnect
 
     environ = dict(options.get("env") or {})
@@ -77,8 +77,12 @@ def child_runtime(root: Path, launch: Any, options: dict[str, Any]) -> Any:
         auth = Path(runtime.environ["HOME"]) / runtime.catalog.docs["gateway"]["gateway"]["auth_dir"]
         state.ensure_private_dir(auth)
         disconnect(runtime)
-    # A model admission's smoke request answers from the fixture.
-    runtime.qualify_transport = lambda _base, _token, _alias: operator_mod.SmokeOutcome("pass", 200, "ok")
+    # Admission and skipping it never infer. Fail rather than fabricate evidence.
+    def no_inference(*args, **kwargs):
+        raise AssertionError("onboarding must not run automatic diagnostics")
+
+    runtime.qualify_transport = no_inference
+    runtime.qualify_http = no_inference
     if options.get("serve_render"):
         serve_render(runtime)
     if options.get("lan_reachable"):
@@ -547,19 +551,16 @@ class FirstRunJourneys(JourneyCase):
         child.keys(ESC)
 
     def admit_on_models(self, child: JourneyPTY) -> None:
-        """M on the card, Enter on the declared model, the consent and the
-        smoke (answered by the fixture)."""
+        """M on the card, Enter records a consented local badge with no smoke."""
 
         child.keys("m")
-        child.expect("Enter admit")
+        child.expect("admit badge")
         child.keys(ENTER)
         child.expect("Confirm explicit action")
         child.keys("y")
-        child.expect("admission smoke")
-        child.keys("y")
-        child.expect("Usable as a Direct lead")
+        child.expect("admitted")
         child.keys(ESC)
-        child.expect("op · admitted")
+        child.expect("revoke badge")
         child.keys(ESC)
         child.expect("Status  ")
 
@@ -595,7 +596,7 @@ class FirstRunJourneys(JourneyCase):
         child.expect(cli_text.ADD_MODELS_TITLE.format(id="vendorx"))
         self.declare_by_hand(child, "vendorx-chat-1", key)
         child.expect(cli_text.ADMIT_NOW_TITLE.format(key=key))
-        child.keys(RIGHT, ENTER)  # Later: Models admits it below
+        child.keys(ENTER)  # Default Skip: ordinary selection needs no badge
         child.expect("Added vendorx")
         child.keys(ESC)
         child.expect("claude-multi — Get started")
@@ -621,13 +622,14 @@ class FirstRunJourneys(JourneyCase):
         child.expect(cli_text.ADD_MODELS_TITLE.format(id="homelab"))
         self.declare_by_hand(child, "homelab-chat-1", key)
         child.expect(cli_text.ADMIT_NOW_TITLE.format(key=key))
-        child.keys(RIGHT, ENTER)  # Later: Models admits it below
+        child.expect("Profiles")
+        child.keys(ENTER)  # Default Skip: ordinary selection needs no badge
         child.expect("Added homelab")
         child.keys(ESC)
         child.expect("claude-multi — Get started")
         child.keys(ESC)
         child.expect("Status  ")
-        self.admit_on_models(child)
+        # Skipping both admission and diagnostics still reaches ordinary selection.
         output = self.starter_from_step_six(child)
         self.assertIn("DEFAULT=starter", output)
 

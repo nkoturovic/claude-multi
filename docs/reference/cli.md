@@ -498,7 +498,7 @@ claude-multi providers add [<provider>] [--preset <preset>] [--as <provider>] [-
 | `--auth bearer\|header\|none` | credential transport |
 | `--header <header>` | header name for --auth header (x-api-key only) |
 | `--secret-ref <secret-ref>` | logical credential reference in the secret store (never the value) |
-| `--family <family>` | independence family (lower-case id) |
+| `--family <family>` | family label (1–64 printable single-line characters; unrecognized labels do not establish independence) |
 | `--display <text>` | display name |
 | `--contracts <contracts>` | reviewed payload contracts it uses |
 | `--listing-url <url>` | model listing URL (with --listing-shape) |
@@ -688,7 +688,7 @@ claude-multi models list [--json]
 
 #### claude-multi models add
 
-Declare a model of yours (New · Off; allowed anywhere).
+Declare a model of yours (New · not admitted; allowed anywhere).
 
 ```text
 claude-multi models add <provider> <wire> [--as <new-id>] --context <n> --source docs|operator|registry [--source-ref <text>] [--effort <effort>] [--default-effort <effort>] [--display <text>]
@@ -708,7 +708,7 @@ claude-multi models add <provider> <wire> [--as <new-id>] --context <n> --source
 
 #### claude-multi models admit
 
-Admit a New · Off line (checklist, one consented smoke; terminal, outside sessions).
+Record an optional local admission badge (zero inference; terminal, outside sessions).
 
 ```text
 claude-multi models admit <line>
@@ -720,7 +720,7 @@ claude-multi models admit <line>
 
 #### claude-multi models revoke
 
-Revoke a line's admission (running sessions keep their fence until relaunch).
+Remove only the admission badge (use and qualification unchanged).
 
 ```text
 claude-multi models revoke <line> [--yes]
@@ -773,7 +773,7 @@ claude-multi models show <line> [--resolved] [--evidence]
 
 #### claude-multi models qualify
 
-Run the consented qualification battery on a model of yours (its own aliases) through the loopback gateway. Every request is listed before one y/N; no retries; 120 s and 256 KiB per request (context 300 s). Evidence only: it never admits a line or edits its declaration. No flag means --smoke. Your models only (shipped models carry reviewed evidence).
+Run the optional, consented qualification battery on a model of yours (its own aliases) through the loopback gateway. Every request is listed before one y/N; no retries; 120 s and 256 KiB per request (context 300 s). Evidence only: it never admits a line or edits its declaration. No flag means --smoke. Your models only (shipped models carry reviewed evidence).
 
 ```text
 claude-multi models qualify <line> [--smoke] [--efforts] [--tools] [--tool-choice forced|auto] [--stream] [--context <n>] [--agents]
@@ -803,7 +803,7 @@ claude-multi discover [<provider>] [--all | --feed] [--add <wire>…] [--as <new
 | `[<provider>]` | provider id (see `claude-multi models`) |
 | `--all` | list every enabled direct provider with a supported listing (observation only; `discover openai` stays separate) |
 | `--feed` | compare the public model feed with the pinned registry (advisory) |
-| `--add <wire>…` | declare listed WIRE(s) New · Off (declared, not admitted) |
+| `--add <wire>…` | declare listed WIRE(s); admission and diagnostics are optional |
 | `--as <new-id>` | line key for exactly one --add WIRE (custom-...) |
 | `--context <n>` | declared context when the listing states none, or an explicit override |
 | `--over-listed <text>` | required to declare --context above the listing-stated value |

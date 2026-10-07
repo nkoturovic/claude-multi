@@ -11,6 +11,7 @@ or a returning key.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import shutil
 import tempfile
 import unittest
@@ -18,9 +19,10 @@ from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
-from claude_multi import catalog, cli, custom, profile, settings, state, tui, views
+from claude_multi import catalog, cli, custom, operator as operator_mod, profile, settings, state, strict_json, tui, views
 
 import _tui_fixture as fx
+import test_operator as operator_fixtures
 import claude_multi.cli.text as cli_text
 from _catalog import FIXTURE_ROOT
 from test_screens_catalog import _fixture_copy
@@ -79,9 +81,9 @@ class _DirectCase(unittest.TestCase):
             lcat, runtime.current_effective(),
             custom_ids=frozenset(custom.load_registry(runtime.environ)["models"]),
         )
-        first = sorted((r for r in rows if r.lead_capable and r.offered and r.source == "catalog"),
+        first = sorted((r for r in rows if r.source == "catalog"),
                        key=lambda r: (r.provider_display.lower(), r.display.lower(), r.key))
-        return first + [r for r in rows if r.lead_capable and r.offered and r.source == "custom"]
+        return first + [r for r in rows if r.source == "custom"]
 
     def steps_to(self, screen: cli._DirectScreen, key: str) -> list:
         keys = [row.key for row in screen.rows]
@@ -117,7 +119,7 @@ class _DirectSecretMixin:
 
 
 class DirectRowTests(_DirectCase):
-    def test_rows_offered_lead_capable_any_class_and_custom(self) -> None:
+    def test_all_valid_rows_any_class_and_custom(self) -> None:
         provider = next(
             pid for pid, p in sorted(self.runtime.catalog.providers.items())
             if p["transport"]["kind"] == "direct"
@@ -142,17 +144,20 @@ class DirectRowTests(_DirectCase):
         self.assertIn(cli.DIRECT_CLASS_NOTE, text)
         custom_line = next(line for line in text.splitlines() if "direct-custom-line" in line)
         self.assertIn(" custom ", custom_line)
-        self.assertTrue(custom_line.rstrip().endswith("(custom)"))
+        self.assertIn("(custom)", custom_line)
         self.assertIn("Enter launch · Tab save as profile · G providers · ? help · Esc back", text)
 
-    def test_not_offered_lines_are_absent(self) -> None:
+    def test_disabled_provider_lines_stay_visible_with_remedy(self) -> None:
         lcat = self.runtime.lineup_catalog()
         rows = views.line_rows(lcat, self.runtime.current_effective(), custom_ids=frozenset())
         lead_provider = next(r.provider for r in rows if r.lead_capable and r.offered)
         self.runtime.settings_store.set_provider_enabled(lead_provider, False, catalog=self.runtime.catalog)
         screen = self.screen()
         self.assertTrue(screen.rows)
-        self.assertNotIn(lead_provider, {row.provider for row in screen.rows})
+        blocked = [row for row in screen.rows if row.provider == lead_provider]
+        self.assertTrue(blocked)
+        self.assertTrue(all(row.mark == "unavailable" for row in blocked))
+        self.assertTrue(all("G → Space enables it" in row.unavailable_reason for row in blocked))
 
     def test_gateway_rows_cycle_their_effort_and_client_rows_do_not(self) -> None:
         with self.signed_in():
@@ -194,11 +199,16 @@ class DirectRowTests(_DirectCase):
                 document=profile.ad_hoc_direct(other), last_seen=timedelta(minutes=1),
             )
             self.assertEqual([r.key for r in self.screen().rows][self.screen().selected], other)
-        # 3. row 0 when neither applies (the default lead's provider is off)
+        # A disabled provider stays visible, including the default selection.
         runtime = self.make_runtime(self.tmp / "off")
         provider = runtime.lineup_catalog().lines[default_lead]["provider"]
         runtime.settings_store.set_provider_enabled(provider, False, catalog=runtime.catalog)
-        self.assertEqual(self.screen(runtime).selected, 0)
+        disabled = self.screen(runtime)
+        self.assertEqual(disabled.rows[disabled.selected].key, default_lead)
+        self.assertIn("provider off", disabled.rows[disabled.selected].unavailable_reason)
+        # With no default profile or direct record, selection still falls back to row 0.
+        with mock.patch.object(profile.ProfileStore, "load", side_effect=profile.ProfileError("missing")):
+            self.assertEqual(self.screen(runtime).selected, 0)
 
     def test_an_admitted_new_lead_line_is_listed_and_marked(self) -> None:
         # Marks and the detail reserve read lcat.lines /
@@ -216,7 +226,9 @@ class DirectRowTests(_DirectCase):
         )
         self.assertIsNotNone(key, f"{SPEC}: the fixture has a lead-capable line no seed binds")
         runtime = self.make_runtime(self.tmp / "new", asset_root=_fixture_copy(self, new=(key,)))
-        self.assertNotIn(key, [row.key for row in self.screen(runtime).rows], "New · Off is not offered")
+        unadmitted = next(row for row in self.screen(runtime).rows if row.key == key)
+        self.assertEqual(unadmitted.unavailable_reason, "")
+        self.assertIn("not admitted", unadmitted.attention)
         runtime.settings_store.admit_line(key, catalog=runtime.catalog)
         screen = self.screen(runtime)
         self.assertIn(key, [row.key for row in screen.rows])
@@ -230,12 +242,10 @@ class DirectRowTests(_DirectCase):
 
 
     def test_no_rows_never_index_or_launch(self) -> None:
-        # Restores OrdinaryScreenTuiTests.test_empty_catalog_never_indexes_or_launches:
-        # every lead provider off leaves no row; keys and Enter are inert.
-        lcat = self.runtime.lineup_catalog()
-        for provider in sorted({e["provider"] for e in lcat.lines.values() if "lead" in e["capabilities"]}):
-            self.runtime.settings_store.set_provider_enabled(provider, False, catalog=self.runtime.catalog)
-        screen = self.screen()
+        # Only a genuinely empty catalog has no rows; disabled providers stay visible.
+        lcat = dataclasses.replace(self.runtime.lineup_catalog(), lines={})
+        with mock.patch.object(self.runtime, "lineup_catalog", return_value=lcat):
+            screen = self.screen()
         self.assertEqual(screen.rows, ())
         result, win = self.run_screen(screen, ["j", "k", DOWN, RIGHT, ENTER, TAB, ESC])
         self.assertIsNone(result)
@@ -266,33 +276,42 @@ class DirectMarkTests(_DirectCase):
 
     def test_missing_secret_marks_and_the_enter_recheck_asks(self) -> None:
         runtime = self.make_runtime(self.tmp / "nosecret", secrets=())
-        with self.signed_in():
+        with self.signed_in(), mock.patch.object(runtime, "prepare", side_effect=AssertionError("No must not prepare")) as prepare:
             screen = self.screen(runtime)
             row = next(r for r in screen.rows if r.mark == "key missing")
             result, win = self.run_screen(screen, [*self.steps_to(screen, row.key), ENTER, ENTER, ESC])
-        self.assertIsNone(result)  # Close (the only button), then Esc
+        self.assertIsNone(result)  # Cancel is the default, then Esc.
+        prepare.assert_not_called()
         modal = next(f for f in win.frames if "has no API key" in f)
         # The box's interior only (list rows show beside it).
         flat = " ".join(line.split("|")[1].strip() for line in modal.splitlines() if line.count("|") >= 2)
         display = runtime.lineup_catalog().providers[row.provider]["display"]
         self.assertIn(cli_text.DIRECT_KEY_MISSING_BODY.format(display=display), flat)
-        self.assertNotIn("Launch anyway", modal)
+        self.assertIn("Launch anyway", modal)
+        self.assertIn("G → K", flat)
+        self.assertIn("requests may fail", flat)
         self.assertEqual(runtime.launches, [])
 
-    def test_a_missing_key_offers_no_launch_anyway(self) -> None:
-        # Perform refuses a plan with secret problems, so the key-missing
-        # modal closes only; the screen stays and nothing launches.
+    def test_a_missing_key_launches_only_after_explicit_confirmation(self) -> None:
+        # Credential readiness is advisory after the explicit default-No prompt.
+        # The screen returns a prepared plan; it does not perform or run diagnostics.
         runtime = self.make_runtime(self.tmp / "nosecret-anyway", secrets=())
-        with self.signed_in():
+        with self.signed_in(), \
+                mock.patch.object(runtime, "smoke", side_effect=AssertionError("automatic smoke")) as smoke, \
+                mock.patch.object(runtime, "qualify_post", side_effect=AssertionError("automatic qualification")) as qualify:
             screen = self.screen(runtime)
             row = next(r for r in screen.rows if r.mark == "key missing")
             result, win = self.run_screen(
-                screen, [*self.steps_to(screen, row.key), ENTER, RIGHT, ENTER, ESC]
+                screen, [*self.steps_to(screen, row.key), ENTER, RIGHT, ENTER]
             )
-        self.assertIsNone(result)
-        self.assertEqual(cli_text.DIRECT_KEY_MISSING_BUTTONS, (("Close", None),))
+        action, prepared = result
+        self.assertEqual((action, prepared.lineup.lead.binding.key), ("perform", row.key))
+        self.assertEqual(prepared.secret_problems, ())
+        self.assertEqual(cli_text.DIRECT_KEY_MISSING_BUTTONS, (("Cancel", False), ("Launch anyway", True)))
         self.assertTrue(any("has no API key" in f for f in win.frames))
         self.assertEqual(runtime.launches, [])
+        smoke.assert_not_called()
+        qualify.assert_not_called()
 
     def test_sign_in_mark_and_modal(self) -> None:
         screen = self.screen()  # the fixture has no OAuth credential record
@@ -453,7 +472,7 @@ class DirectLaunchTests(_DirectCase):
         # P1: the second save under the same name is refused with the store text.
         self.assertTrue(any("already exists" in f for f in win.frames))
 
-    def test_tab_on_a_custom_row_is_refused_with_the_e7_text(self) -> None:
+    def test_tab_on_a_legacy_custom_row_saves_its_original_key(self) -> None:
         provider = next(
             pid for pid, p in sorted(self.runtime.catalog.providers.items())
             if p["transport"]["kind"] == "direct"
@@ -464,9 +483,17 @@ class DirectLaunchTests(_DirectCase):
             catalog_providers=self.runtime.catalog.providers,
         )
         screen = self.screen()
-        _result, win = self.run_screen(screen, [END, TAB, ESC])
-        self.assertTrue(any(cli.DIRECT_CUSTOM_REFUSAL.format(key="direct-custom-e7") in f for f in win.frames))
-        self.assertFalse(self.runtime.profiles.has_user("direct-direct-custom-e7"))
+        with mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("automatic smoke")) as smoke, \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("automatic qualification")) as qualify:
+            _result, win = self.run_screen(screen, [END, TAB, ENTER, ENTER, ESC])
+        name = "direct-direct-custom-e7"
+        document = self.runtime.profiles.load(name)
+        self.assertEqual(document["lead"]["model"], "direct-custom-e7")
+        self.assertEqual(document["agents"], {})
+        self.assertNotIn("seed", document)
+        self.assertTrue(any(cli.DIRECT_SAVED.format(name=name) in f for f in win.frames))
+        smoke.assert_not_called()
+        qualify.assert_not_called()
 
     def test_g_opens_providers_and_rebuilds_the_rows(self) -> None:
         with mock.patch('claude_multi.cli.screens.providers.run_providers_screen') as providers:
@@ -484,6 +511,136 @@ class DirectLaunchTests(_DirectCase):
         )
         self.assertIn(rule, cli.DIRECT_HELP.splitlines())
         self.assertIn(rule, cli.QUICK_HELP.splitlines())
+
+
+class DirectPermissiveTests(_DirectCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.smoke = mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("automatic smoke"))
+        self.qualify = mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("automatic qualification"))
+        self.smoke_mock = self.smoke.start()
+        self.qualify_mock = self.qualify.start()
+        self.addCleanup(self.smoke.stop)
+        self.addCleanup(self.qualify.stop)
+
+    def install_operator(self, *, approved=True) -> str:
+        document = operator_fixtures._fixture_files()["acme"]
+        key = next(iter(document["lines"]))
+        document["lines"] = {key: {**document["lines"][key], "family": "mistral",
+                                    "capabilities": ["agents"], "roles": ["cm-reviewer"]}}
+        env = self.runtime.gateway_environ()
+        directory = state.ensure_private_dir(operator_mod.providers_dir(env))
+        state.atomic_write(directory / "acme.json", strict_json.pretty_file_bytes(document))
+        snapshot = self.runtime.operator_snapshot()
+        self.assertEqual(snapshot.layer.problems, ())
+        if approved:
+            ledger = operator_mod.ledger_document(None)
+            ledger["routes"]["acme"] = operator_fixtures._route(snapshot.layer.providers["acme"])
+            state.atomic_write(operator_mod.ledger_path(env), strict_json.canonical_file_bytes(ledger))
+        secret = Path(self.runtime.environ["CLAUDE_MULTI_SECRET_ENV"])
+        state.atomic_write(secret, secret.read_bytes() + b"ACME_API_KEY=direct-fixture-dummy\n")
+        selectors = {s.removesuffix("[1m]") for _e, s, _c in
+                     catalog.line_selectors(self.runtime.lineup_catalog().lines[key])}
+        served = set(fx.served_selectors(FIXTURE_ROOT)) | selectors
+        patcher = mock.patch.object(self.runtime, "served_models", return_value=(served, 200))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return key
+
+    def assert_no_inference(self) -> None:
+        self.smoke_mock.assert_not_called()
+        self.qualify_mock.assert_not_called()
+        self.assertEqual(self.runtime.launches, [])
+
+    def test_unadmitted_unqualified_operator_enter_and_tab_work_without_inference(self) -> None:
+        key = self.install_operator()
+        self.assertNotIn(key, self.runtime.current_effective().admitted_lines)
+        with self.signed_in():
+            screen = self.screen()
+            row = next(r for r in screen.rows if r.key == key)
+            self.assertEqual(row.unavailable_reason, "")
+            self.assertIn("not admitted", row.attention)
+            self.assertIn("qualification: not run", row.attention)
+            self.assertIn("lead binding overrides capability recommendation", row.attention)
+            self.assertIn("family independence unknown", row.attention)
+            result, win = self.run_screen(screen, [*self.steps_to(screen, key), TAB, ENTER, ENTER, ENTER])
+        action, prepared = result
+        self.assertEqual((action, prepared.lineup.lead.binding.key), ("perform", key))
+        self.assertEqual(prepared.secret_problems, ())
+        self.assertEqual(self.runtime.profiles.load(f"direct-{key}")["lead"]["model"], key)
+        self.assertTrue(any(cli.DIRECT_SAVED.format(name=f"direct-{key}") in f for f in win.frames))
+        self.assertNotIn(key, self.runtime.current_effective().admitted_lines)
+        self.assertFalse(operator_mod.evidence_path(self.runtime.gateway_environ()).exists())
+        self.assert_no_inference()
+
+    def test_legacy_custom_enter_preserves_selector_without_admission_or_inference(self) -> None:
+        provider = next(pid for pid, p in self.runtime.catalog.providers.items() if p["transport"]["kind"] == "direct")
+        key = "direct-legacy-permissive"
+        custom.add_model(self.runtime.environ, key, wire_model="direct-legacy-wire", provider=provider,
+                         context_tokens=200_000, created_via="manual", catalog_providers=self.runtime.catalog.providers)
+        entry = self.runtime.lineup_catalog().lines[key]
+        selectors = {s.removesuffix("[1m]") for _e, s, _c in catalog.line_selectors(entry)}
+        with self.signed_in(), mock.patch.object(self.runtime, "served_models", return_value=(selectors, 200)):
+            screen = self.screen()
+            result, _win = self.run_screen(screen, [*self.steps_to(screen, key), ENTER])
+        self.assertEqual(result[0], "perform")
+        self.assertEqual(result[1].lineup.lead.binding.key, key)
+        self.assertIn(result[1].lineup.lead.binding.selector, selectors)
+        self.assertNotIn(key, self.runtime.current_effective().admitted_lines)
+        self.assert_no_inference()
+
+    def test_route_approval_blocks_enter_but_tab_still_saves_without_launching(self) -> None:
+        key = self.install_operator(approved=False)
+        reason = self.runtime.current_effective().unavailable_lines[key]
+        with self.signed_in(), mock.patch.object(self.runtime, "prepare", side_effect=AssertionError("blocked prepare")) as prepare:
+            screen = self.screen()
+            row = next(r for r in screen.rows if r.key == key)
+            self.assertEqual(row.mark, "unavailable")
+            self.assertEqual(row.unavailable_reason, reason)
+            result, win = self.run_screen(screen, [*self.steps_to(screen, key), ENTER, ESC,
+                                                   TAB, ENTER, ENTER, ESC], width=140)
+        self.assertIsNone(result)
+        prepare.assert_not_called()
+        self.assertIn(reason, _flat("\n".join(win.frames)))
+        self.assertEqual(self.runtime.profiles.load(f"direct-{key}")["lead"]["model"], key)
+        self.assertEqual(self.runtime.current_effective().unavailable_lines[key], reason)
+        self.assert_no_inference()
+
+    def test_disabled_provider_rechecked_on_enter_while_tab_remains_metadata_only(self) -> None:
+        with self.signed_in():
+            screen = self.screen()
+            row = self.unmarked(screen)
+            self.runtime.settings_store.set_provider_enabled(row.provider, False, catalog=self.runtime.catalog)
+            with mock.patch.object(self.runtime, "prepare", side_effect=AssertionError("disabled prepare")) as prepare:
+                result, win = self.run_screen(screen, [*self.steps_to(screen, row.key), ENTER, ESC,
+                                                       TAB, ENTER, ENTER, ESC])
+        self.assertIsNone(result)
+        prepare.assert_not_called()
+        self.assertIn("G → Space enables it", _flat("\n".join(win.frames)))
+        self.assertEqual(self.runtime.profiles.load(f"direct-{row.key}")["lead"]["model"], row.key)
+        self.assertFalse(settings.provider_enabled(self.runtime.current_effective(), row.provider))
+        self.assert_no_inference()
+
+    def test_unavailable_mapping_detail_and_choose_dispatch_at_minimum_width(self) -> None:
+        with self.signed_in():
+            key = self.unmarked(self.screen()).key
+            reason = ("route approval required after the destination changed — open G, inspect the selected route, "
+                      "then A approves this credential destination; no provider or transport is changed automatically")
+            eff = dataclasses.replace(self.runtime.current_effective(), unavailable_lines={key: reason})
+            with mock.patch.object(self.runtime, "current_effective", return_value=eff), \
+                    mock.patch.object(self.runtime, "prepare", side_effect=AssertionError("blocked prepare")) as prepare:
+                for purpose in (None, "link", "needs a choice"):
+                    with self.subTest(purpose=purpose):
+                        screen = self.screen(purpose=purpose)
+                        rows, cols = screen.min_size(cli.DIRECT_MIN_COLS)
+                        result, win = self.run_screen(screen, [*self.steps_to(screen, key), ENTER, ESC, ESC],
+                                                     height=max(rows, 30), width=cols)
+                        self.assertIsNone(result)
+                        self.assertIn(reason, _flat("\n".join(win.frames)))
+                        self.assertNotIn("Terminal too small", "\n".join(win.frames))
+                        self.assertTrue(all(len(line) <= cols for frame in win.frames for line in frame.splitlines()))
+                prepare.assert_not_called()
+        self.assert_no_inference()
 
 
 class DirectCommandTests(_DirectCase):

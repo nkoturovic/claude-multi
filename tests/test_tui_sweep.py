@@ -570,6 +570,8 @@ def table(rows: list[dict[str, Any]] | None = None) -> str:
 
 
 class SweepTests(unittest.TestCase):
+    maxDiff = None
+
     def test_no_screen_cuts_off_an_action_at_80x24_or_120x40(self) -> None:
         rows = sweep()
         self.assertEqual({row["size"] for row in rows}, {"80x24", "120x40"})

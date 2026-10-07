@@ -633,7 +633,7 @@ class AgentContextGuardTests(unittest.TestCase):
         lines[key]["context"]["scalar_tokens"] = None
         return bundle, docs, key
 
-    def test_bound_unsafe_agent_fails_and_unbound_is_fine(self) -> None:
+    def test_bound_capacity_risk_warns_with_the_actual_suffixless_class(self) -> None:
         bundle, docs, key = self._docs()
         lcat = _lcat(docs)
         eff = _eff(lcat)
@@ -651,10 +651,20 @@ class AgentContextGuardTests(unittest.TestCase):
         doc = copy.deepcopy(base)
         doc["agents"][rid] = {"model": key, "effort": effort}
         lineup = profile.resolve(doc, lcat, effective=eff)
+        self.assertEqual(lineup.agents[rid].binding.client_context_tokens, 200_000)
+        self.assertEqual(compiler.agent_context_gaps(lineup, 800_000), ())
+        _launch(lineup, eff, docs=docs, bundle=bundle)
+        # A genuinely smaller provider bound warns, rather than inventing
+        # a per-agent 128K window or refusing short requests that can work.
+        docs["models-v2"]["models"][key]["context"]["provider_tokens"] = 128_000
+        lcat = _lcat(docs)
+        lineup = profile.resolve(doc, lcat, effective=eff)
         self.assertEqual(compiler.agent_context_gaps(lineup, 800_000), (rid,))
-        self.assertEqual(compiler.agent_context_gaps(lineup, 300_000), ())
-        with self.assertRaisesRegex(CompilerError, rf"{rid} \(provider bound 300000 < client window 1000000\)"):
-            _launch(lineup, eff, docs=docs, bundle=bundle)
+        warning = next(f.message for f in lineup.warnings if f.code == "context-risk" and f.slot == rid)
+        for number in ("200000", "800000", "128000"):
+            self.assertIn(number, warning)
+        result = _launch(lineup, eff, docs=docs, bundle=bundle)
+        self.assertIn(lineup.agents[rid].binding.selector, result.scope_plan.settings["availableModels"])
 
     def test_fixture_catalog_never_trips_the_guard(self) -> None:
         bundle = _bundle()

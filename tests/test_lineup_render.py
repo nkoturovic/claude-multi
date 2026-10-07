@@ -88,6 +88,35 @@ class LineupRenderTests(unittest.TestCase):
         self.assertIn("none: this session has no cm-* agents", text)
         self.assertTrue(text.endswith("\n".join((lineup.HELP_LINE, *lineup.MODEL_HELP_LINES)) + "\n"))
 
+    def test_review_output_distinguishes_same_different_and_unknown_families(self) -> None:
+        import copy
+
+        from claude_multi import scope, views
+
+        for family, outcome in (("anthropic", "same-family"), ("openai", "independent"),
+                                ("Mistral", "independence unknown"), ("unknown", "independence unknown")):
+            with self.subTest(family=family):
+                docs = copy.deepcopy(self.bundle.docs)
+                docs[profile.OPERATOR_KNOWN_FAMILIES_KEY] = tuple(self.lcat.known_families)
+                docs["models"]["models"]["sol"]["family"] = family
+                lcat = profile.LineupCatalog.from_docs(docs)
+                document = profile.ad_hoc_direct("opus55", "xhigh")
+                document["agents"] = {"cm-reviewer": {"model": "sol", "effort": "high"}}
+                resolved = profile.resolve(document, lcat, effective=self.eff)
+                cell = resolved.routing.rows[0].normal
+                rendered = scope._route_cell(cell)
+                if outcome == "independent":
+                    self.assertFalse(cell.same_family or cell.independence_unknown)
+                    self.assertNotIn("same-family", rendered)
+                    self.assertNotIn("independence unknown", rendered)
+                else:
+                    self.assertIn(outcome, rendered)
+                    self.assertIn(outcome, views.review_sentence(resolved))
+                    text = lineup.render_text(resolved, header="profile test")
+                    self.assertIn(outcome, text)
+                    if cell.independence_unknown:
+                        self.assertNotIn("same-family", rendered)
+
     def test_render_text_profile_view_and_state_lines(self) -> None:
         direct = self._lineup(profile.ad_hoc_direct("qwen38", "max"), ad_hoc=True)
         view = lineup.render_text(direct, header="profile x", profile_view=True)

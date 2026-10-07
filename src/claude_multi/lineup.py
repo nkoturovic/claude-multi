@@ -1133,7 +1133,6 @@ def classify(
             return lcat is not None and getattr(lcat, "origin", None) is not None and (
                 lcat.origin(key) in profile.OPERATOR_ORIGINS)
 
-        reported: set[str] = set()
         if sessions.launch_digest(disk_settings, lead_bytes) != record.get("launch_fence"):
             reasons.append(REASON_FENCE_DIGEST)
         else:
@@ -1149,31 +1148,11 @@ def classify(
             for rid, agent in moved.items():
                 if agent.binding.selector in gaps:
                     operator = operator_agent(agent.binding.key)
-                    reported.add(rid)
                     reasons.append(
                         (REASON_T2_AGENT if operator else REASON_FENCE_GAP).format(
                             label=profile.label(rid), selector=agent.binding.selector
                         )
                     )
-        # Every new or changed operator (T2) agent slot is
-        # relaunch-class, whether or not its selector is already in the
-        # launch fence (another slot may carry it); unchanged recorded slots
-        # stay as they are.
-        for rid, agent in lineup.agents.items():
-            if rid not in reported and new_agents.get(rid) != old_agents.get(rid) \
-                    and operator_agent(agent.binding.key):
-                reasons.append(
-                    REASON_T2_AGENT.format(label=profile.label(rid), selector=agent.binding.selector)
-                )
-    window = (lead_set.get("context") or {}).get("window")
-    if isinstance(window, int) and not isinstance(window, bool):
-        for rid in compiler.agent_context_gaps(lineup, window):
-            agent = lineup.agents[rid]
-            reasons.append(
-                f"{profile.label(rid)}: context guard — its provider accepts "
-                f"{agent.binding.provider_context_tokens} tokens, below this session's "
-                f"window {window}"
-            )
     if forced:
         reasons.append(REASON_FORCED)
     kind = "relaunch" if reasons else "live"

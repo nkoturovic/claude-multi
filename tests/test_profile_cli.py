@@ -150,18 +150,35 @@ class WriteCommandTests(ProfileCliCase):
     def test_an_invalid_edit_is_shown_and_kept(self) -> None:
         self.editor(
             "doc = json.load(open(path))\n"
-            "doc['agents'].pop('cm-explorer')\n"
+            "doc['agents']['cm-analyst']['effort'] = 'ultracode'\n"
             "open(path, 'w').write(json.dumps(doc))\n"
         )
         before = self.runtime.profiles.load("balanced")
         code, out, _ = self.cli("profile", "edit", "balanced", interactive=True)
         self.assertEqual(code, 1)
         self.assertIn("profile balanced was not saved:", out)
-        self.assertIn("native_agents.explore: 'replace' requires cm-explorer", out)
+        self.assertIn("agents.cm-analyst.effort: 'ultracode' is lead-only", out)
         kept = Path(out.rsplit("your edit is kept at ", 1)[1].strip())
         self.addCleanup(kept.unlink, True)
         self.assertEqual(stat.S_IMODE(os.stat(kept).st_mode), 0o600)
+        self.assertEqual(strict_json.load(kept)["agents"]["cm-analyst"]["effort"], "ultracode")
         self.assertEqual(self.runtime.profiles.load("balanced"), before)
+
+    def test_missing_explore_replacement_is_saved_with_a_warning(self) -> None:
+        self.editor(
+            "doc = json.load(open(path))\n"
+            "doc['agents'].pop('cm-explorer')\n"
+            "open(path, 'w').write(json.dumps(doc))\n"
+        )
+        code, out, err = self.cli("profile", "edit", "balanced", interactive=True)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Saved profile 'balanced'.", out)
+        saved = self.runtime.profiles.load("balanced")
+        self.assertNotIn("cm-explorer", saved["agents"])
+        self.assertEqual(saved["native_agents"]["explore"], "replace")
+        code, out, err = self.cli("profile", "show", "balanced")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Explore remains disabled", out)
 
     def test_edit_propagates_to_a_running_follower_after_the_prompt(self) -> None:
         follower = self.launch_fresh(self.profile_target("balanced"))

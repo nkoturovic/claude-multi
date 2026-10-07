@@ -114,8 +114,8 @@ ACTIONS: dict[str, tuple[Action, ...]] = {
     ),
     "models": _rows(
         "models",
-        ("primary", "Enter", "inspect a line, admit a new one, revoke it or approve its route", "claude-multi models show <key>"),
-        ("qualify", "Q", "check a line against the gateway", "claude-multi models qualify <key>"),
+        ("primary", "Enter", "inspect a line or add/remove its optional admission badge", "claude-multi models show <key>"),
+        ("qualify", "Q", "run optional diagnostics with explicit consent", "claude-multi models qualify <key>"),
         ("edit", "E", "edit a model you declared", "claude-multi models edit <key>"),
         ("remove", "X", "remove a model you declared", "claude-multi models rm <key>"),
         ("details", "V", "the line's details", "claude-multi models show <key>"),

@@ -840,7 +840,7 @@ def _secret_env_name(provider: Mapping[str, Any]) -> str | None:
 
 
 def line_view(cat: profile.LineupCatalog, eff: settings_mod.Effective) -> LineView:
-    """Every offered line (active or admitted, provider enabled), in line order."""
+    """Every usable line (enabled provider and usable route), in line order."""
 
     lines: list[OfferedLine] = []
     for key, entry in cat.lines.items():
@@ -927,6 +927,7 @@ class LeadSetRow:
     scalar_tokens: int | None
     validated_tokens: int
     source: str  # "catalog" | "custom"
+    origin: str = "catalog"  # compile-only: free-form family labels confer no adapter defaults
 
 
 @dataclass(frozen=True)
@@ -995,6 +996,7 @@ def _lead_rows(
                     scalar_tokens=context.get("scalar_tokens"),
                     validated_tokens=context.get("validated_tokens", 0),
                     source=line.source,
+                    origin=line.origin,
                 )
             )
     counts: dict[str, int] = {}
@@ -1071,7 +1073,8 @@ def fallback_only(rows: Iterable[LeadSetRow]) -> tuple[str, ...]:
     """
 
     rows = tuple(rows)
-    if not any(row.family == _FAMILY_ANTHROPIC for row in rows):
+    if not any(row.provider == "anthropic" or (row.origin == "catalog" and row.family == _FAMILY_ANTHROPIC)
+               for row in rows):
         return ()
     lead = {row.selector for row in rows}
     return tuple(
@@ -1117,8 +1120,8 @@ def _compile_fence(
             f"{lineup.lead_class!r} (line not offered, provider disabled or narrowed away)"
         )
     policy = _fence_policy(rows, eff, lineup.policy.percent if lineup.policy is not None else eff.compaction_percent)
-    t2_workflow_default = _t2_workflow_default(cat, view, eff, policy)
-    agents = _agent_set(view, policy, lineup, () if t2_workflow_default is None else (t2_workflow_default,))
+    workflow_default = _configured_workflow_default(cat, view, eff, policy)
+    agents = _agent_set(view, policy, lineup, () if workflow_default is None else (workflow_default,))
     fallback = fallback_only(rows)
     if set(fallback) & {row.selector for row in rows}:
         raise ScopeError("fallback-only selectors overlap the lead set")
@@ -1142,20 +1145,13 @@ def compile_fence(
     return _compile_fence(lineup, cat, line_view(cat, eff), eff)
 
 
-def _t2_workflow_default(cat: profile.LineupCatalog, view: LineView, eff: settings_mod.Effective,
-                         policy: profile.WindowPolicy) -> str | None:
-    """The workflow default's selector when it is an eligible operator line
-    (it joins the fence as T2's only unbound contribution), else None. A
-    problem is reported by :func:`compile_lineup_scope`, not here."""
+def _configured_workflow_default(cat: profile.LineupCatalog, view: LineView, eff: settings_mod.Effective,
+                                policy: profile.WindowPolicy) -> str | None:
+    """The explicitly configured workflow selector, regardless of its origin
+    or capability recommendations. It is the only unbound operator selector
+    a fence gains. A problem is reported by :func:`compile_lineup_scope`."""
 
-    binding = eff.workflow_default_binding
-    if binding is None:
-        return None
-    try:
-        key = cat.resolve_key(binding["model"]).key
-    except (catalog_mod.CatalogError, KeyError, TypeError):
-        return None
-    if key is None or cat.origin(key) not in profile.OPERATOR_ORIGINS:
+    if eff.workflow_default_binding is None:
         return None
     try:
         return _workflow_default(cat, view, eff, policy)
@@ -1188,28 +1184,29 @@ def _workflow_default_window(
     entry = cat.lines.get(key)
     if entry is None:
         raise ScopeError(f"{_WORKFLOW_FIELD}.model: line {key!r} is not in the catalog")
-    if "agents" not in entry["capabilities"]:
-        raise ScopeError(
-            f"{_WORKFLOW_FIELD}.model: line {key!r} is not agents-capable "
-            "(a lead-only line cannot run workflow agents)"
-        )
     if line is None:
         raise ScopeError(
             f"{_WORKFLOW_FIELD}.model: line {key!r} is not offered "
-            "(New · Off, or its provider is disabled in Settings)"
+            f"({eff.unavailable_lines.get(key, 'its provider is disabled in Settings')})"
         )
     if effort == profile.ULTRACODE:
         raise ScopeError(f"{_WORKFLOW_FIELD}.effort: 'ultracode' is lead-only")
-    declared = profile.declared_efforts(entry)
-    if effort not in declared:
+    available = profile.available_efforts(entry, cat.agent_efforts)
+    if effort not in available:
         raise ScopeError(
-            f"{_WORKFLOW_FIELD}.effort: {effort!r} is not declared by line {key!r} "
-            f"(declares {list(declared)})"
+            f"{_WORKFLOW_FIELD}.effort: {effort!r} is not supported by line {key!r} "
+            f"and the native client (available {list(available)})"
+        )
+    if isinstance(entry["efforts"], (list, tuple)) and effort != entry["default_effort"]:
+        # One selector cannot encode a separately selected workflow effort.
+        raise ScopeError(
+            f"{_WORKFLOW_FIELD}.effort: line {key!r} is client-effort (one selector); "
+            f"a workflow default runs at its default effort {entry['default_effort']!r}, "
+            f"never {effort!r}"
         )
     if cat.origin(key) in profile.OPERATOR_ORIGINS:
-        # An operator workflow default is an agent grant too; it needs the
-        # gate (and the forced named-tool variant). Record
-        # mode keeps the recorded Settings default.
+        # Only actual routing and representability problems refuse. Tool
+        # and qualification evidence belongs to optional diagnostics.
         gate = cat.agent_gate
         recorded = bool(gate is not None and gate.mode == profile.AGENT_MODE_RECORD
                         and gate.workflow_default == (model, effort))
@@ -1219,19 +1216,12 @@ def _workflow_default_window(
             agent_efforts=cat.agent_efforts,
             mode=gate.mode if gate is not None else profile.AGENT_MODE_CURRENT,
             recorded=recorded, use=profile.WORKFLOW_USE, policy=policy,
+            family=cat.line_family(key, entry), known_families=cat.known_families,
         )
         if not verdict.eligible:
             raise ScopeError(
                 f"{_WORKFLOW_FIELD}.model: {key} is not agent-eligible ({verdict.reasons[0]}) — {verdict.remedy}"
             )
-    if isinstance(entry["efforts"], (list, tuple)) and effort != entry["default_effort"]:
-        # A client-effort line has one selector, so the
-        # environment variable cannot carry any other effort.
-        raise ScopeError(
-            f"{_WORKFLOW_FIELD}.effort: line {key!r} is client-effort (one selector); "
-            f"a workflow default runs at its default effort {entry['default_effort']!r}, "
-            f"never {effort!r}"
-        )
     # A workflow agent is an agent: its class follows the session window
     # like a bound cm-* agent's.
     context = entry["context"]
@@ -1248,8 +1238,9 @@ def workflow_default_selector(
     """The selector of Settings ``workflow_default_binding`` (None = off).
 
     The key resolves through ``resolve_key`` (retired → successor); the line
-    must be agents-capable and offered, the effort declared and never
-    ``ultracode``, and a client-effort line only at its default effort.
+    must have a usable route and supported effort (never ``ultracode``),
+    and a client-effort line only at its default effort. Capability and
+    evidence recommendations are optional diagnostics.
     Its class follows the session window like an agent's
     (``policy``; the window ceiling without one). Fence membership is
     asserted by the compile. Every failure is a :class:`ScopeError` naming
@@ -1266,6 +1257,50 @@ def workflow_default_window(
     session ``policy`` (None = off); refuses like :func:`workflow_default_selector`."""
 
     return _workflow_default_window(cat, line_view(cat, eff), eff, policy)
+
+
+def workflow_default_warnings(
+    cat: profile.LineupCatalog, eff: settings_mod.Effective, *, policy: profile.WindowPolicy,
+) -> tuple[profile.Finding, ...]:
+    """Diagnostics for the explicitly selected workflow default.
+
+    Technical representability and route problems still raise ScopeError.
+    Mutable attestations are returned for presentation only, never written
+    into agent files, the fence or hashed lineup text.
+    """
+
+    role = workflow_default_window(cat, eff, policy=policy)
+    binding = eff.workflow_default_binding
+    if role is None or binding is None:
+        return ()
+    key = cat.resolve_key(binding["model"]).key
+    entry = cat.lines[key]
+    effort = binding["effort"]
+    if cat.origin(key) in profile.OPERATOR_ORIGINS:
+        gate = cat.agent_gate
+        verdict = profile.agent_eligibility(
+            entry, key=key, slot=None, effort=effort,
+            facts=gate.facts.get(key) if gate is not None else None,
+            agent_efforts=cat.agent_efforts,
+            mode=gate.mode if gate is not None else profile.AGENT_MODE_CURRENT,
+            recorded=bool(gate is not None and gate.mode == profile.AGENT_MODE_RECORD
+                          and gate.workflow_default == (binding["model"], effort)),
+            use=profile.WORKFLOW_USE, policy=policy,
+            family=cat.line_family(key, entry), known_families=cat.known_families,
+        )
+        warnings = list(verdict.warnings)
+    else:
+        warnings = list(profile.binding_warnings(
+            entry, key=key, slot=None, effort=effort, family=cat.line_family(key, entry),
+            known_families=cat.known_families,
+            admitted=entry.get("status", "active") != "new" or key in eff.admitted_lines))
+        problem = profile.agent_window_problem(
+            profile.binding_agent_selector(entry, effort), entry["context"]["provider_tokens"],
+            policy=policy, client_tokens=entry["context"]["client_tokens"])
+        if problem:
+            warnings.append(profile.Finding("context-risk", None, f"{key}: {problem}", "workflow context overflow risk"))
+    return tuple(profile.Finding(finding.code, finding.slot, f"workflow default: {finding.message}",
+                                 f"workflow default: {finding.compact}") for finding in warnings)
 
 
 def _check_generation(generation: int) -> int:
@@ -1287,6 +1322,8 @@ def _route_cell(cell: profile.RouteCell) -> str:
         text += f" ({cell.reason})"
     if cell.same_family:
         text += " (same-family)"
+    elif cell.independence_unknown:
+        text += " (independence unknown)"
     if cell.only_other_family:
         text += " (only other-family)"
     return text
@@ -1421,10 +1458,15 @@ def lineup_md_bytes(
         "- `/model`: press `s` (this session only). Enter saves the model into the user's "
         "global settings, which plain `claude` then inherits.",
     ]
-    if lineup.warnings or lineup.notices:
+    # Admission and qualification are current observations, not scope
+    # authority. A new diagnostic or badge must never change a running
+    # session's expected files, hashes, fence or recorded agent selector.
+    warnings = [finding for finding in lineup.warnings if finding.code not in profile.TRANSIENT_WARNING_CODES]
+    notices = [finding for finding in lineup.notices if finding.code not in profile.TRANSIENT_WARNING_CODES]
+    if warnings or notices:
         lines += ["", "## Checks"]
-        lines += [f"- ! {finding.message}" for finding in lineup.warnings]
-        lines += [f"- {finding.message}" for finding in lineup.notices]
+        lines += [f"- ! {finding.message}" for finding in warnings]
+        lines += [f"- {finding.message}" for finding in notices]
     data = ("\n".join(lines) + "\n").encode("utf-8")
     if len(data) > LINEUP_MD_MAX_BYTES:
         raise ScopeError(
@@ -1652,20 +1694,8 @@ def compile_lineup_scope(
         )
         raise ScopeError(
             f"bound agent selectors outside the session fence: {named} "
-            "(line not offered: New · Off or provider disabled in Settings)"
+            "(line unavailable: provider disabled or route unusable)"
         )
-    if context.scalar is not None:
-        # A compiled scalar is the class of a suffixless agent selector; a
-        # T2 agent must still compact within its provider bound.
-        t2 = {line.key for line in view.lines if line.t2}
-        for rid, agent in lineup.agents.items():
-            if agent.binding.key not in t2:
-                continue
-            problem = profile.agent_window_problem(
-                agent.binding.selector, agent.binding.provider_context_tokens, policy=context.policy,
-                client_tokens=agent.binding.client_context_tokens)
-            if problem is not None:
-                raise ScopeError(f"{rid}: {agent.binding.key} is not agent-eligible in this session ({problem})")
     workflow_default = _workflow_default(cat, view, eff, context.policy)
     if workflow_default is not None and fence_gaps(fence.available_models, [workflow_default]):
         raise ScopeError(

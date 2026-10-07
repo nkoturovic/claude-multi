@@ -39,7 +39,7 @@ def _gateway_baseline() -> str:
 
 
 def _model_entry(model_id: str = "newmodel") -> dict:
-    """A v2 (catalog 33) gateway-effort line draft entry, New · Off."""
+    """A v2 (catalog 33) gateway-effort line draft entry, New · not admitted."""
 
     return {
         "id": model_id,
@@ -462,7 +462,7 @@ class PrefillTests(OnboardingTestCase):
             "Registry/listing values and operator qualification are review context, not catalog verification.\n"
             "Fill every QUALIFY field, then:\n"
             "  claude-multi-dev check r1\n"
-            "Promotion installs a New · Off catalog line; local admission is a separate operator action.\n"))
+            "Promotion installs a New · not admitted catalog line; local admission is an optional operator badge, not permission to use it.\n"))
         draft = self.draft("r1")
         entry = draft["entry"]
         self.assertEqual((draft["kind"], draft["provider"], entry["id"], entry["status"]),
@@ -629,7 +629,7 @@ class PostImageTests(OnboardingTestCase):
         post = strict_json.loads(images[MODELS_IMAGE])
         self.assertIn("newmodel", post["models"])
         self.assertNotIn("id", post["models"]["newmodel"])
-        # The catalog has no 2.x default composition (the New · Off
+        # The catalog has no 2.x default composition (the New · not admitted
         # composition half of this test went with dev.py's composition branch).
         self.assertNotIn("compositions/default", raw["docs"])
 
@@ -702,7 +702,7 @@ class CheckTests(OnboardingTestCase):
         self.assertIn("newmodel", applied["models"])
         # render used dummy secret, never a real one
         self.assertIn("dummy-onboarding-secret", result.render.yaml)
-        # The check renders the v2 lines, so the promoted New · Off
+        # The check renders the v2 lines, so the promoted New · not admitted
         # line's own selector is exercised; continuity is always empty (the
         # dummy render never reads the operator's continuity.json).
         self.assertIn('alias: "gpt-multi-newmodel-high"', result.render.yaml)
@@ -928,10 +928,8 @@ class PromoteTests(OnboardingTestCase):
             drafts_root=self.root / "drafts",
         )
         bundle = catalog.load_catalog(self.resources)
-        # A promoted line lands New · Off: in the v2 lines, never
-        # offered until a reviewed catalog edit activates it.
-        # "Never offered" is the merged-view seam (scope.line_view
-        # under the default Settings), not the deleted v1 view.
+        # A promoted line is New · not admitted, but selectable without a
+        # badge under the default Settings when its provider is enabled.
         from claude_multi import profile, scope, settings
 
         self.assertIn("newmodel", bundle.lines)
@@ -940,7 +938,7 @@ class PromoteTests(OnboardingTestCase):
         eff = settings.effective(
             {"version": 1}, provider_ids=lcat.providers, line_keys=lcat.lines
         )
-        self.assertNotIn("newmodel", {line.key for line in scope.line_view(lcat, eff).lines})
+        self.assertIn("newmodel", {line.key for line in scope.line_view(lcat, eff).lines})
         provider_draft = _provider_draft()
         record2 = self._review(provider_draft, name="d2")
         dev.promote_draft(
@@ -1379,7 +1377,7 @@ class CandidateFailureCleanupTests(OnboardingTestCase):
 
 
 class NewEntryPolicyTests(OnboardingTestCase):
-    """New · Off applies to provider-kind drafts too (not just model-kind)."""
+    """New · not admitted applies to provider-kind drafts too (not just model-kind)."""
 
     # Seed profiles never bind a New line or provider.
     def _candidate_docs(self, draft: dict) -> dict:
@@ -1403,7 +1401,7 @@ class NewEntryPolicyTests(OnboardingTestCase):
         docs = self._candidate_docs(draft)
         docs["profiles/balanced"]["agents"]["cm-reviewer"] = {"effort": "high", "model": "newmodel"}
         with self.assertRaisesRegex(
-            DevError, r"new model 'newmodel' must not be bound in seed profile 'balanced'; it is New · Off"
+            DevError, r"new model 'newmodel' must not be bound in seed profile 'balanced'; it is New · not admitted"
         ):
             dev._check_new_entry_policy(docs, draft)
 
@@ -1412,12 +1410,12 @@ class NewEntryPolicyTests(OnboardingTestCase):
         docs = self._candidate_docs(draft)
         docs["profiles/openai"]["primary_provider"] = "zeta"
         with self.assertRaisesRegex(
-            DevError, r"new provider 'zeta' must not be bound in seed profile 'openai'; it is New · Off"
+            DevError, r"new provider 'zeta' must not be bound in seed profile 'openai'; it is New · not admitted"
         ):
             dev._check_new_entry_policy(docs, draft)
         docs = self._candidate_docs(draft)
         docs["profiles/direct"]["lead_providers"] = ["anthropic", "zeta"]
-        with self.assertRaisesRegex(DevError, "New · Off"):
+        with self.assertRaisesRegex(DevError, "New · not admitted"):
             dev._check_new_entry_policy(docs, draft)
 
 
@@ -1433,7 +1431,7 @@ def _check(case: "OnboardingTestCase", draft: dict, tag: str):
 
 
 class PromoteStatusTests(OnboardingTestCase):
-    """A promoted line always lands New · Off (status "new")."""
+    """A promoted line always lands New · not admitted (status "new")."""
 
     def _raw_docs(self):
         return catalog.load_raw(self.resources)["docs"]
@@ -1450,13 +1448,13 @@ class PromoteStatusTests(OnboardingTestCase):
     def test_active_status_refused_for_model_and_provider_drafts(self) -> None:
         draft = _model_draft()
         draft["entry"]["status"] = "active"
-        with self.assertRaisesRegex(DevError, 'promoted lines start New · Off \\(status "new"\\)'):
+        with self.assertRaisesRegex(DevError, 'promoted lines start New · not admitted \\(status "new"\\)'):
             dev.build_post_images(self._raw_docs(), draft)
         provider = _provider_draft()
         provider["entry"]["model"]["status"] = "active"
-        with self.assertRaisesRegex(DevError, "New · Off .*local admission is a separate operator action"):
+        with self.assertRaisesRegex(DevError, "New · not admitted .*local admission is an optional operator badge"):
             dev.build_post_images(self._raw_docs(), provider)
-        with self.assertRaisesRegex(DevError, "New · Off"):
+        with self.assertRaisesRegex(DevError, "New · not admitted"):
             _check(self, draft, "active")
 
     def test_at_retired_and_live_keys_refused(self) -> None:
@@ -1480,7 +1478,7 @@ class PromoteStatusTests(OnboardingTestCase):
         entry = {k: v for k, v in _model_entry().items() if k != "id"}
         entry["status"] = "active"
         docs["models"]["models"]["newmodel"] = entry
-        with self.assertRaisesRegex(DevError, "New · Off"):
+        with self.assertRaisesRegex(DevError, "New · not admitted"):
             dev._check_new_entry_policy(docs, _model_draft())
 
     def test_promote_writes_status_new(self) -> None:

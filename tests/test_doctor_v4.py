@@ -1000,9 +1000,10 @@ class DoctorFactsTests(_DoctorCase):
         document["models"]["fixture-new"] = line
         models_path.write_text(json.dumps(document, indent=2) + "\n")
         self.runtime = self.make_runtime(asset_root=root)
-        _problems, info, _attention = _doctor(self)
-        self.assertIn("New model available: Fixture New Line (fixture-new) — off until admitted: "
-                      "claude-multi models admit fixture-new (or Models, then Enter on its row)", info)
+        problems, _info, attention = _doctor(self)
+        self.assertFalse(any("fixture-new" in problem for problem in problems))
+        self.assertIn("New model: Fixture New Line (fixture-new) — not admitted (optional badge): "
+                      "claude-multi models admit fixture-new (or Models, then Enter; use does not require it)", attention)
         finding = self.codes(self.json_report())["model-newly-available"]
         self.assertEqual((finding["subject_id"], finding["remedy"]),
                          ("fixture-new", "claude-multi models admit fixture-new"))
@@ -2685,8 +2686,7 @@ class OperatorAgentA06Tests(test_operator_agents.AgentCase):
                 mock.patch.object(self.runtime.session_store, "load_raw", return_value=(record, b"")):
             blocks, attention, _info = doctor_mod._doctor_operator_report(self.runtime, None)
         self.assertIn(
-            f"operator agent {key}: qualification predates the current pins — re-qualify with "
-            f"claude-multi models qualify {key} --agents",
+            f"{key}: qualification predates the current pins (stale evidence)",
             attention,
         )
         self.assertFalse([line for line in blocks if key in line])

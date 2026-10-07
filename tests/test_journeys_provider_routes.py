@@ -98,7 +98,7 @@ class ProviderRouteJourneys(JourneyCase):
         child.expect(cli_text.ADD_MODELS_TITLE.format(id=name))
         self.declare_by_hand(child, f"{name}-chat-1", key)
         child.expect(cli_text.ADMIT_NOW_TITLE.format(key=key))
-        child.keys(RIGHT, ENTER)  # Later: Models admits it below
+        child.keys(ENTER)  # Default Skip; Models records an optional local badge below.
         child.expect(f"Added {name}")
         child.keys(ESC)
         child.expect("claude-multi — Get started")

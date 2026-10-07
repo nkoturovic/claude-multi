@@ -22,9 +22,9 @@ Two tracks:
     mutually exclusive.
 
 Then:  check DRAFT → review DRAFT → promote DRAFT --repo PATH
-Developer promotion installs a New · Off catalog line (status "new"); operator
-admission enables that installed line locally (Models, or `claude-multi models
-admit KEY`). Selectors follow the catalog-33 shape: Anthropic =
+Developer promotion installs a New · not admitted catalog line (status "new"); operator
+admission is only an optional local badge (Models, or `claude-multi models
+admit KEY`), not permission to use it. Selectors follow the catalog-33 shape: Anthropic =
 canonical wire[1m], gateway-effort = <prefix><key>-<effort>[1m].
 `check` also reports every OAuth-pool line whose wire is absent from the
 pinned gateway registry (package data; a report, never a refusal).

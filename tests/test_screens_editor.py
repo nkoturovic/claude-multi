@@ -373,8 +373,8 @@ class EditorChecksTests(_EditorCase):
         row = next(r for r in views.editor_rows(state, width=80) if r.key == "checks")
         self.assertRegex(row.text, r"\(\+\d+ more — \? lists all\)$")
 
-    def error_documents(self) -> list[tuple[str, dict, str, dict]]:
-        """(E-code, document, expected field_row, state kwargs) for E3-E22, derived."""
+    def validation_documents(self) -> list[tuple[str, dict, str, dict]]:
+        """Former E3-E22 cases: retained errors and now-advisory recommendations."""
 
         lcat = self.lcat
         base = self.default()
@@ -393,7 +393,7 @@ class EditorChecksTests(_EditorCase):
         bad_effort = next(e for e in profile.EFFORT_ORDER if e not in profile.declared_efforts(lcat.lines[base["agents"][rid]["model"]]))
         out.append(("E5", doc(lambda d: d["agents"][rid].__setitem__("effort", bad_effort)), rid, {}))
         out.append(("E6", doc(lambda d: d["agents"][rid].__setitem__("effort", profile.ULTRACODE)), rid, {}))
-        # E7: a custom model (merged from a temp custom registry) cannot be bound.
+        # Former E7: a legacy custom binding is usable, with unknown-family attention.
         direct = next(pid for pid, p in self.runtime.catalog.providers.items() if p["transport"]["kind"] == "direct")
         custom.add_model(
             self.runtime.environ, "editor-custom", wire_model="editor-custom-wire", provider=direct,
@@ -410,7 +410,7 @@ class EditorChecksTests(_EditorCase):
         off_provider = lcat.lines[base["agents"][rid]["model"]]["provider"]
         off_eff = dataclasses.replace(self.eff, providers_enabled={**self.eff.providers_enabled, off_provider: False})
         out.append(("E9", copy.deepcopy(base), rid, {"effective": off_eff}))
-        no_lead = next(k for k, e in lcat.lines.items() if "lead" not in e["capabilities"])
+        no_lead = next(k for k, e in lcat.lines.items() if not isinstance(e.get("lead"), dict))
         out.append(("E10", doc(lambda d: d.__setitem__("lead", {"model": no_lead, "effort": lcat.lines[no_lead]["default_effort"]})), "lead", {}))
         no_agents = next(k for k, e in lcat.lines.items() if "agents" not in e["capabilities"])
         out.append(("E11", doc(lambda d: d["agents"].__setitem__(rid, {"model": no_agents, "effort": lcat.lines[no_agents]["default_effort"]})), rid, {}))
@@ -433,17 +433,42 @@ class EditorChecksTests(_EditorCase):
         out.append(("E22", doc(lambda d: d.__setitem__("settings_overrides", {settings.COMPACTION_PERCENT_KEY: settings.COMPACTION_PERCENT_MAX + 1})), "general", {}))
         return out
 
+    ADVISORY_CODES = {
+        "E7": "family-unknown", "E8": "admission", "E11": "capability-recommendation",
+        "E12": "role-recommendation", "E13": "companion-grade", "E16": "explore-replacement-unbound",
+    }
+
+    def test_former_binding_restrictions_show_valid_checks_with_warnings(self) -> None:
+        cases = [case for case in self.validation_documents() if case[0] in self.ADVISORY_CODES]
+        self.assertEqual({code for code, *_ in cases}, set(self.ADVISORY_CODES))
+        for code, document, _expected, kwargs in cases:
+            with self.subTest(code=code):
+                editor_state = self.state(document, **kwargs)
+                self.assertEqual(editor_state.evaluation.errors, ())
+                finding = next(w for w in editor_state.evaluation.lineup.warnings
+                               if w.code == self.ADVISORY_CODES[code])
+                checks = next(r for r in views.editor_rows(editor_state, width=1000) if r.key == "checks")
+                self.assertTrue(checks.text.startswith("Checks    ✓ valid"), checks.text)
+                self.assertEqual(checks.role, "warn")
+                self.assertFalse(checks.selectable)
+                self.assertIn(finding.compact, checks.text)
+                win, _ = self.run_screen(self.editor(editor_state), ["?", ENTER, ESC], height=60, width=120)
+                help_frame = next(f for f in win.frames if "edit profile — help" in f)
+                self.assertIn(f"! {finding.message}"[:60], help_frame)
+
     def test_each_reachable_error_maps_to_its_field_row(self) -> None:
         prefixes = {
-            "E3": "agents.", "E4": "lead.model", "E5": "agents.", "E6": "agents.", "E7": "lead.model",
-            "E8": "agents.", "E9": "agents.", "E10": "lead.model", "E11": "agents.", "E12": "agents.",
-            "E13": "agents.", "E14": "agents.", "E15": "agents.", "E16": "native_agents.explore",
+            "E3": "agents.", "E4": "lead.model", "E5": "agents.", "E6": "agents.",
+            "E9": "agents.", "E10": "lead.model", "E14": "agents.", "E15": "agents.",
             "E17": "lead_providers", "E18": "lead_providers", "E19": "primary_provider",
             "E20": "settings_overrides.", "E21": "settings_overrides.", "E22": "settings_overrides.",
         }
-        cases = self.error_documents()
+        cases = self.validation_documents()
         self.assertEqual([code for code, *_ in cases], [f"E{n}" for n in range(3, 23)])
+        self.assertEqual(set(prefixes) | set(self.ADVISORY_CODES), {code for code, *_ in cases})
         for code, document, expected, kwargs in cases:
+            if code in self.ADVISORY_CODES:
+                continue
             with self.subTest(code=code):
                 state = self.state(document, **kwargs)
                 errors = state.evaluation.errors
@@ -910,31 +935,40 @@ class PickerTests(_EditorCase):
     def keys_of(self, picker) -> set[str]:
         return {item.key for item in picker.model.items if item.kind == "line"}
 
-    def test_admission_per_slot(self) -> None:
+    def test_all_valid_lines_appear_for_every_slot(self) -> None:
         rows = {r.key: r for r in views.line_rows(self.lcat, self.eff, custom_ids=frozenset())}
-        self.assertEqual(self.keys_of(self.picker(catalog.LEAD_ROLE)), {k for k, r in rows.items() if r.lead_capable})
-        restricted = [k for k, r in rows.items() if r.agents_capable and r.roles != "all"]
-        self.assertTrue(restricted, f"{SPEC} §7.1: the fixture has a roles-restricted line")
-        for rid in catalog.AGENT_ROLE_IDS:
-            with self.subTest(slot=rid):
-                keys = self.keys_of(self.picker(rid))
-                self.assertEqual(keys, {k for k, r in rows.items() if r.admits(rid)})
-                for key in restricted:
-                    self.assertEqual(key in keys, rid in rows[key].roles)
-        self.assertEqual(self.keys_of(self.picker("binding")),
-                         {k for k, r in rows.items() if r.lead_capable or r.agents_capable})
-        workflow = self.picker("workflow")
-        self.assertEqual(workflow.model.items[0].kind, "off")
-        self.assertEqual(self.keys_of(workflow), {k for k, r in rows.items() if r.agents_capable})
-        for item in workflow.model.items:
-            self.assertNotIn(profile.ULTRACODE, item.text)
+        for slot in (catalog.LEAD_ROLE, *catalog.AGENT_ROLE_IDS, "binding", "workflow"):
+            with self.subTest(slot=slot):
+                picker = self.picker(slot)
+                self.assertEqual(self.keys_of(picker), set(rows))
+                for item in picker.model.items:
+                    if item.kind != "line":
+                        continue
+                    row = rows[item.key]
+                    self.assertEqual(item.selectable, slot != catalog.LEAD_ROLE or row.lead_usable)
+                    if slot in catalog.AGENT_ROLE_IDS and not row.admits(slot):
+                        self.assertIn("binding overrides capability/role recommendations", item.details)
+                    if slot == "workflow":
+                        self.assertNotIn(profile.ULTRACODE, item.text)
+                        if row.mode == "client":
+                            self.assertEqual((item.efforts, item.initial_effort), ((), row.default_effort))
+                if slot == "workflow":
+                    self.assertEqual(picker.model.items[0].kind, "off")
 
-    def test_new_is_excluded_then_admitted(self) -> None:
+    def test_new_is_selectable_before_and_after_optional_admission(self) -> None:
         key = _agent_key(self.lcat, "cm-explorer")
         lcat = _replace_lines(self.lcat, **{key: {**self.lcat.lines[key], "status": "new"}})
-        self.assertNotIn(key, self.keys_of(self.picker("cm-explorer", lcat=lcat)))
-        eff = dataclasses.replace(self.eff, admitted_lines=frozenset({key}))
-        self.assertIn(key, self.keys_of(self.picker("cm-explorer", lcat=lcat, eff=eff)))
+        effort = lcat.lines[key]["default_effort"]
+        for admitted in (False, True):
+            with self.subTest(admitted=admitted):
+                eff = dataclasses.replace(self.eff, admitted_lines=frozenset({key}) if admitted else frozenset())
+                picker = self.picker("cm-explorer", lcat=lcat, eff=eff,
+                                     current={"model": key, "effort": effort})
+                item = picker.model.items[picker.index]
+                self.assertEqual(item.key, key)
+                self.assertTrue(item.selectable)
+                self.assertEqual("not admitted" in item.note, not admitted)
+                self.assertEqual(self.run_screen(picker, [ENTER])[1], ("bind", key, effort))
 
     def test_a_disabled_provider_is_dim_and_never_chosen(self) -> None:
         provider = next(iter(sorted({e["provider"] for e in self.lcat.lines.values()})))
@@ -943,17 +977,23 @@ class PickerTests(_EditorCase):
         off = [i for i, item in enumerate(picker.model.items)
                if item.kind == "line" and self.lcat.lines[item.key]["provider"] == provider]
         self.assertTrue(off)
-        frame = self.frame(picker, width=100)
+        frame = self.frame(picker, width=180)
         for index in off:
             item = picker.model.items[index]
             self.assertFalse(item.selectable)
             self.assertEqual(item.role, "dim")
-            self.assertIn("(provider off — G)", frame)
+            self.assertIn("provider off", frame)
+            self.assertIn("G → Space enables it", item.note)
+        picker.index = off[0]
+        blocked, result = self.run_screen(picker, [ENTER, ESC, ESC])
+        self.assertIsNone(result)
+        self.assertTrue(any("model not eligible" in frame and "G → Space enables it" in frame
+                            for frame in blocked.frames))
         picker.index = picker.model.items.index(next(i for i in picker.model.items if i.selectable))
         _win, result = self.run_screen(picker, [ENTER])
         self.assertNotEqual(self.lcat.lines[result[1]]["provider"], provider)
 
-    def test_custom_models_are_absent(self) -> None:
+    def test_legacy_custom_models_can_bind_lead_agents_names_and_workflow(self) -> None:
         direct = next(pid for pid, p in self.runtime.catalog.providers.items() if p["transport"]["kind"] == "direct")
         custom.add_model(
             self.runtime.environ, "picker-custom", wire_model="picker-custom-wire", provider=direct,
@@ -964,8 +1004,18 @@ class PickerTests(_EditorCase):
         runtime = self.make_runtime(self.tmp / "root")  # a fresh Runtime re-reads custom.json
         lcat = runtime.lineup_catalog()
         self.assertIn("picker-custom", lcat.lines)
-        for slot in (catalog.LEAD_ROLE, "binding"):
-            self.assertNotIn("picker-custom", self.keys_of(self.picker(slot, lcat=lcat, eff=runtime.current_effective())))
+        key = "picker-custom"
+        effort = lcat.lines[key]["default_effort"]
+        for slot in (catalog.LEAD_ROLE, "cm-reviewer", "binding", "workflow"):
+            with self.subTest(slot=slot):
+                picker = self.picker(slot, lcat=lcat, eff=runtime.current_effective(),
+                                     current={"model": key, "effort": effort})
+                item = picker.model.items[picker.index]
+                self.assertEqual(item.key, key)
+                self.assertTrue(item.selectable)
+                self.assertIn("family independence unknown", item.details)
+                expected_effort = profile.ULTRACODE if slot == catalog.LEAD_ROLE else effort
+                self.assertEqual(self.run_screen(picker, [ENTER])[1], ("bind", key, expected_effort))
 
     def test_v_shows_the_models_full_details(self) -> None:
         rid = "cm-analyst"
@@ -1041,9 +1091,9 @@ class PickerTests(_EditorCase):
         self.assertIn(f"effort: [{profile.ULTRACODE}]", frame)
         self.assertIn("Enter choose · V details · ? help · Esc back", frame)
         win, _ = self.run_screen(picker, ["?", ENTER, ESC], height=40, width=100)
-        self.assertTrue(any("catalog lines whose roles admit this slot and operator lines (◇)"
+        self.assertTrue(any("All valid lines appear, including New, legacy custom and operator models"
                             in " ".join(" ".join(line.strip(" |") for line in f.splitlines()).split())
-                            for f in win.frames))
+                            for f in win.frames), "\n".join(win.frames))
 
 
 # ================================================================ routing
@@ -1066,7 +1116,9 @@ class RoutingTests(_EditorCase):
             line = next(l for l in frame.splitlines() if l.startswith(f"  {author} "))
             self.assertIn(normal, line)
             self.assertIn(high, line)
-        self.assertIn("✓ cross-family", frame)
+        self.assertIn("✓ recognized cross-family", frame)
+        self.assertIn("≈ recognized same-family", frame)
+        self.assertIn("? independence unknown", frame)
         self.assertIn("° preferred reviewer shares", frame)
         self.assertTrue(frame.splitlines()[-1].strip().endswith("? help · Esc back"))
 
@@ -1141,7 +1193,7 @@ class NamedBindingsTests(_EditorCase):
         stored = self.runtime.bindings.bindings()
         self.assertEqual(stored["added"]["model"], key)
 
-    def test_b1_to_b9_messages_are_shown_verbatim(self) -> None:
+    def test_remaining_hard_binding_errors_are_shown_verbatim(self) -> None:
         callbacks = self.callbacks()
         key, effort = self.seed_binding()
         lcat = self.lcat
@@ -1154,15 +1206,9 @@ class NamedBindingsTests(_EditorCase):
             "B5": callbacks.set_binding(None, "b-five", null_key, effort),
             "B7": callbacks.set_binding(None, "b-seven", key, "not-an-effort"),
         }
-        new_lcat = _replace_lines(lcat, **{key: {**lcat.lines[key], "status": "new"}})
-        with mock.patch.object(self.runtime, "lineup_catalog", lambda: new_lcat):
-            messages["B6"] = callbacks.set_binding(None, "b-six", key, effort)
         self.runtime.profiles.duplicate(catalog.DEFAULT_SEED, "user-b")
         self.runtime.profiles.update("user-b", lambda d: d["agents"].__setitem__("cm-analyst", {"use": "nb"}))
         messages["B8"] = callbacks.delete_binding("nb")
-        refusing = next(k for k, e in lcat.lines.items() if "agents" in e["capabilities"]
-                        and e["roles"] != "all" and "cm-analyst" not in e["roles"])
-        messages["B9"] = callbacks.set_binding(None, "nb", refusing, lcat.lines[refusing]["default_effort"])
         for code, message in messages.items():
             with self.subTest(code=code):
                 self.assertIsInstance(message, str, code)
@@ -1172,14 +1218,39 @@ class NamedBindingsTests(_EditorCase):
         self.assertIn(f"collides with retired catalog key {null_key!r}", messages["B3"])
         self.assertIn("unknown model 'no-such-line'", messages["B4"])
         self.assertIn("bind the live line", messages["B5"])
-        self.assertIn("is New · Off (status new) until admitted", messages["B6"])
-        self.assertIn("'not-an-effort' is not declared by", messages["B7"])
+        self.assertIn("'not-an-effort' is not supported by", messages["B7"])
         self.assertEqual(messages["B8"], "named binding 'nb' is used by profiles: user-b (agents.cm-analyst)")
-        self.assertIn("user-b", messages["B9"])
         self.assertEqual(self.runtime.bindings.bindings()["nb"]["model"], key, "a refused change writes nothing")
         # And on the screen: the X refusal shows the store's text verbatim.
         win, _ = self.run_screen(self.screen(), ["X", ENTER, ESC], width=120)
         self.assertTrue(any(messages["B8"] in f for f in win.frames))
+
+    def test_new_and_role_override_named_bindings_save_with_profile_warnings(self) -> None:
+        callbacks = self.callbacks()
+        key, effort = self.seed_binding()
+        lcat = self.lcat
+        new_lcat = _replace_lines(lcat, **{key: {**lcat.lines[key], "status": "new"}})
+        with mock.patch.object(self.runtime, "lineup_catalog", lambda **_kwargs: new_lcat):
+            self.assertIsNone(callbacks.set_binding(None, "new-choice", key, effort))
+        self.assertEqual(self.runtime.bindings.bindings()["new-choice"], {"model": key, "effort": effort})
+        self.assertNotIn(key, self.runtime.current_effective().admitted_lines)
+        document = self.default()
+        document["agents"]["cm-analyst"] = {"use": "new-choice"}
+        new_state = self.state(document, cat=new_lcat)
+        self.assertEqual(new_state.evaluation.errors, ())
+        self.assertIn("admission", {w.code for w in new_state.evaluation.lineup.warnings})
+
+        self.runtime.profiles.duplicate(catalog.DEFAULT_SEED, "user-b")
+        self.runtime.profiles.update("user-b", lambda d: d["agents"].__setitem__("cm-analyst", {"use": "nb"}))
+        recommended_elsewhere = next(k for k, e in lcat.lines.items() if "agents" in e["capabilities"]
+                                    and e["roles"] != "all" and "cm-analyst" not in e["roles"])
+        effort = lcat.lines[recommended_elsewhere]["default_effort"]
+        self.assertIsNone(callbacks.set_binding(None, "nb", recommended_elsewhere, effort))
+        self.assertEqual(self.runtime.bindings.bindings()["nb"], {"model": recommended_elsewhere, "effort": effort})
+        edited = self.state(name="user-b")
+        self.assertEqual(edited.evaluation.errors, ())
+        self.assertEqual(edited.evaluation.lineup.agents["cm-analyst"].binding.key, recommended_elsewhere)
+        self.assertIn("role-recommendation", {w.code for w in edited.evaluation.lineup.warnings})
 
     def test_enter_edits_a_binding_through_the_picker(self) -> None:
         key, _effort = self.seed_binding()

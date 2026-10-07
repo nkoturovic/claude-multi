@@ -637,19 +637,30 @@ class ServedOperatorTests(test_cli.OperatorCommandCase):
         state.atomic_write(path, strict_json.pretty_file_bytes(document))
 
     def test_all_served_mutators_use_common_preflight(self) -> None:
-        # Static: every operator phase passes a preflight by keyword; only
-        # the two evidence-only phases (smoke, qualification) pass None.
-        nones = 0
+        # Every phase names its preflight. Only evidence and local admission
+        # metadata phases omit the served plan; route mutations never do.
+        metadata_phases = {}
         for relative in ("cli/commands/providers.py", "cli/commands/models.py", "cli/onboarding.py"):
             tree = ast.parse((SRC / relative).read_text())
+            parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", "")) \
                         == "operator_write":
                     keywords = {kw.arg: kw.value for kw in node.keywords}
                     self.assertIn("preflight", keywords, f"{relative}:{node.lineno}")
                     if isinstance(keywords["preflight"], ast.Constant):
-                        nones += 1
-        self.assertEqual(nones, 2)
+                        self.assertIsNone(keywords["preflight"].value)
+                        owner = parents[node]
+                        while not isinstance(owner, ast.FunctionDef):
+                            owner = parents[owner]
+                        phase = (relative, owner.name)
+                        metadata_phases[phase] = metadata_phases.get(phase, 0) + 1
+        self.assertEqual(metadata_phases, {
+            ("cli/commands/models.py", "_run_smoke"): 1,
+            ("cli/commands/models.py", "_models_qualify"): 1,
+            ("cli/commands/models.py", "_models_admit"): 1,
+            ("cli/commands/models.py", "_models_revoke"): 2,
+        })
         # Dynamic: each served verb plans before its first write and commits
         # with that plan.
         real_preflight = providers_cmd.served_preflight
@@ -667,19 +678,12 @@ class ServedOperatorTests(test_cli.OperatorCommandCase):
         verbs = [
             (["providers", "apply"], ""), ([*test_cli.ACME_ADD, "--declare-only"], ""),
             (["providers", "approve", "acme"], "y\n"), (test_cli.SMALL_ADD, ""), (LAN_ADD, ""),
-            (LAN_MODEL, ""), (["models", "revoke", "custom-acme-small"], "y\n"),
+            (LAN_MODEL, ""), (["models", "rm", "custom-lan-model", "--yes"], ""),
             (["providers", "rm", "lan"], "y\n"),
         ]
         with mock.patch.object(providers_cmd, "served_preflight", side_effect=preflight), \
                 mock.patch.object(providers_cmd, "operator_write", side_effect=operator_write):
             for argv, text in verbs:
-                if argv[:2] == ["models", "revoke"]:
-                    self.serve_current()
-                    code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\ny\n")
-                    self.assertEqual(code, 0, out + err)
-                if argv[:2] == ["providers", "rm"]:
-                    code, out, err = self.op(["models", "rm", "custom-lan-model", "--yes"])
-                    self.assertEqual(code, 0, out + err)
                 calls.clear()
                 before = self.state_bytes()
                 with self.subTest(argv=argv):
@@ -691,17 +695,67 @@ class ServedOperatorTests(test_cli.OperatorCommandCase):
                     self.assertIn(("write", first[1]), calls)
                     self.assertIn(served_plan.HEADER, err)
 
-    def test_admission_shows_authority_diff_when_served_unchanged(self) -> None:
-        self.op(test_cli.ACME_ADD, "y\n")
-        self.op(test_cli.SMALL_ADD)
-        self.serve_current()
-        code, out, err = self.op(["models", "admit", "custom-acme-small"], "y\n")
-        self.assertEqual(code, 0, out + err)
-        admission = err.split(served_plan.HEADER)[-1]
-        self.assertIn(served_plan.NO_SERVED_CHANGE, admission)
-        self.assertIn("Offered/admitted changes\n  line custom-acme-small: New · Off → admitted", admission)
+    def test_admit_and_revoke_keep_served_plan_and_sentinel_unchanged(self) -> None:
+        self.declare_small()
+        before_plan, before_identity = plan_cmd.build(self.runtime)
+        before_config = self.config().read_bytes()
+        before_sentinel = render.document_sentinel(served_plan.parse_restricted_yaml(before_config.decode()))
+        before_candidate = proxy.candidate_document(
+            self.runtime.home, environ=self.runtime.gateway_environ(), asset_root=self.runtime.asset_root,
+            state_root=self.runtime.session_store.root,
+        )
+        self.assertFalse(before_plan.changed)
+        real_write = providers_cmd.operator_write
+        real_confirm = consent_mod.confirm
+        phases = []
 
-    def test_admit_smoke_phase_holds_no_barrier_across_consent_or_call(self) -> None:
+        @contextlib.contextmanager
+        def operator_write(runtime, *, preflight):
+            self.assertIsNone(preflight)
+            with real_write(runtime, preflight=preflight) as barrier:
+                phases.append(("commit", barrier_free(runtime.home)))
+                yield barrier
+
+        def confirm(text, **kwargs):
+            phases.append(("consent", barrier_free(self.runtime.home)))
+            return real_confirm(text, **kwargs)
+
+        with mock.patch.object(providers_cmd, "served_preflight", side_effect=AssertionError("badge planned render")), \
+                mock.patch.object(providers_cmd, "operator_write", side_effect=operator_write), \
+                mock.patch.object(consent_mod, "confirm", side_effect=confirm), \
+                mock.patch.object(models_cmd, "render_identity", side_effect=AssertionError("badge observed gateway")), \
+                mock.patch.object(self.runtime, "render_gateway", side_effect=AssertionError("badge rendered")), \
+                mock.patch.object(self.runtime, "verify_reload", side_effect=AssertionError("badge reloaded")), \
+                mock.patch.object(self.runtime, "smoke", side_effect=AssertionError("badge smoked")), \
+                mock.patch.object(self.runtime, "qualify_post", side_effect=AssertionError("badge qualified")):
+            for verb in ("admit", "revoke"):
+                with self.subTest(verb=verb):
+                    code, out, err = self.op(["models", verb, "custom-acme-small"], "y\n")
+                    self.assertEqual(code, 0, out + err)
+                    self.assertNotIn(served_plan.HEADER, err)
+                    self.assertIn("optional", err)
+                    self.assertEqual("custom-acme-small" in self.runtime.current_effective().admitted_lines,
+                                     verb == "admit")
+                    after_plan, after_identity = plan_cmd.build(self.runtime)
+                    self.assertEqual(after_plan, before_plan)
+                    self.assertEqual(after_identity, before_identity)
+                    self.assertEqual(self.config().read_bytes(), before_config)
+                    candidate = proxy.candidate_document(
+                        self.runtime.home, environ=self.runtime.gateway_environ(), asset_root=self.runtime.asset_root,
+                        state_root=self.runtime.session_store.root,
+                    )
+                    # The planning render uses placeholder keys, so its
+                    # sentinel is compared with its own pre-badge value.
+                    self.assertEqual(candidate, before_candidate)
+                    self.assertEqual(render.document_sentinel(candidate), render.document_sentinel(before_candidate))
+                    published = served_plan.parse_restricted_yaml(self.config().read_text())
+                    self.assertEqual(render.document_sentinel(published), before_sentinel)
+        self.assertEqual(phases, [("consent", True), ("commit", False),
+                                  ("consent", True), ("commit", False)])
+        self.assertTrue(barrier_free(self.runtime.home))
+        self.assertEqual((self.calls, self.http_calls), ([], []))
+
+    def test_qualify_smoke_holds_no_barrier_across_consent_or_call(self) -> None:
         self.op(test_cli.ACME_ADD, "y\n")
         self.op(test_cli.SMALL_ADD)
         self.serve_current()
@@ -723,14 +777,16 @@ class ServedOperatorTests(test_cli.OperatorCommandCase):
         err = io.StringIO()
         with mock.patch.object(state, "acquire_served_barrier", side_effect=acquire), \
                 mock.patch.object(consent_mod, "stdio_ttys", return_value=True), contextlib.redirect_stderr(err):
-            code = cli.main(["models", "admit", "custom-acme-small"], runtime=self.runtime,
+            code = cli.main(["models", "qualify", "custom-acme-small", "--smoke"], runtime=self.runtime,
                             input_stream=Answers(), output_stream=io.StringIO(), interactive=True)
         self.assertEqual(code, 0, err.getvalue())
         self.assertEqual(observed, [("consent", True), ("call", True)])
-        self.assertEqual(self.calls, ["custom-acme-small"])
-        # Two separate phases after the call: the evidence commit, then the
-        # admission commit (never one barrier across consent or the call).
-        self.assertEqual(acquisitions, [2, 2])
+        self.assertEqual(self.calls, [])
+        self.assertEqual([label for label, _body in self.http_calls], ["smoke"])
+        # The evidence-only commit follows the consented call; qualification
+        # never adds an admission phase or holds a barrier across the request.
+        self.assertEqual(acquisitions, [2])
+        self.assertNotIn("custom-acme-small", self.runtime.current_effective().admitted_lines)
         self.assertTrue(barrier_free(home))
 
     def test_served_mutation_refuses_during_rotation(self) -> None:

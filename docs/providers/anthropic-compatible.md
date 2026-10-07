@@ -17,8 +17,9 @@ key's name for you.
 A **preset** is a vendor's documented Anthropic-compatible endpoint,
 filled in from the vendor's documentation: its address and the key's
 name. Each is labelled `preset`: claude-multi has not tested it, and
-nothing is trusted until you approve where the key goes and admit a
-model. These are available in every build:
+you must approve where the key goes before using the route. Model admission
+and qualification are optional and do not test or approve the vendor for you.
+These are available in every build:
 
 | Preset | Vendor | Address | Key name |
 | --- | --- | --- | --- |
@@ -38,12 +39,13 @@ Notes:
   the address afterwards with **G** → **E** (a new address is approved
   again).
 - Novita, Vercel and Model Studio serve models from several makers: set
-  each model's family before you admit it (`claude-multi models edit <line>`),
-  so reviews route correctly.
+  each model's family with `claude-multi models edit <line>`. Any nonempty,
+  single-line printable label up to 64 characters is accepted, except
+  controls or secret-bearing values. An unknown or unrecognized family
+  does not establish review independence; it does not prevent use.
 - None of these presets ships models or a model list: after the key, add
-  the model ids the vendor documents by hand
-  ([guides/models.md](../guides/models.md#add-a-model-of-your-own)) and
-  admit them.
+  the model ids the vendor documents by hand, then bind them
+  ([guides/models.md](../guides/models.md#add-a-model-of-your-own)).
 
 Add one in the launcher with **G** Providers → **N**, or **W** Get
 started → **A** (or Enter on its providers step), → the preset: you name
@@ -79,8 +81,10 @@ changes it for both.
 
 - One provider has one key, sent as a bearer token or an `x-api-key`
   header to the address you approve.
-- Its models start **New · Off**: declared, served by the gateway, offered
-  nowhere until you admit them.
+- Its models start **New · not admitted**: valid declarations on usable
+  routes can be bound as leads or agents without admission, qualification
+  or declared agent roles. Capability and role recommendations warn rather
+  than prohibit an explicit binding.
 - Not supported: automatic protocol detection, probing, or falling back to
   another protocol at run time.
 
@@ -93,8 +97,8 @@ the endpoint entry); give the name, the base URL, how the key is sent
 (its family; `unknown` if unsure) and optionally the model list's
 address, approve where the key goes, then type the key. The key is saved
 as `<NAME>_API_KEY` after the provider's name (`ACME_API_KEY` for
-`acme`). **A** adds models; in **M** Models, Enter admits
-and **Q** qualifies; bind them in the profile editor.
+`acme`). **A** adds models; bind them in the profile editor. In **M** Models,
+Enter changes the optional admission badge and **Q** offers optional diagnostics.
 
 The same steps from a terminal outside Claude Code (an invented vendor):
 
@@ -102,8 +106,7 @@ The same steps from a terminal outside Claude Code (an invented vendor):
 claude-multi providers add acme --kind anthropic-compatible --base-url https://api.acme.example/anthropic --auth bearer --secret-ref env:ACME_API_KEY --family acme
 claude-multi providers set-key acme
 claude-multi models add acme acme-large-1 --context 131072 --source docs --source-ref "https://docs.acme.example/models 2026-09" --as custom-acme-large
-claude-multi models admit custom-acme-large
-claude-multi models qualify custom-acme-large --agents
+claude-multi profile edit <name>         # bind custom-acme-large as a lead or agent
 ```
 
 `providers add` declares the provider and then asks you to approve its
@@ -131,15 +134,18 @@ The key is kept in the key file like any other API key
 
 ## 5. Admit and qualify
 
-- **Admission** (`claude-multi models admit <line>`) runs a checklist (a
-  valid declaration, an approved route, the key present by name, the
-  gateway serving the line) and at most one small request you agree to.
-  It is bound to the line's definition: changing its wire id, context or
-  efforts needs a new admission.
+Both actions are optional; neither grants route permission.
+
+- **Admission** (`claude-multi models admit <line>`) records a local badge
+  for the valid definition after confirmation, with zero inference requests.
+  It needs no passing smoke or live gateway. Changing its wire id, context
+  or efforts makes the badge stale, not the model unavailable.
 - **Qualification** (`claude-multi models qualify <line> --agents`) runs
-  bounded checks through the gateway (effort, tools, streaming) after one
-  confirmation that lists every request. It records evidence only. An
-  agent role needs a passing qualification; a lead needs admission.
+  bounded smoke, effort, tools and streaming checks through the gateway.
+  It lists every request for a human's explicit approval at a terminal
+  outside Claude Code, default **No**. It records evidence only; selection,
+  launch, doctor and import never run it automatically. Missing, failed or
+  stale evidence remains visible as a warning, not a lead or agent ban.
 
 See [guides/models.md](../guides/models.md).
 
@@ -154,8 +160,9 @@ no cap; set limits with the vendor.
   gateway does not serve your current setup) re-renders the gateway's
   configuration and verifies the reload; an invalid change is
   refused and the old configuration keeps serving.
-- `claude-multi models revoke <line>` withdraws an admission (running
-  sessions keep their fence until they relaunch).
+- `claude-multi models revoke <line>` removes only the admission badge:
+  the line stays usable and qualification evidence is unchanged. Disable
+  the provider or remove a binding/declaration to stop using it.
 - `claude-multi models rm <line>` removes a line; `--successor <line>`
   rewrites the profiles and named bindings that use it.
 - `claude-multi providers rm <provider>` removes the provider; it is

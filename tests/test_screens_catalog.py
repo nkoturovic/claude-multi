@@ -180,13 +180,13 @@ class ModelsScreenTests(_ScreenCase):
                 self.assertIn(row.provider, line)
                 self.assertIn(row.class_label, line)
                 efforts = views.efforts_text(row.efforts)
-                self.assertIn(efforts if row.agents_capable else f"{efforts} (lead only)", line)
+                self.assertIn(efforts if row.agents_capable else f"{efforts} (lead recommended)", line)
                 count = used[row.key]
                 expected = f"{count} profile{'s' if count != 1 else ''}" if count else "—"
                 self.assertTrue(line.rstrip().endswith(expected), line)
         self.assertTrue(
             lines[5 + len(catalog_rows)].strip().startswith(
-                "new (off until admitted — Enter admits; stored in Settings): —"
+                "new (not admitted — Enter adds an optional badge): —"
             )
         )
 
@@ -215,36 +215,39 @@ class ModelsScreenTests(_ScreenCase):
         self.assertEqual(len(rows), 1, "v2-checks code 20: a custom line is listed once")
         line = self.row_line(text, "screens-custom-line")
         self.assertIn("custom", line)
-        self.assertTrue(line.rstrip().endswith("direct only"))
+        self.assertNotIn("direct only", line)
+        self.assertTrue(line.rstrip().endswith("—"))
         last_catalog = [r.key for r in self.rows() if r.source == "catalog"][-1]
         self.assertGreater(text.index("screens-custom-line "), text.index(f" {last_catalog} "))
-        self.assertLess(text.index("screens-custom-line "), text.index("new (off until"))
+        self.assertLess(text.index("screens-custom-line "), text.index("new (not admitted"))
 
     def test_new_row_admit_and_revoke(self) -> None:
         key = new_line_key(catalog.load_catalog(FIXTURE_ROOT))
         runtime = self.make_runtime(self.tmp / "new", asset_root=_fixture_copy(self, new=(key,)))
         screen = self.screen(runtime)
-        # End → the New row; Enter → Admit modal; Enter → Admit; Enter → Revoke
-        # modal (the row moved to the main table; Cancel focused first); → Revoke, Enter; Esc.
-        win = self.run_screen(screen, [END, ENTER, ENTER, ENTER, RIGHT, ENTER, ESC])
+        # Both optional badge actions open on Cancel. Neither changes availability.
+        before = next(row for row in screen.line_rows if row.key == key)
+        win = self.run_screen(screen, [END, ENTER, LEFT, ENTER, ENTER, RIGHT, ENTER, ESC])
         heading = next(f for f in win.frames if f"› {key} " in f)
-        self.assertNotIn("stored in Settings): —", heading)
-        self.assertIn("new (off until admitted — Enter admits; stored in Settings):", heading)
-        self.assertTrue(next(l for l in heading.splitlines() if f"› {key} " in l).rstrip().endswith("New · Off"))
-        self.assertIn("Enter admit · Q qualify · E edit · X remove · V details · ? help · Esc back", heading)
+        self.assertIn("new (not admitted — Enter adds an optional badge):", heading)
+        self.assertNotIn("New · Off", heading)
+        self.assertIn("admission: not admitted (optional)", heading)
+        self.assertIn("Enter admit badge · Q diagnostics", heading)
         self.assertTrue(any(f"Admit {key}?" in f for f in win.frames))
-        self.assertTrue(any(f"admitted {key} — applies at the next launch or resume" in f for f in win.frames))
-        self.assertTrue(any("Enter revoke · Q qualify · E edit · X remove · V details · ? help · Esc back" in f
-                            for f in win.frames))
+        self.assertTrue(any(f"admitted {key} — badge only" in f for f in win.frames))
+        self.assertTrue(any("Enter revoke badge · Q diagnostics" in f for f in win.frames))
         self.assertTrue(any(f"Revoke {key}?" in f for f in win.frames))
-        self.assertEqual(screen.message, f"revoked {key} — applies at the next launch or resume")
+        self.assertEqual(screen.message, f"revoked {key} — badge only; use and qualification unchanged")
         self.assertEqual(self.settings_doc(runtime).get("admitted_lines"), [])
+        after = next(row for row in screen.line_rows if row.key == key)
+        self.assertTrue(before.offered and after.offered)
+        self.assertEqual(before.qualification, after.qualification)
 
     def test_admit_writes_admitted_lines(self) -> None:
         key = new_line_key(catalog.load_catalog(FIXTURE_ROOT))
         runtime = self.make_runtime(self.tmp / "new", asset_root=_fixture_copy(self, new=(key,)))
         screen = self.screen(runtime)
-        self.run_screen(screen, [END, ENTER, ENTER, ESC])
+        self.run_screen(screen, [END, ENTER, LEFT, ENTER, ESC])
         self.assertEqual(self.settings_doc(runtime)["admitted_lines"], [key])
         self.assertEqual(screen.selected_key, key, "the selection follows the admitted line")
         self.assertIn(key, screen.model(80).admitted)
@@ -252,7 +255,7 @@ class ModelsScreenTests(_ScreenCase):
     def test_cancel_writes_nothing(self) -> None:
         key = new_line_key(catalog.load_catalog(FIXTURE_ROOT))
         runtime = self.make_runtime(self.tmp / "new", asset_root=_fixture_copy(self, new=(key,)))
-        self.run_screen(self.screen(runtime), [END, ENTER, RIGHT, ENTER, ESC])
+        self.run_screen(self.screen(runtime), [END, ENTER, ENTER, ESC])
         self.assertEqual(self.settings_doc(runtime), {})
 
     def test_unreadable_settings_banner_and_inert_enter(self) -> None:
@@ -285,7 +288,7 @@ class ModelsScreenTests(_ScreenCase):
         with mock.patch.object(
             settings.SettingsStore, "admit_line", side_effect=settings.SettingsError("store says no")
         ):
-            self.run_screen(screen, [END, ENTER, ENTER, ESC])
+            self.run_screen(screen, [END, ENTER, LEFT, ENTER, ESC])
         self.assertEqual(screen.message, "store says no")
 
     def test_retired_keys_group_by_successor(self) -> None:
@@ -889,13 +892,12 @@ class SettingsScreenTests(_ScreenCase):
         self.assertIn("  › off", frame, "the BindingPicker")
         self.assertNotIn(profile.ULTRACODE, frame)
         line_items = [i for i in picker.items if i.kind == "line"]
-        admitted = {r.key for r in rows if r.agents_capable and r.source == "catalog"}
-        self.assertEqual({i.key for i in line_items}, admitted, "agents-capable lines only")
+        self.assertEqual({i.key for i in line_items}, {r.key for r in rows}, "all valid declarations stay visible")
         for item in line_items:
             row = next(r for r in rows if r.key == item.key)
             if row.mode == "client":
                 self.assertEqual(item.efforts, (), "client-effort rows run at default_effort only")
-                self.assertTrue(item.text.endswith(f"efforts {row.default_effort}"), item.text)
+                self.assertIn(f"efforts {row.default_effort}", item.text)
         # Choose a gateway-effort line and its last effort.
         target = next(i for i in line_items if len(i.efforts) > 1 and i.selectable)
         index = picker.items.index(target)
@@ -1122,10 +1124,10 @@ class OnboardingHelpTextTests(unittest.TestCase):
 
     def test_models_help_describes_the_31_screen(self) -> None:
         text = " ".join(cli_text.MODELS_HELP.split())
-        for needle in ("Q qualifies a model you added", "E edits its declaration", "V shows details",
-                       "candidates counts registry", "changed — re-admit", "route unapproved",
+        for needle in ("Q runs optional diagnostics", "E edits its declaration", "V shows details",
+                       "candidates counts registry", "optional local admission badge", "default-No consent",
                        "X removes a model you added; where profiles use it you choose a replacement first.",
-                       "Enter on a model whose provider route is not approved offers Approve now.",
+                       "Esc → G (Providers) shows its remedy.",
                        "CLI: models admit|revoke|edit|rm KEY; models qualify KEY --agents"):
             self.assertIn(needle, text)
         self.assertNotIn("custom models (direct only) follow", text)
@@ -1139,10 +1141,12 @@ class OnboardingHelpTextTests(unittest.TestCase):
         self.assertIn("Changing credentials needs a terminal outside Claude Code.", text)
 
     def test_lineup_and_picker_help(self) -> None:
-        self.assertIn("Binding a model you added (◇) in a running session is relaunch-class",
+        self.assertIn("A model you added (◇) can change LIVE when its selector is already in the proven launch fence",
                       " ".join(cli_text.LINEUP_DIALOG_HELP.split()))
         picker = " ".join(tui.BINDING_PICKER_HELP.split())
-        self.assertIn("catalog lines whose roles admit this slot and operator lines (◇)", picker)
+        self.assertIn("All valid lines appear, including New, legacy custom and operator models (◇)", picker)
+        self.assertIn("Admission badges, qualification and role recommendations do not block a binding", picker)
+        self.assertIn("unusable routes are dimmed with remedies", picker)
         self.assertNotIn("Only catalog models", picker)
 
 

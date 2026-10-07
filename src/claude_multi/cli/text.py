@@ -332,8 +332,10 @@ LINEUP_DIALOG_HELP = (
     "/reload-plugins in that session. RELAUNCH is recorded as a pending change and applies at the\n"
     "session's next resume; nothing is started from here. An ended session takes any change at its\n"
     "next resume.\n"
-    "Binding a model you added (◇) in a running session is relaunch-class: it applies at the next\n"
-    "resume; its gate is checked with current evidence now.\n"
+    "A model you added (◇) can change LIVE when its selector is already in the proven launch fence\n"
+    "and the client class/process policy stays compatible. A missing selector or changed class/window\n"
+    "requires RELAUNCH; admission and qualification are optional warnings, not permission to use it.\n"
+    "After a LIVE change use /reload-plugins and fresh agent spawns, not continued agents.\n"
     "One change per Enter; a session that changed meanwhile shows the refreshed preview instead.\n"
     "Esc cancels without writing."
 )
@@ -372,17 +374,18 @@ NEEDS_CHOICE_HELP = (
 MODELS_HELP = (
     "Every catalog line with its generation, provider, context class, declared\n"
     "efforts and how many profiles bind it, then the models you added (op) and\n"
-    "legacy custom lines (direct only). candidates counts registry and routable\n"
+    "legacy custom lines. candidates counts registry and routable\n"
     "uncataloged ids: Enter lists them, and one opens with Declare…, the model form\n"
     "filled from the registry (nothing is declared or admitted before its preview).\n"
-    "Enter admits a New line (Settings; offered at the next launch or resume),\n"
-    "revokes an admitted line, and inspects any other line: its provider, wire\n"
-    "model, selectors per effort, context bounds and their evidence.\n"
-    "Q qualifies a model you added (chosen checks, consent; evidence only);\n"
+    "Enter records or revokes an optional local admission badge on a New line,\n"
+    "even with an unavailable route; neither changes use availability or evidence.\n"
+    "On any other line Enter inspects its provider, selectors, context and evidence.\n"
+    "Q runs optional diagnostics on a model you added (chosen checks, default-No consent);\n"
     "E edits its declaration (an edit invalidates admission); V shows details.\n"
     "X removes a model you added; where profiles use it you choose a replacement first.\n"
-    "Enter on a model whose provider route is not approved offers Approve now.\n"
-    "Lifecycle of a model you added: off · admitted · changed — re-admit · route unapproved.\n"
+    "Use availability, admission, qualification and family independence are separate facts.\n"
+    "A missing/stale badge or failed/not-run diagnostic warns, not disables.\n"
+    "A disabled provider or unusable route still blocks use: Esc → G (Providers) shows its remedy.\n"
     "CLI: models admit|revoke|edit|rm KEY; models qualify KEY --agents.\n"
     "Retired keys map to their successor; running sessions retain continuity\n"
     "aliases. An upstream retirement date within 30 days shows on the selected\n"
@@ -398,7 +401,8 @@ CANDIDATES_HELP = (
     "Model ids the pinned registry lists, or the local gateway serves, that no line describes yet.\n"
     "They are observations, not offers: Enter opens one with what the registry states, and Declare… "
     "opens the model form filled with it. You review the declaration before anything is written; a "
-    "declared model stays off until you admit it. Nothing here sends a request to a provider."
+    "valid declared model is selectable where its provider/route allows, without admission or diagnostics. "
+    "Nothing here sends a request to a provider."
 )
 CANDIDATE_TITLE = "candidate — {wire}"
 CANDIDATE_ADVISORY = "Registry figures are stated by the registry, not validated."
@@ -406,26 +410,18 @@ CANDIDATE_DECLARE = ("Enter — Declare… on {provider}: the model form, filled
                      "Esc goes back. Nothing is written before the form's preview.")
 CANDIDATE_UNATTRIBUTED = ("This id cannot be attributed to one provider, so it is not declared from here: "
                           "G → A on its provider adds it by hand.")
-MODELS_KEYBAR_NEW = (("Enter", "admit"), ("Q", "qualify"), ("E", "edit"), ("X", "remove"), ("V", "details"),
+MODELS_KEYBAR_NEW = (("Enter", "admit badge"), ("Q", "diagnostics"), ("E", "edit"), ("X", "remove"), ("V", "details"),
                      ("?", "help"), ("Esc", "back"))
-MODELS_KEYBAR_ADMITTED = (("Enter", "revoke"), ("Q", "qualify"), ("E", "edit"), ("X", "remove"), ("V", "details"),
+MODELS_KEYBAR_ADMITTED = (("Enter", "revoke badge"), ("Q", "diagnostics"), ("E", "edit"), ("X", "remove"), ("V", "details"),
                           ("?", "help"), ("Esc", "back"))
-MODELS_KEYBAR_UNAPPROVED = (("Enter", "approve route"), ("E", "edit"), ("X", "remove"), ("V", "details"),
-                            ("?", "help"), ("Esc", "back"))
-MODELS_APPROVE_TITLE = "Route approval needed"
-MODELS_APPROVE_BODY = ("{key} uses your provider {pid}, whose route is not approved yet. Approving lets the "
-                       "gateway send its API key to {origin}; nothing is sent now.")
-MODELS_APPROVE_BUTTONS = (("Cancel", False), ("Approve now", True))
-MODELS_X_CATALOG = ("Shipped models cannot be removed — Enter revokes a New model; G → Space turns a provider "
-                    "off.")
+MODELS_KEYBAR_UNAPPROVED = MODELS_KEYBAR_NEW
+MODELS_X_CATALOG = ("Shipped models cannot be removed — G → Space turns a provider off. "
+                    "Enter on a New model changes only its optional admission badge.")
 REMOVE_LINE_TITLE = "Remove model {key}?"
 SUCCESSOR_TITLE = "replace {key} in {n} place(s) with"
 SUCCESSOR_ITEM = "{display} · {provider} · {family}"
 SUCCESSOR_CONFIRM_TITLE = "remove {key} — replacements"
 SUCCESSOR_CANCEL = "Cancel"
-ADMIT_APPLY_TITLE = "The gateway is not serving your latest changes"
-ADMIT_APPLY_BODY = "Admitting {key} needs the gateway to serve it first."
-ADMIT_APPLY_BUTTONS = (("Cancel", False), ("Apply and retry", True))
 MODELS_MIN_COLS = 60
 MODELS_MIN_WIDTHS = (10, 12, 8, 4, 8, 7)
 # Writes a read-only Runtime refuses (``allow_state_writes``), every screen.
@@ -453,14 +449,15 @@ DIRECT_GATEWAY_BINDING = ("W", "gateway")
 DIRECT_EMPTY = "(no model can lead a direct session here — G connects a provider)"
 # The /model line is byte-identical to the card help's.
 DIRECT_HELP = (
-    "No profile is saved. The session is recorded and resumable. Every offered\n"
-    "lead-capable model is listed, custom models too. Gateway-effort models carry\n"
+    "No profile is saved. The session is recorded and resumable. Every valid\n"
+    "model is listed, including legacy custom models; unavailable rows name a remedy.\n"
+    "Admission and diagnostics are optional. Gateway-effort models carry\n"
     "the effort in the model name: ← → picks it. In the session, /model switches\n"
     "among models of the same class (press s to keep the change to this session).\n"
     "/model lists only the lead set; another provider family asks first (Alt+P and "
     "/config block instead); a model outside the set is refused — relaunch with a "
     "profile whose lead is that model.\n"
-    "Tab saves the choice as a lead-only profile (not for custom models): it is then\n"
+    "Tab saves the choice as a lead-only profile (including custom models): it is then\n"
     "listed in Profiles and launched from the card like any profile, while a launch\n"
     "from here stays a direct session with no profile. A direct session can gain\n"
     "agents later with /cm profile <name> or sessions T.\n"
@@ -471,7 +468,7 @@ DIRECT_MIN_COLS = 44
 DIRECT_SAVE_TITLE = "save as profile — name:"
 DIRECT_SAVED = "saved profile {name} (lead only)"
 DIRECT_CUSTOM_REFUSAL = (
-    "lead.model: custom model {key!r} cannot be bound in a profile (use ad-hoc direct)"
+    "legacy custom model {key!r} can bind a profile; check its provider/route configuration if unavailable"
 )
 # Enter's recheck of a marked row.
 DIRECT_NOT_LAUNCHED = "not launched: the provider's API key is missing (G → K)"
@@ -484,9 +481,10 @@ DIRECT_SIGNIN_BODY = ("{kind} is not signed in on this computer, so this model f
                       "request. Sign in now runs the sign-in in this terminal (personal use).")
 DIRECT_SIGNIN_BUTTONS = (("Cancel", None), ("Launch anyway", "launch"), ("Sign in now", "signin"))
 DIRECT_SIGNIN_CHOOSE_BUTTONS = (("Cancel", None), ("Choose anyway", "launch"), ("Sign in now", "signin"))
-DIRECT_KEY_MISSING_TITLE = "API key missing"
-DIRECT_KEY_MISSING_BODY = "{display} has no API key on this computer. G → K sets it."
-DIRECT_KEY_MISSING_BUTTONS = (("Close", None),)
+DIRECT_KEY_MISSING_TITLE = "API key missing — requests may fail"
+DIRECT_KEY_MISSING_BODY = ("{display} has no API key on this computer; requests may fail. G → K sets it. "
+                           "Launch anyway? This does not save a key or change the provider's route.")
+DIRECT_KEY_MISSING_BUTTONS = (("Cancel", False), ("Launch anyway", True))
 DIRECT_SECRET_FILE_ERROR = "the key file is unavailable or invalid"
 _DIRECT_MARK_NO_SECRET = "key missing"
 _DIRECT_MARK_SIGNIN = "not signed in"
@@ -675,15 +673,18 @@ PRESET_FORM_HELP = (
     "tested them. You approve where the key is sent before anything is saved."
 )
 ADD_MODELS_TITLE = "add models for {id}?"
-NO_MODELS_HEAD = "{id} has no models yet; a profile can use it once one of its models is admitted."
+NO_MODELS_HEAD = "{id} has no models yet; declare one to select in a profile. Admission is optional."
 NO_MODELS_LATER = "{id} has no models yet — A on Providers adds them (claude-multi discover {id} --add WIRE)"
-NO_MODELS_NOT_ADMITTED = ("{id}: added {keys}, not admitted yet — Enter on Models admits "
-                          "(claude-multi models admit KEY)")
-NO_MODELS_ADMITTED = "{id}: admitted {keys} — a profile can use it now"
+NO_MODELS_NOT_ADMITTED = ("P (Profiles) selects normally. Optional diagnostics: M → Q. "
+                          "{id}: added {keys}, not admitted; provider/route restrictions still apply. "
+                          "CLI diagnostics: claude-multi models qualify KEY --smoke.")
+NO_MODELS_ADMITTED = ("{id}: admitted {keys} (badge only) — P (Profiles) selects it normally; "
+                     "provider/route restrictions still apply. Optional diagnostics: M → Q.")
 ADMIT_NOW_TITLE = "Admit {key} now?"
-ADMIT_NOW_BODY = ("Admission checks {key} with one test request (you confirm it first, it may be billed); "
-                  "an admitted model can lead a profile.")
-ADMIT_NOW_BUTTONS = (("Admit", True), ("Later", False))
+ADMIT_NOW_BODY = ("Record an optional local admission badge for {key}? No test request is sent. "
+                  "Skip to select it normally in Profiles; provider/route restrictions still apply. "
+                  "Optional diagnostics are on Models (Q).")
+ADMIT_NOW_BUTTONS = (("Skip", False), ("Admit badge", True))
 ADD_MODELS_ITEMS = ("List its models (sends one request; you confirm first)", "Enter a model by hand", "Later")
 # The new-provider form's key-name check, before any command or preview.
 PROVIDER_SECRET_NAME_TITLE = "new provider — not declared"
@@ -1020,7 +1021,7 @@ PICKER_HELP = (
     "local gateway and sends nothing to the provider. Account sign-ins are for your own, personal\n"
     "use and run in this terminal. Your own endpoint: Anthropic-compatible is recommended when the\n"
     "vendor documents it. A server on your network needs no key. The family is who makes the\n"
-    "models; reviews prefer a family other than the writers'."
+    "models; reviews prefer recognized different families. An unrecognized label does not prove independence."
 )
 PICKER_HELP_TITLE = "connect a provider — help"
 PICKER_FAMILY = "family {family}"

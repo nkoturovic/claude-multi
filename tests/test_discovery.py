@@ -726,7 +726,7 @@ class DriftTests(DiscoveryCLICase):
 class DeclarationTests(DiscoveryCLICase):
     URL = "https://api.acme.example/anthropic/v1/models"
 
-    def test_add_declares_new_off_with_listing_provenance(self) -> None:
+    def test_add_declares_not_admitted_with_listing_provenance(self) -> None:
         self.approve_acme()
         self.listing(self.URL, [
             {"id": "acme-fresh", "display_name": "Acme Fresh", "context_length": 262144,
@@ -735,7 +735,7 @@ class DeclarationTests(DiscoveryCLICase):
         ])
         code, out, err = self.op(["discover", "acme", "--add", "acme-fresh"], "y\n")
         self.assertEqual(code, 0, err)
-        self.assertIn("declared custom-acme-fresh — New · Off · selectors custom-acme-fresh-high[1m]", out)
+        self.assertIn("declared custom-acme-fresh — New · not admitted · selectors custom-acme-fresh-high[1m]", out)
         line = json.loads((operator_mod.providers_dir(self.env) / "acme.json").read_text())["lines"][
             "custom-acme-fresh"]
         self.assertEqual(line, {

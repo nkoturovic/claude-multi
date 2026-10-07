@@ -13,7 +13,9 @@ engine exists. What lives here is repair:
   ``lead-set.json`` bytes) are restaged from the live scope byte-for-byte
   whenever their ``launch_digest`` equals the record's ``launch_fence``
   the running process pinned exactly those, so a catalog that gained a
-  line never widens a live session's fence.
+  line never widens a live session's fence. A 1.0.0 record also retains
+  its diagnostic files until resume when they exactly match that release's
+  trusted presentation projection; no executable policy is exempted.
 - :func:`converge` (``doctor --repair``/``--repair-all``) loads the record
   under its lifecycle lock (inside the shared migration hold), fences a
   generation a crashed live apply published, and replaces a drifted
@@ -108,6 +110,8 @@ class ExpectedPlan:
     # keep the recorded selector until resume: ``(slot label, recorded,
     # installed)`` rows (doctor's pending-move notice; Attention, never drift).
     agent_class_kept: tuple[tuple[str, str, str], ...] = ()
+    # Proven 1.0.0 presentation retained until resume; never executable policy.
+    diagnostics_kept: bool = False
 
 
 def agent_class_rows(
@@ -249,6 +253,86 @@ def _launch_lineup_files(
         scope.LINEUP_MD: lineup_md,
         scope.LINEUP_GEN: scope.lineup_gen_line(record["lineup_generation"], lineup_md).encode("utf-8"),
     }
+
+
+def _legacy_diagnostic_lineup(lineup: profile.ResolvedLineup) -> profile.ResolvedLineup:
+    """The deterministic 1.0.0 review table and checks, not its use policy.
+
+    That renderer treated every unequal non-unknown family as independent,
+    and every fallback as same-family. Reconstruct its reviewer choices as
+    well as its labels; simply accepting an old hash would trust edited text.
+    Bindings, roles, prompts, and launch-time settings are never projected.
+    """
+
+    reviewers = {rid: lineup.agents[rid].binding.family
+                 for rid in profile.REVIEWER_IDS if rid in lineup.agents}
+    rows = []
+    for row in lineup.routing.rows:
+        candidates = [rid for rid, family in reviewers.items()
+                      if family != profile.UNKNOWN_FAMILY and row.family != profile.UNKNOWN_FAMILY
+                      and family != row.family]
+        same = not candidates
+        candidates = candidates or list(reviewers)
+
+        def pick(preferred: str) -> profile.RouteCell:
+            chosen = preferred if preferred in candidates else next(iter(candidates), None)
+            return profile.RouteCell(
+                chosen, same and chosen is not None,
+                not same and preferred in reviewers and preferred not in candidates and chosen is not None,
+                "no reviewer bound" if not reviewers else None,
+            )
+
+        normal = pick("cm-reviewer-strong" if row.author in (profile.LEAD_ROLE, "cm-implementer-strong")
+                      else "cm-reviewer")
+        if reviewers and row.author == "cm-implementer-light":
+            normal = profile.RouteCell(None, False, False, "its check")
+        rows.append(profile.RouteRow(row.author, row.family, normal, pick("cm-reviewer-strong")))
+    same_authors = tuple(row.author for row in rows if row.normal.same_family or row.high.same_family)
+    families = {row.family for row in rows} | set(reviewers.values())
+    routing = profile.Routing(tuple(rows), same_authors, bool(reviewers) and len(families) == 1)
+    warnings = []
+    if same_authors:
+        if routing.single_family:
+            message, compact = "review same-family (reduced independence)", "review same-family"
+        else:
+            labels = ", ".join(profile.label(author) for author in same_authors)
+            message = f"review same-family (reduced independence) for {labels}"
+            compact = f"same-family review: {labels}"
+        warnings.append(profile.Finding("same-family-review", None, message, compact))
+    warnings.extend(finding for finding in lineup.warnings
+                    if finding.code != "same-family-review" and finding.code not in profile.MODEL_WARNING_CODES)
+    return dataclasses.replace(lineup, routing=routing, warnings=tuple(warnings))
+
+
+def _legacy_lineup_files(
+    record: dict[str, Any],
+    lineup: profile.ResolvedLineup,
+    eff: settings_mod.Effective,
+    live: Path | None,
+    live_settings: Mapping[str, Any],
+    live_lead_set: bytes,
+    worktree_available: bool,
+    current: Mapping[str, bytes],
+) -> dict[str, bytes]:
+    """Accept only exact trusted legacy bytes, after the launch fence is proven.
+
+    A self-consistent edited md/gen pair is not proof. Neither are unreadable,
+    symlinked or non-private files. Other scope files retain their independent
+    current compile expectations, so this cannot conceal binding/policy drift.
+    """
+
+    if record.get("launcher_version") != "1.0.0" or live is None:
+        return {}
+    legacy = _launch_lineup_files(
+        record, _legacy_diagnostic_lineup(lineup), eff, live_settings, live_lead_set, worktree_available)
+    if not legacy or legacy == current:
+        return {}
+    try:
+        if all(state.read_private(live / name) == data for name, data in legacy.items()):
+            return legacy
+    except (OSError, state.StateError):
+        pass
+    return {}
 
 
 def _launch_items(settings: Mapping[str, Any]) -> dict[str, Any]:
@@ -458,15 +542,18 @@ def expected_plan(
         settings_out.update(_launch_items(live_settings))
         if bypass:
             settings_out["env"] = {**settings_out.get("env", {}), **bypass}
+        lineup_files = _launch_lineup_files(
+            record, lineup, eff, live_settings, live_lead_set, worktree_available)
+        legacy_files = _legacy_lineup_files(
+            record, lineup, eff, live, live_settings, live_lead_set, worktree_available, lineup_files)
         plan = scope.ScopePlan(
             agent_files=dict(catalog_plan.agent_files),
             settings=settings_out,
             other_files={
                 **catalog_plan.other_files,
                 scope.LEAD_SET_JSON: bytes(live_lead_set),
-                **_launch_lineup_files(
-                    record, lineup, eff, live_settings, live_lead_set, worktree_available
-                ),
+                **lineup_files,
+                **legacy_files,
             },
         )
         # What the installed catalog compiles for the LAUNCH lead (proven by
@@ -510,7 +597,8 @@ def expected_plan(
         ):
             differs = True
         return ExpectedPlan(plan, None, catalog_plan, True, None, differs, lead_switched,
-                            preference_launch_differs=preference_only, agent_class_kept=class_kept)
+                            preference_launch_differs=preference_only, agent_class_kept=class_kept,
+                            diagnostics_kept=bool(legacy_files))
 
     if not why:
         why = "launch-time items were edited after launch"
