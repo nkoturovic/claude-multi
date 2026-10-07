@@ -11,6 +11,9 @@ proxy-based updates, token-refresh shutdown and Mistral-style thinking responses
 
 ### Added
 
+- Model declaration commands accept an explicit per-model family label. The TUI
+  model form supports editable display names and derives a stable local key when
+  a new declaration leaves it blank; existing keys remain unchanged.
 - OpenRouter discovery preserves every public model and offers a separately
   confirmed account-filtered listing. The CLI and TUI share pricing, context,
   tool-support and source labels. Stealth models are distinguished from routers
@@ -40,6 +43,9 @@ proxy-based updates, token-refresh shutdown and Mistral-style thinking responses
 
 ### Fixed
 
+- Step-by-step TUI text forms show the actual insertion point and scroll long
+  values into view, including a visible end-of-input position in a full field.
+  Cursor cleanup preserves hidden-field handling and choice screens.
 - Release checks and downloads honour the process HTTPS proxy and bypass
   environment, with sanitized connection errors. TLS, release-host, redirect
   and signature checks remain in place. This uses the updater process's
