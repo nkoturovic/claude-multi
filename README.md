@@ -11,7 +11,7 @@ runs. Your own Claude Code installation is not replaced or reconfigured.
 claude-multi is an independent project, not affiliated with or endorsed
 by Anthropic or OpenAI.
 
-**Latest release:** 1.1.0-dev (the first release was 1.0.0). Downloads are on
+**Latest release:** 1.1.0 (the first release was 1.0.0). Downloads are on
 [GitHub Releases](https://github.com/nkoturovic/claude-multi/releases/latest)
 ([CHANGELOG.md](CHANGELOG.md)).
 

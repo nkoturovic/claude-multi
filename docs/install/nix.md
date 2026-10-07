@@ -26,11 +26,11 @@ nix profile install github:nkoturovic/claude-multi
 ```
 
 Those references follow the repository's default branch. To select the
-1.0.0 release instead, use its tag:
+1.1.0 release instead, use its tag:
 
 ```bash
-nix run github:nkoturovic/claude-multi/v1.1.0-dev
-nix profile install github:nkoturovic/claude-multi/v1.1.0-dev
+nix run github:nkoturovic/claude-multi/v1.1.0
+nix profile install github:nkoturovic/claude-multi/v1.1.0
 ```
 
 The package puts `claude-multi` and `claude-multi-proxy` in `bin/`, the
