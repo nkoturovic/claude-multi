@@ -2457,11 +2457,13 @@ class ListingDescriptorTests(unittest.TestCase):
                     "context_length": 500000,
                     "max_completion_tokens": 64000,
                     "think_efforts": ["high", "xhigh"],
+                    "openrouter": True, "pricing": {}, "tools": None, "modality": None,
                 },
                 {
                     "id": "deepseek/deepseek-v4-flash",
                     "display_name": "DeepSeek V4 Flash",
                     "context_length": 1000000,
+                    "openrouter": True, "pricing": {}, "tools": None, "modality": None,
                 },
             ],
         )
@@ -2646,7 +2648,8 @@ class ListingParseBoundaryTests(unittest.TestCase):
             )
         self.assertEqual(
             entries,
-            [{"id": "m1", "display_name": "Valid", "context_length": None}],
+            [{"id": "m1", "display_name": "Valid", "context_length": None,
+              "openrouter": True, "pricing": {}, "tools": None, "modality": None}],
         )
 
     def test_descriptors_are_immutable(self) -> None:

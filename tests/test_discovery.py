@@ -852,6 +852,7 @@ class PurityTests(DiscoveryCLICase):
             "  served candidate · owned_by someone (advisory) · created unknown",
             "other registry channels hidden: gemini — --all shows them",
             "next: claude-multi models add PROVIDER WIRE --context N --source registry",
+            *discovery.OPENROUTER_HELP.splitlines(),
         ])
         self.assertEqual(self.sent, [])
         code, out, _err = self.op(["models", "--candidates", "--all"])
@@ -1098,7 +1099,7 @@ class KeyedDiscoveryTests(unittest.TestCase):
         after = discovery.plan_provider("openrouter", docs=docs, layer=operator_mod.empty_layer(),
                                         descriptors=proxy._LISTING_SUPPORT)
         self.assertEqual(before, after)
-        self.assertEqual((after.auth, after.shape, after.secret_name), ("none", "openai", None))
+        self.assertEqual((after.auth, after.shape, after.secret_name), ("none", "openrouter", None))
         self.assertEqual(docs["providers"]["providers"]["openrouter"]["adapter"], "cliproxy-claude-compatible-v1")
 
 

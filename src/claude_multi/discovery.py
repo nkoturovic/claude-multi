@@ -342,6 +342,34 @@ def doctor_info_lines(by_channel: Mapping[str, Sequence[str]], unattributed: Seq
 
 
 # ------------------------------------------------------------ listing plans
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+STEALTH_CAUTION = "stealth: maker hidden; pre-release; may retain prompts; may disappear"
+OPENROUTER_HELP = (
+    "OpenRouter listing: claude-multi discover openrouter (Providers → OpenRouter → A).\n"
+    "Regular models remain visible; stealth/<name> models have a hidden maker, are pre-release,\n"
+    "may retain prompts and may disappear. The public list may omit them; with a key,\n"
+    "a separately confirmed account-filtered listing adds account-only rows.\n"
+    "Add an id directly: claude-multi discover openrouter --add stealth/space-bunny-alpha.\n"
+    "Variant ids such as :free are listed but not addable in this release."
+)
+
+
+def stealth_id(wire: str) -> bool:
+    return len(wire) <= 128 and bool(re.fullmatch(r"stealth/[a-z0-9][a-z0-9._-]*", wire))
+
+
+def merge_listings(public: Sequence[Mapping[str, Any]], account: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
+    """Public rows win byte-for-byte; account-only observations only add rows."""
+
+    rows = list(public)
+    seen = {entry["id"] for entry in public}
+    for entry in account:
+        if entry["id"] not in seen:
+            rows.append({**entry, "account_only": True})
+            seen.add(entry["id"])
+    return tuple(rows)
+
+
 LISTING_DEADLINE_SECONDS = 20.0
 LISTING_MAX_BYTES = 4 * 1024 * 1024
 FEED_URL = "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/models.json"
@@ -384,6 +412,8 @@ class ListingCall:
     verified: bool
     route: str  # catalog | approved | keyless
     fingerprint: str
+    account: bool = False
+    wire: str | None = None
 
     @property
     def keyed(self) -> bool:
@@ -420,6 +450,7 @@ def plan_provider(
     layer: operator_mod.OperatorLayer,
     descriptors: Mapping[str, Mapping[str, str]],
     transports: Mapping[str, str] | None = None,
+    account: bool = False, wire: str | None = None,
 ) -> ListingCall:
     """The one listing request for ``provider_id`` or :class:`PlanRefusal`.
 
@@ -430,6 +461,11 @@ def plan_provider(
 
     providers = docs["providers"]["providers"]
     resolved = layer.providers.get(provider_id)
+    if account or wire is not None:
+        if provider_id != "openrouter" or resolved is not None or (account and wire is not None):
+            raise PlanRefusal(provider_id, "this listing is only available on the built-in OpenRouter provider")
+        if wire is not None and not stealth_id(wire):
+            raise PlanRefusal(provider_id, "use an addable stealth/<name> id (no variant suffix)")
     if resolved is not None:
         return _plan_t2(resolved, layer, docs)
     provider = providers.get(provider_id)
@@ -439,7 +475,11 @@ def plan_provider(
         # A T2 provider whose declaration does not resolve now.
         raise PlanRefusal(provider_id, f"discover {provider_id}: the declaration does not resolve — "
                                        "claude-multi providers validate")
-    descriptor = descriptors.get(provider_id, {})
+    descriptor = dict(descriptors.get(provider_id, {}))
+    if account:
+        descriptor.update(url=OPENROUTER_MODELS_URL + "/user", auth="bearer", shape="openrouter", status="attempt")
+    elif wire is not None:
+        descriptor.update(url=f"{OPENROUTER_MODELS_URL}/{wire}/endpoints", auth="none", shape="openrouter-model")
     transport = provider["transport"]
     if descriptor.get("status") == "unsupported":
         note = descriptor.get("note") or "no listing endpoint is known"
@@ -482,7 +522,7 @@ def plan_provider(
     call = {"provider_id": provider_id, "tier": "T1", "kind": transport["kind"], "url": url, "shape": shape,
             "auth": auth, "header": header, "secret_name": secret,
             "verified": descriptor.get("status", "attempt") == "verified", "route": "catalog"}
-    return ListingCall(**call, fingerprint=_fingerprint({**call, "provider": provider}))
+    return ListingCall(**call, fingerprint=_fingerprint({**call, "provider": provider}), account=account, wire=wire)
 
 
 def _plan_t2(resolved: operator_mod.ResolvedProvider, layer: operator_mod.OperatorLayer,
@@ -602,6 +642,10 @@ def consent_text(calls: Sequence[ListingCall], skipped: Sequence[Skipped] = (), 
         lines.append(f"     {auth_text(call)}")
         if not call.verified:
             lines.append("     endpoint: unverified (an attempt; a failure here is not a refusal by the provider)")
+        if call.account:
+            lines.append("     account-filtered by provider preferences, privacy settings and guardrails; may omit models")
+        if call.wire is not None:
+            lines.append(f"     {STEALTH_CAUTION}")
         lines.append(f"     why: {LISTING_WHY}")
         lines.append(f"     caps: {LISTING_CAPS}")
     lines.append("Proceed with these listed requests? [y/N] ")
@@ -790,6 +834,27 @@ def entry_text(marked: MarkedEntry, *, codex: Mapping[str, Any] | None = None) -
         value = entry.get(name)
         if value:
             parts.append(f" {label}={value}")
+    if entry.get("openrouter"):
+        wire = entry["id"]
+        if wire.startswith("stealth/"):
+            parts.append(f" [{STEALTH_CAUTION}; family=unknown]")
+        elif wire.startswith("openrouter/"):
+            parts.append(" [router]")
+        if entry.get("account_only"):
+            parts.append(" [account-only]")
+        if ":" in wire:
+            parts.append(" [not addable in this release]")
+        if not isinstance(context, int) or isinstance(context, bool) or context <= 0:
+            parts.append(" context=unknown")
+        pricing = entry.get("pricing") or {}
+        if pricing and all(value == "0" for value in pricing.values()) and len(pricing) == 2:
+            parts.append(" price=free (advertised prompt/completion)")
+        else:
+            parts.append(f" price/token: prompt={pricing.get('prompt', 'unknown')} "
+                         f"completion={pricing.get('completion', 'unknown')}")
+        tools = entry.get("tools")
+        parts.append(" tools=" + ("yes" if tools is True else "no" if tools is False else "unknown"))
+        parts.append(f" modality={entry.get('modality') or 'unknown'}")
     return "".join(parts)
 
 
@@ -893,8 +958,17 @@ def declaration_line(
     display = display[:96] if isinstance(display, str) and display.strip() else entry["id"]
     line: dict[str, Any] = {"wire_model": entry["id"], "display": display, "efforts": efforts,
                             "default_effort": default, "context": context}
+    notes = []
+    if entry.get("openrouter") and entry["id"].startswith("stealth/"):
+        line["family"] = "unknown"
+        tools = entry.get("tools")
+        notes.append(STEALTH_CAUTION)
+        notes.append(f"Listing-stated modality: {entry.get('modality') or 'unknown'}; "
+                     f"tools: {'yes' if tools is True else 'no' if tools is False else 'unknown'}")
     if over_listed:
-        line["notes"] = f"over-listed: {over_listed}"[:512]
+        notes.append(f"over-listed: {over_listed}")
+    if notes:
+        line["notes"] = "; ".join(notes)[:512]
     return line
 
 

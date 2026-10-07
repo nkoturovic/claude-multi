@@ -4,16 +4,16 @@
   Candidates — advisory only; nothing declared or admitted
   Gateway observation unavailable; showing pinned-registry candidates only.
   No candidates.
-
-
-
-
-
-
-
-
-
-
+  OpenRouter listing: claude-multi discover openrouter (Providers → OpenRouter
+  → A).
+  Regular models remain visible; stealth/<name> models have a hidden maker,
+  are pre-release,
+  may retain prompts and may disappear. The public list may omit them; with a
+  key,
+  a separately confirmed account-filtered listing adds account-only rows.
+  Add an id directly: claude-multi discover openrouter --add stealth/space-
+  bunny-alpha.
+  Variant ids such as :free are listed but not addable in this release.
 
 
 

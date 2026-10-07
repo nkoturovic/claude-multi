@@ -1,7 +1,7 @@
 
   Listing unavailable — manual entry is available
   ─────────────────────────────────────────────────────────────────────────────
-  fixture listing refused
+  OSError
 
 
 

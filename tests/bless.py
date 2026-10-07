@@ -106,6 +106,7 @@ from test_migrate_profiles import profile_migrate_golden_files
 from _tui_render import tui_golden_files
 from test_openai_compat_keyed import KEYED_RENDER_GOLDEN, keyed_render_golden_bytes
 from test_help import help_golden_files
+from test_openrouter_discovery import listing_golden
 
 
 # Goldens are generated from the frozen fixture asset root, never from
@@ -429,6 +430,8 @@ def plan() -> dict[Path, bytes]:
 
     for name, data in help_golden_files().items():
         _write(V4_GOLDENS / "help" / name, data)
+
+    _write(GOLDENS_ROOT / "discovery/openrouter-listing.txt", listing_golden().encode())
 
     # The gateway render golden.
     _bless_render()

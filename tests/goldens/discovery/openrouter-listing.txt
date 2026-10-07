@@ -1,0 +1,7 @@
+vendor/regular	candidate context=200000 created=2025-06-15 price/token: prompt=0.000001 completion=0.000002 tools=yes modality=text+image->text
+vendor/bare	candidate context=unknown price/token: prompt=unknown completion=unknown tools=unknown modality=unknown
+vendor/free:free	candidate [not addable in this release] context=unknown price=free (advertised prompt/completion) tools=no modality=unknown
+openrouter/auto	candidate context=200000 [router] price/token: prompt=unknown completion=unknown tools=unknown modality=unknown
+vendor/malformed	candidate context=unknown price/token: prompt=unknown completion=unknown tools=unknown modality=unknown
+stealth/space-bunny-alpha	candidate context=262144 [stealth: maker hidden; pre-release; may retain prompts; may disappear; family=unknown] [account-only] price=free (advertised prompt/completion) tools=yes modality=text+image+video->text
+vendor/account-only	candidate context=128000 [account-only] price/token: prompt=unknown completion=unknown tools=unknown modality=unknown

@@ -1,0 +1,13 @@
+{
+  "data": {
+    "id": "stealth/space-bunny-alpha",
+    "name": "Space Bunny Alpha",
+    "architecture": {"modality": "text+image+video->text"},
+    "endpoints": [{
+      "provider_name": "Not retained",
+      "context_length": 262144,
+      "supported_parameters": ["tools", "temperature"],
+      "arbitrary_metadata": "Not retained"
+    }]
+  }
+}

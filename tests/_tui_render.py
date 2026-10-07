@@ -446,6 +446,17 @@ def checkbox_golden(root: Path) -> str:
         return last_frame(win, "advertised models")
 
 
+def openrouter_listing_golden(root: Path) -> str:
+    from test_openrouter_discovery import ACCOUNT, body
+
+    def listing(url, headers, **caps):
+        return body("account" if url == ACCOUNT else "public")
+
+    with onboarding_actions(["\n", ESC], listing=listing) as (_case, action, win):
+        action.add_models("openrouter")
+        return last_frame(win, "advertised models")
+
+
 def listing_unavailable_golden(root: Path) -> str:
     def refuse(url, headers, **caps) -> bytes:
         raise OSError("fixture listing refused")
@@ -846,6 +857,7 @@ GOLDENS: dict[str, Callable[[Path], str]] = {
         "qualify — choose checks", views.qualification_form_fields(), footer=views.QUALIFY_FORM_FOOTER)),
     "provider-kind": provider_kind_golden,
     "onboarding-listing": checkbox_golden,
+    "openrouter-listing": openrouter_listing_golden,
     "listing-unavailable": listing_unavailable_golden,
     "operator-changed-readmit": lambda root: operator_lifecycle_golden(root, state="changed"),
     "operator-route-unapproved": lambda root: operator_lifecycle_golden(root, state="unapproved"),

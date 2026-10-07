@@ -89,8 +89,11 @@ class OfflineJourneys(JourneyFixture):
     def test_openrouter_listing_declare_admit_qualify_bind_launch(self):
         with mock.patch.object(consent, "stdio_ttys", return_value=True):
             call, result = onboarding.listing(self.runtime, "openrouter", confirm=self.confirm)
-        self.assertEqual(len(self.listing_calls), 1)
+        self.assertEqual(len(self.listing_calls), 2)
         self.assertNotIn("Authorization", self.listing_calls[0][1])
+        self.assertEqual(self.listing_calls[1][0], "https://openrouter.ai/api/v1/models/user")
+        self.assertEqual(self.listing_calls[1][1], {"Authorization": "Bearer fixture-only-dummy"})
+        self.assertEqual(len(self.confirmations), 2)
         draft = onboarding.line_draft(self.runtime, "openrouter", result.entries[0], call)
         self.assertEqual(draft["context"]["source"], "listing")
         key = self.declare()
@@ -332,7 +335,7 @@ class ListingCheckboxTests(JourneyFixture):
             action.add_models("openrouter")
         picker = [frame for frame in win.frames if "advertised models" in frame]
         rows = [next(line for line in frame.splitlines() if "vendor/fixture-reviewer" in line) for frame in picker]
-        self.assertEqual([row.strip() for row in rows],
+        self.assertEqual([row.strip().split("  candidate", 1)[0] for row in rows],
                          ["> [ ] vendor/fixture-reviewer", "> [x] vendor/fixture-reviewer",
                           "> [ ] vendor/fixture-reviewer", "> [x] vendor/fixture-reviewer"])
         self.assertEqual(declared, ["custom-vendor-fixture-reviewer"])

@@ -500,7 +500,8 @@ class _ModelsScreen:
         while True:
             index = screens_common._run_choice_list(
                 win, self.palette, cli_text.CANDIDATES_TITLE, labels, help_title="candidates — help",
-                help_text=cli_text.CANDIDATES_HELP, footer=cli_text.CANDIDATES_KEYBAR, selected=selected)
+                help_text=cli_text.CANDIDATES_HELP + "\n\n" + discovery.OPENROUTER_HELP,
+                footer=cli_text.CANDIDATES_KEYBAR, selected=selected)
             if index is None:
                 return
             selected = index
@@ -636,4 +637,4 @@ def _candidate_lines(row: Any) -> tuple[str, ...]:
 
 
 def _candidate_footer() -> tuple[str, ...]:
-    return (cli_text.CANDIDATE_ADVISORY,)
+    return (cli_text.CANDIDATE_ADVISORY, *discovery.OPENROUTER_HELP.splitlines())

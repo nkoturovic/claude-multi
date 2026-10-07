@@ -175,6 +175,7 @@ def _models_candidates(runtime: runtime_mod.Runtime, include_all: bool, output_s
         report(output_stream, "No candidates.")
     else:
         report(output_stream, CANDIDATES_NEXT)
+    report(output_stream, discovery.OPENROUTER_HELP)
     return 0
 
 

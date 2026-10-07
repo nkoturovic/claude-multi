@@ -1,7 +1,7 @@
   advertised models — nothing admitted
 
-  > [x] vendor/fixture-reviewer
-    [ ] vendor/fixture-assistant
+  > [x] vendor/fixture-reviewer  candidate context=200000 price/token: prompt=u
+    [ ] vendor/fixture-assistant  candidate context=200000 price/token: prompt=
 
 
 
