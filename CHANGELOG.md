@@ -4,6 +4,92 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] — 2026-10-07
+
+More permissive model selection, OpenRouter stealth discovery, and fixes for
+proxy-based updates, token-refresh shutdown and Mistral-style thinking responses.
+
+### Added
+
+- Model declaration commands accept an explicit per-model family label. The TUI
+  model form supports editable display names and derives a stable local key when
+  a new declaration leaves it blank; existing keys remain unchanged.
+- OpenRouter discovery preserves every public model and offers a separately
+  confirmed account-filtered listing. The CLI and TUI share pricing, context,
+  tool-support and source labels. Stealth models are distinguished from routers
+  and carry maker-hidden, pre-release, prompt-retention and availability cautions.
+- Known `stealth/<name>` models can be added through discovery or the Providers
+  screen using anonymous metadata lookup. Missing facts remain unknown;
+  suffixed ids such as `:free` stay visible but are not addable in this release.
+  Discovery never enables, admits, binds or chooses a default automatically.
+
+### Changed
+
+- Admission and qualification are optional attestations, separate from permission
+  to use a route. Valid model lines on enabled, approved routes remain selectable
+  without those badges; missing, failed or stale evidence is shown as a warning.
+  Admission and revocation change metadata only and make no inference request.
+- Any bounded, printable model-family label is accepted. An unrecognized label
+  produces an "independence unknown" review label rather than a binding refusal.
+  Explicit lead, agent and workflow-default bindings can override capability
+  and role recommendations, with warnings.
+- Provider context-window mismatches are capacity warnings that report the
+  actual agent class, shared window and compaction trigger. Route approval,
+  secret and consent checks, exact launch fences, native selector and effort
+  constraints, disabled providers and role isolation remain enforced.
+- The managed Claude Code pin is 2.1.292, with refreshed offline client evidence,
+  explicit Agent-effort precedence and hook-context checks, and a synthetic
+  compaction/resume test back to the previous 2.1.286 client.
+
+### Fixed
+
+- Step-by-step TUI text forms show the actual insertion point and scroll long
+  values into view, including a visible end-of-input position in a full field.
+  Cursor cleanup preserves hidden-field handling and choice screens.
+- Release checks and downloads honour the process HTTPS proxy and bypass
+  environment, with sanitized connection errors. TLS, release-host, redirect
+  and signature checks remain in place. This uses the updater process's
+  environment, not the gateway's outbound proxy setting.
+- Gateway shutdown waits, within its existing bound, for in-flight sign-in
+  token refreshes and their saves. The 30-second shutdown grace period starts
+  at exit; exceeding it leaves persistence unverified and reports that fact.
+- Mistral-style text and thinking content chunks are decoded in streaming and
+  non-streaming responses instead of appearing as raw JSON or losing thinking.
+  Existing string-content responses retain their previous bytes and behavior.
+- Sessions compiled by 1.0.0 do not report integrity drift merely because newer
+  review labels and model warnings render differently. Verified old diagnostic
+  presentation is retained until resume, with doctor Attention rather than a
+  false integrity block.
+- Narrow-screen model pickers keep warning remedies and provider approval
+  commands visible. TUI Direct mode now offers a default-No "Launch anyway?"
+  confirmation for a missing credential, matching the CLI's advisory behavior.
+- Installation documentation states minimal Linux prerequisites, version-matched
+  checksum and signature downloads, and the terminal requirement for setup and
+  uninstall.
+
+### Compatibility and limits
+
+- The supervised Linux gateway still needs unprivileged user namespaces,
+  restricted by AppArmor on Ubuntu 23.10 and later; the on-demand gateway
+  does not. See [service requirements](docs/guides/gateway.md#the-supervised-service-linux).
+- Catalog version is 38; record and state format remain 4. Existing qualification
+  records retain their original evidence and may become stale under the new pin;
+  no automatic requalification or provider call is made.
+- Rolling back the installation does not translate new model declarations or
+  bindings into older policy. Family labels or unattested bindings newly allowed
+  by this release may be rejected by 1.0.0; retain a compatible profile if you
+  need to resume work there.
+- Mistral thinking is unsigned. Faithful replay of Mistral reasoning history is
+  not included; the existing [translation limits](docs/providers/openai-compatible.md#translation-limits)
+  still apply. Provider behavior is tested with fixtures, not live accounts.
+- Whether OpenRouter's account-filtered listing includes a particular stealth
+  model depends on what the service returns. Add-by-id remains available for
+  known supported ids; missing listing facts are not invented.
+- A 1.0.0 installation behind a mandatory proxy must reach this release once
+  through the installer or an offline update, because its old updater does not
+  yet contain the proxy fix. See [Updating](docs/update.md).
+- Platform-support claims are unchanged; see [Compatibility](docs/reference/compatibility.md#platforms).
+
 ## [1.0.0] — 2026-10-05
 
 The first release.
