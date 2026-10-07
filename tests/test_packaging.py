@@ -137,7 +137,7 @@ class KeyedAuditInvariantTests(unittest.TestCase):
         manifest = {"version": 1, "upstream_version": version, "patches": identities}
         self.assertEqual(build["ordered_manifest"], manifest)
         # Series order numbers the patches; 11 (the never-admitted Retry-After
-        # candidate) is skipped, so 19 admitted patches are numbered 1-10, 12-20.
+        # candidate) is skipped, so 21 admitted patches are numbered 1-10, 12-22.
         numbers = [*range(1, 11), *range(12, len(identities) + 2)]
         self.assertEqual(build["numbered_to_shipped"], [
             {"number": number, "identity": identity} for number, identity in zip(numbers, identities)])
@@ -479,7 +479,7 @@ class ManagementPinWiringTests(unittest.TestCase):
         text = (NIX_DIR / "gateway.nix").read_text()
         names = admitted_names()
         manifest = json.loads((RESOURCES_ROOT / "catalog" / "gateway.json").read_text())["gateway"]["patches"]
-        self.assertEqual(len(names), 19)
+        self.assertEqual(len(names), 21)
         self.assertEqual(names, manifest)
         # The applied series and the passthru export are the recipe's admitted
         # series, in order; gateway.nix carries no patch list of its own.
@@ -652,6 +652,8 @@ class CliProxyApiDerivationTests(unittest.TestCase):
                 "cli-proxy-api-codex-client-identity.patch",
                 "cli-proxy-api-antigravity-loopback-callback.patch",
                 "cli-proxy-api-codex-api-key-safety.patch",
+                "cli-proxy-api-refresh-shutdown-join.patch",
+                "cli-proxy-api-openai-content-chunks.patch",
             ],
         )
         manifest = json.loads((RESOURCES_ROOT / "catalog" / "gateway.json").read_text())
@@ -1244,9 +1246,21 @@ class AdmittedPatchGateTests(unittest.TestCase):
         ),
     }
 
+    SHUTDOWN_RACE_GATES = {
+        "race-refresh-shutdown": ("./sdk/cliproxy/auth", [
+            "TestRefreshShutdownWaitsForExecutor", "TestRefreshShutdownWaitsForDurableSave",
+            "TestRefreshShutdownSkipsQueuedJobs", "TestRefreshShutdownCanceledAuthLockWaitDoesNotStartRefresh",
+            "TestRefreshShutdownDeadline", "TestRefreshShutdownRepeatedStop", "TestRefreshShutdownPreviousRunIsJoined",
+        ]),
+        "race-service-refresh-shutdown": ("./sdk/cliproxy", ["TestServiceShutdownJoinsRefresh"]),
+        "race-refresh-shutdown-file-store": ("./sdk/auth", ["TestRefreshShutdownFileTokenStore"]),
+    }
+
     def test_exact_race_gates(self):
         races = [record for record in recipe()["gates"] if record["race"]]
-        by_packages = {tuple(record["packages"]): record for record in races}
+        by_name = {record["name"]: record for record in races}
+        by_packages = {tuple(record["packages"]): record for record in races
+                       if record["name"] not in self.SHUTDOWN_RACE_GATES}
         for package, names in self.GATES.items():
             with self.subTest(package=package):
                 record = by_packages[(package,)]
@@ -1257,7 +1271,14 @@ class AdmittedPatchGateTests(unittest.TestCase):
         self.assertEqual(overlay["run"], "^TestCM053Overlay")
         self.assertEqual(set(overlay["expected_tests"]),
                          {name for names in self.OVERLAY_GATES.values() for name in names})
-        self.assertEqual(len(races), len(self.GATES) + 1)
+        for name, (package, names) in self.SHUTDOWN_RACE_GATES.items():
+            with self.subTest(gate=name):
+                record = by_name[name]
+                self.assertEqual(record["packages"], [package])
+                self.assertEqual(record["run"], f"^({'|'.join(names)})$")
+                self.assertEqual(record["expected_tests"], names)
+                self.assertEqual((record["count"], record["platforms"]), (100, "linux"))
+        self.assertEqual(len(races), len(self.GATES) + 1 + len(self.SHUTDOWN_RACE_GATES))
         self.assertNotIn("cli-proxy-api-retry-after.patch", admitted_names())
 
     def test_no_antigravity_egress_gate(self):
@@ -1442,11 +1463,11 @@ class CodexApiKeySafetyGateTests(unittest.TestCase):
     PREREQUISITES = ("cli-proxy-api-credentialed-redirects.patch", "cli-proxy-api-openai-compat-keyed-safety.patch",
                      "cli-proxy-api-codex-client-identity.patch")
 
-    def test_patch_is_last_after_its_prerequisites_and_carries_its_tests(self):
+    def test_patch_is_nineteenth_after_its_prerequisites_and_carries_its_tests(self):
         patch = (PATCH_DIR / self.NAME).read_text()
         names = admitted_names()
-        self.assertEqual(names[-1], self.NAME)
-        self.assertTrue(all(name in names[:-1] for name in self.PREREQUISITES))
+        self.assertEqual(names[18], self.NAME)
+        self.assertTrue(all(name in names[:18] for name in self.PREREQUISITES))
         self.assertEqual(re.findall(r"^\+func (Test\w+)\(", patch, re.MULTILINE), list(self.TESTS))
         self.assertIn("+++ b/internal/runtime/executor/codex_key_safety.go", patch)
         self.assertIn('+\t"github.com/router-for-me/CLIProxyAPI/v7/internal/compatsafe"', patch)

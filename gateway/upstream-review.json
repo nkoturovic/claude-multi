@@ -30,9 +30,9 @@
   "vulncheck": {
     "tool": "govulncheck",
     "mode": "binary",
-    "status": "not-run",
-    "reason": "neither govulncheck nor a copy of the Go vulnerability database is available on the offline build host",
-    "run": "in CI, once per shipped target: govulncheck -mode=binary dist/gateway/<target>/cli-proxy-api"
+    "status": "reviewed",
+    "reason": "Re-reviewed 2026-10-07 on the final four target builds with govulncheck v1.8.0 and https://vuln.go.dev: seven reviewed dispositions per target, no unreviewed findings. Source-mode traces still reach affected Git and SSH operations only through the managed-excluded Git token store; OpenPGP remains absent and its unfixed disposition is retained. Binary hashes and trace bindings are in gateway/vulnerability-dispositions.json.",
+    "run": "tools/_build/vulncheck.py verifies each shipped gateway against gateway/vulnerability-dispositions.json; source-mode govulncheck -show traces ./cmd/server rechecks reachability for all four target GOOS/GOARCH pairs"
   },
   "fixes": [
     {
@@ -67,8 +67,9 @@
       "commits": ["759c57c2"],
       "release": "7.3.17",
       "subject": "fix(api): immediately close connections on stop and guard state access",
-      "disposition": "rebase",
-      "reason": "Not a credential or availability fix here. The stale shutdown deadline only makes the stop at process exit non-graceful, and upstream's change closes connections immediately as well; credential writes are atomic (temporary file, sync, rename), so an exit never leaves a torn credential; the listener race needs a stop during start and ends in process exit either way. Neither version waits for an in-flight refresh at shutdown."
+      "disposition": "backport",
+      "patch": "cli-proxy-api-refresh-shutdown-join.patch",
+      "reason": "Partial backport, re-reviewed 2026-10-07: only Service.Run creates the existing 30-second shutdown context inside its defer, so its budget starts on exit. The same local patch independently joins in-flight refresh workers through durable save and receipt reporting; atomic replacement alone prevents torn files, not loss of a rotated token. The listener-locking and immediate HTTP connection-closing changes remain deferred to rebase; HTTP graceful draining is unchanged. A live v7* tag check found v7.3.20 (ef9e71201e0ca72b03a540d9b6e0862f8c053347) latest, and its 43-commit comparison from v7.3.15 contains no smaller worker-join fix. This bounded wait does not guarantee persistence after a crash, SIGKILL, filesystem failure or a stop-budget overrun."
     },
     {
       "commits": ["1dffddf4"],

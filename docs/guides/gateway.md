@@ -35,6 +35,22 @@ inhibited (the message says which); 2 usage; 3 a declined confirmation;
 its start record, the process and the listening socket must agree. A port
 held by anything else is refused, and no token is sent to it.
 
+### A bounded graceful stop
+
+On an ordinary stop or restart, the gateway cancels queued credential refreshes
+and waits for already-running refresh workers, including their credential saves
+and save reports. Its 30-second shutdown budget starts when shutdown begins,
+not when the gateway starts. HTTP requests still use graceful draining.
+
+This reduces the chance of losing a newly rotated sign-in token; it is not an
+unconditional token-survival guarantee. An active provider refresh can itself
+use 30 seconds, leaving no time for persistence or other cleanup. A deadline
+exit is reported as an incomplete refresh shutdown, not a confirmed save.
+SIGKILL, a crash, power loss, a lost provider response, filesystem failure or a
+stop-budget overrun can still lose a replacement token and require sign-in
+again. The service manager's own stop limit also applies. Keep the persistence
+hold checks; a clear hold is an observation, not a fence against a new refresh.
+
 ### After a crash
 
 Sessions recover from a gateway that exited: each session's token helper
@@ -150,6 +166,22 @@ after pending changes and writes nothing.
 - On both OpenAI routes (the API key and the ChatGPT account), Claude
   Code's per-request output cap is not passed on: the model's own output
   limit applies ([providers/api-keys.md](../providers/api-keys.md#openai)).
+
+## Thinking from content chunks
+
+For OpenAI-compatible upstreams such as Mistral, responses can carry arrays of
+`text` and `thinking` chunks rather than one text string. The gateway decodes
+these into text and unsigned Claude thinking in their original order, for
+streaming and non-streaming responses. Repeated `closed: true` chunks do not
+prematurely close a thinking block, and the gateway does not invent signatures.
+String responses and the existing reasoning fields keep their previous behavior;
+Claude and the Z.ai preset use the separate Anthropic-compatible route.
+
+This fixes display of Mistral thinking, not faithful replay of Mistral reasoning
+history. The request translator drops unsigned thinking on replay; Mistral's
+signed history format is not supported by this fix. Unsupported or malformed
+chunks retain each translator path's existing fallback, including omission of
+unknown chunk types by the registered non-streaming converter.
 
 ## The gateway token
 

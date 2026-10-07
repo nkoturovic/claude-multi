@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from claude_multi import probe, state
+from _catalog import SHIPPED_ROOT, uses_shipped_catalog
 import _gateway_harness as harness
 
 MODULE = "tests.test_gateway_patches"
@@ -246,6 +247,9 @@ class PatchOmissionProbeTests(unittest.TestCase):
     def test_overlay(self):
         self.check_probe("service", "TestOmissionOverlay", "OM1")
 
+    def test_refresh_shutdown(self):
+        self.check_probe("service", "TestOmissionRefreshShutdown", "RS1")
+
 
 
 class CodexIdentityTests(unittest.TestCase):
@@ -312,6 +316,133 @@ class CodexApiKeySafetyTests(unittest.TestCase):
                    session_header=False)
         finally:
             gateway.close()
+
+
+@uses_shipped_catalog
+class ContentChunkRouteInventoryTests(unittest.TestCase):
+    def test_shipped_protocol_shapes_have_controls(self):
+        # Read declarations only: never the operator's configured providers.
+        providers = json.loads((SHIPPED_ROOT / "catalog/providers.json").read_text())["providers"]
+        self.assertEqual({name: value["adapter"] for name, value in providers.items()}, {
+            "anthropic": "cliproxy-oauth-claude-v1", "openai": harness.CODEX,
+            **{name: harness.CLAUDE for name in ("openrouter", "deepseek", "kimi", "qwen", "meta")},
+        })
+        presets = {path.stem: json.loads(path.read_text())["provider"]
+                   for path in (SHIPPED_ROOT / "presets").glob("*.json")}
+        self.assertEqual({name for name, value in presets.items() if value["kind"] == "openai-compatible"},
+                         {"cerebras", "gemini", "groq", "mistral", "xai"})
+        self.assertEqual({name for name, value in presets.items() if value["kind"] == "openai-compatible-lan"},
+                         {"lan-openai-compatible", "llama-cpp", "lm-studio", "ollama", "vllm"})
+        self.assertEqual({name for name, value in presets.items() if value["kind"] == "anthropic-compatible"},
+                         {"model-studio", "moonshot", "novita", "vercel", "zai"})
+        self.assertEqual(presets["mistral"]["auth"]["kind"], "bearer")
+        self.assertEqual(presets["zai"]["kind"], "anthropic-compatible")
+        self.assertEqual(set(harness.CONTENT_CHUNK_SHAPES),
+                         {"openai-codex", "openrouter", "deepseek", "kimi", "qwen", "meta", "local-llm", "keyed"})
+
+    def test_goldens_are_independent_omission_controls(self):
+        import check_gateway_patch_revert as tool
+        patch = "cli-proxy-api-openai-content-chunks.patch"
+        self.assertEqual(len(harness.PATCH_ROWS[patch]), 2)
+        self.assertEqual(len(harness.PATCH_CONTROL_ROWS[patch]), 2)
+        for control in harness.PATCH_CONTROL_ROWS[patch]:
+            self.assertIn(control, tool.test_ids())
+            self.assertNotIn(control, harness.PATCH_ROWS[patch])
+        for route in ("keyless", "keyed"):
+            for case in harness.CONTENT_CHUNK_LEGACY_MESSAGES:
+                for stream in (False, True):
+                    self.assertTrue(harness.CONTENT_CHUNK_HTTP_GOLDENS[f"{route}:{case}:{stream}"])
+
+
+class _ContentChunkFixture:
+    @classmethod
+    def setUpClass(cls):
+        if not os.environ.get(harness.BINARY_ENV):
+            harness.boundary("BOUNDARY: content-chunk proof needs an explicitly selected manifest build")
+        from test_gateway_keyed_compat import KeyedTLS
+        import test_openai_compat_keyed as keyed
+        cls.keyless = harness.GatewayHarness(upstream_factory=lambda path: harness.FakeUpstream(
+            path, respond=harness.content_chunk_reply))
+        cls.addClassCleanup(cls.keyless.close)
+        cls.keyed = KeyedTLS(respond=harness.content_chunk_reply)
+        cls.addClassCleanup(cls.keyed.close)
+        cls.routes = (("keyless", cls.keyless, "gwtest-compat-plain"),
+                      ("keyed", cls.keyed.gateway, keyed.KEYED_KEY))
+
+
+class MistralContentChunkTests(_ContentChunkFixture, unittest.TestCase):
+    def check_chunks(self, stream, row):
+        from test_gateway_contracts import reconstructed_blocks
+        for route, gateway, alias in self.routes:
+            with self.subTest(route=route):
+                reply = gateway.request(alias, stream=stream, mode="mistral")
+                self.assertEqual(reply.status, 200)
+                self.assertEqual(len(reply.hits), 1)
+                self.assertTrue(reply.hits[0].path.endswith("/chat/completions"))
+                blocks = reconstructed_blocks(reply) if stream else reply.json()["content"]
+                self.assertEqual(blocks, [{"type": "thinking", "thinking": "first second"},
+                                          {"type": "text", "text": "answer"}])
+                if stream:
+                    events = reply.events()
+                    self.assertEqual(sum(e["type"] == "message_stop" for e in events), 1)
+                    self.assertEqual(sum(e["type"] == "content_block_stop" for e in events), 2)
+                    delta = next(e for e in events if e["type"] == "message_delta")
+                    self.assertEqual(delta["delta"]["stop_reason"], "end_turn")
+                    self.assertEqual(delta["usage"], {"input_tokens": 11, "output_tokens": 4})
+                else:
+                    self.assertEqual(reply.json()["stop_reason"], "end_turn")
+                    self.assertEqual(reply.json()["usage"], {"input_tokens": 11, "output_tokens": 4})
+        if self._outcome.success:
+            record(row, status="passed", routes=2, unsigned_thinking=True, repeated_closed_ignored=True)
+
+    def test_streaming_content_chunks(self):
+        self.check_chunks(True, "MC1")
+
+    def test_non_streaming_content_chunks(self):
+        self.check_chunks(False, "MC2")
+
+
+class ContentChunkGoldenTests(_ContentChunkFixture, unittest.TestCase):
+    def check_golden(self, gateway, alias, route, case, stream):
+        reply = harness.content_chunk_request(gateway, alias, stream=stream, mode=case)
+        self.assertEqual(reply.status, 200)
+        self.assertEqual(len(reply.hits), 1)
+        self.assertEqual(reply.raw, harness.CONTENT_CHUNK_HTTP_GOLDENS[f"{route}:{case}:{stream}"].encode(),
+                         f"legacy bytes changed: {route}/{case}/{stream}")
+
+    def test_legacy_chat_bytes(self):
+        fields = ("string", "reasoning_content", "reasoning", "reasoning_details")
+        cases = 0
+        for route, gateway, alias in self.routes:
+            # Every compatible shape is tested against every reasoning spelling,
+            # not inferred from a provider name or a successful text-only turn.
+            for shape in harness.CONTENT_CHUNK_SHAPES:
+                for case in fields:
+                    with self.subTest(route=route, shape=shape, field=case):
+                        self.check_golden(gateway, alias, route, case, True)
+                        cases += 1
+            for case in harness.CONTENT_CHUNK_LEGACY_MESSAGES:
+                for stream in (False, True):
+                    with self.subTest(route=route, case=case, stream=stream):
+                        self.check_golden(gateway, alias, route, case, stream)
+                        cases += 1
+        if self._outcome.success:
+            record("MG1", status="passed", cases=cases, byte_identical=True,
+                   shapes=list(harness.CONTENT_CHUNK_SHAPES), unknown_chunks="legacy-per-path")
+
+    def test_native_route_bytes(self):
+        for alias in ("gwtest-cc-think-a", "gwtest-ccb-x", "gwtest-codex-e-none"):
+            for stream in (False, True):
+                with self.subTest(alias=alias, stream=stream):
+                    reply = harness.content_chunk_request(self.keyless, alias, stream=stream)
+                    self.assertEqual(reply.status, 200)
+                    self.assertEqual(len(reply.hits), 1)
+                    self.assertTrue(reply.hits[0].path.endswith(
+                        "/responses" if "codex" in alias else "/v1/messages"))
+                    self.assertEqual(reply.raw, harness.CONTENT_CHUNK_HTTP_GOLDENS[
+                        f"native:{alias}:{stream}"].encode())
+        if self._outcome.success:
+            record("MG2", status="passed", cases=6, messages_and_responses_untouched=True)
 
 
 if __name__ == "__main__":

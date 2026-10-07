@@ -243,3 +243,19 @@ in this order; each lists the files it modifies, adds or deletes.
       added     internal/runtime/executor/codex_key_safety.go
       added     internal/runtime/executor/codex_key_safety_test.go
       modified  internal/runtime/executor/codex_websockets_request.go
+
+20. cli-proxy-api-refresh-shutdown-join.patch
+    sha256 6474a404f9ecba94c07fc9415ffee3601059941101cbf944a17a623e5b80c8e3
+      added     sdk/auth/refresh_shutdown_test.go
+      modified  sdk/cliproxy/auth/auto_refresh_loop.go
+      added     sdk/cliproxy/auth/auto_refresh_shutdown_test.go
+      modified  sdk/cliproxy/auth/conductor.go
+      modified  sdk/cliproxy/auth/conductor_refresh.go
+      modified  sdk/cliproxy/service_lifecycle.go
+      added     sdk/cliproxy/service_shutdown_test.go
+
+21. cli-proxy-api-openai-content-chunks.patch
+    sha256 f2db67071e99b3c106ea262502c04be887f6fb17277a848d0cdd6810f9b03025
+      modified  internal/translator/openai/claude/openai_claude_response.go
+      added     internal/translator/openai/claude/openai_claude_content_chunks_test.go
+      added     internal/translator/openai/claude/openai_claude_content_goldens_test.go

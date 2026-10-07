@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:01f83465-a50b-5c80-b921-fc8f640f2bdc",
+  "serialNumber": "urn:uuid:6958aa65-05c0-552e-8f03-cd905e0ee15d",
   "version": 1,
   "metadata": {
     "tools": {
@@ -180,6 +180,18 @@
             "diff": {
               "url": "gateway/patches/cli-proxy-api-codex-api-key-safety.patch"
             }
+          },
+          {
+            "type": "unofficial",
+            "diff": {
+              "url": "gateway/patches/cli-proxy-api-refresh-shutdown-join.patch"
+            }
+          },
+          {
+            "type": "unofficial",
+            "diff": {
+              "url": "gateway/patches/cli-proxy-api-openai-content-chunks.patch"
+            }
           }
         ],
         "notes": "Built from the upstream source at the commit above with the patches applied in order; each patch's sha256 and the patched tree's normalised sha256 (vendor/ excluded) are the claude-multi:gateway properties."
@@ -223,7 +235,7 @@
         },
         {
           "name": "claude-multi:gateway:post-apply-tree-sha256",
-          "value": "6e8c81bbbd04d0c0f27de70a56711d40cbd8d689674f43cad9371485c6287e48"
+          "value": "f0121e84f76c8ad2902a853d87b0450357df5f4b500184e827fabf82d6a9dad8"
         },
         {
           "name": "claude-multi:gateway:patch",
@@ -300,6 +312,14 @@
         {
           "name": "claude-multi:gateway:patch",
           "value": "cli-proxy-api-codex-api-key-safety.patch@b656f4cdfe4dfbe0d5d47f33f419d3a1416d9bff88f94b54deba2126dbb61628"
+        },
+        {
+          "name": "claude-multi:gateway:patch",
+          "value": "cli-proxy-api-refresh-shutdown-join.patch@6474a404f9ecba94c07fc9415ffee3601059941101cbf944a17a623e5b80c8e3"
+        },
+        {
+          "name": "claude-multi:gateway:patch",
+          "value": "cli-proxy-api-openai-content-chunks.patch@f2db67071e99b3c106ea262502c04be887f6fb17277a848d0cdd6810f9b03025"
         }
       ]
     }
