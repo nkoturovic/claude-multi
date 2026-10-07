@@ -150,7 +150,7 @@ content-chunk arrays (Mistral-style `text` and `thinking` chunks) on all
 three response paths into text and unsigned thinking blocks, ignores
 `closed:true` as a block terminator, and keeps string, null and absent
 content byte-identical; unsupported chunks keep each path's earlier
-behavior (D199; omission rows MC1/MC2). Signed Mistral history replay stays
+behavior (omission rows MC1/MC2). Signed Mistral history replay stays
 unsupported. Refused
 credentialed redirects yield fixed local 502 `upstream redirect refused`, with
 no upstream body/Location or path-bearing refusal log. Keyed-compat safety is

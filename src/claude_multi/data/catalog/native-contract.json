@@ -119,7 +119,7 @@
     ]
   },
   "lead_efforts": {
-    "evidence": "Re-run on client 2.1.292: S8 sends lead ultracode as xhigh; D5 sends low, medium, high, xhigh and max with adaptive thinking on Sonnet. XC confirms the same five wire levels on its fixture line. These are client wire observations, not real-provider acceptance.",
+    "evidence": "Re-run on client 2.1.292: the agent-effort check sends lead ultracode as xhigh; the native effort probe sends low, medium, high, xhigh and max with adaptive thinking on Sonnet. The context-class probe confirms the same five wire levels on its fixture line. These are client wire observations, not real-provider acceptance.",
     "status": "provisionally-trusted",
     "values": [
       "low",
