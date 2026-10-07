@@ -12,7 +12,7 @@
           "client_sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
           "errors": 0,
           "failures": 0,
-          "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+          "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
           "inventory": {
             "J1": {
               "count": 9,
@@ -79,7 +79,7 @@
           },
           "journey_tests": 9,
           "keyed_client_budget_seconds": 900,
-          "keyed_client_seconds": 11.385,
+          "keyed_client_seconds": 11.254,
           "keyed_client_tests": 10,
           "keyed_identity": {
             "client_contract_sha256": "76d8c2cd9d1336ef75025db61ecf78c669326141ce2e827d3be54047c84a9b9b",
@@ -118,9 +118,9 @@
               "src/claude_multi/cli/commands/models.py": "b044d6f365d6774dc58a342baacb1fbeacb1517610af89dfcb33931504e28044",
               "src/claude_multi/cli/commands/providers.py": "84b3b6daf5d4b013a8395b7170ac3392c4c96546bab55d40e5fa498d11b5f47c",
               "src/claude_multi/compiler.py": "9dedefcde35083e711d412136f5e997e48a822d543e5317e28e1f26f0e6d5f8c",
-              "src/claude_multi/discovery.py": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17",
-              "src/claude_multi/operator.py": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3",
-              "src/claude_multi/profile.py": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de",
+              "src/claude_multi/discovery.py": "d6c7b4b2752f20756b15e7b3b206a8cec17125d52194bd47a3c37b1d20104c2f",
+              "src/claude_multi/operator.py": "6b4d4b14a27686820823f14931c801efa956bf3c997d630740c7b660cbc1596e",
+              "src/claude_multi/profile.py": "476baaa6cabe85043bf0f9dd0a27b8b9c85b065a9e1492b49507863ebd9da147",
               "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
               "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
               "src/claude_multi/scope.py": "44c784dd9583b593d69df1c2e2d88cc698280ba60a529e44478c8afb0a2276ae",
@@ -136,7 +136,7 @@
             },
             {
               "path": "src/claude_multi/operator.py",
-              "sha256": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3"
+              "sha256": "6b4d4b14a27686820823f14931c801efa956bf3c997d630740c7b660cbc1596e"
             },
             {
               "path": "src/claude_multi/render.py",
@@ -152,11 +152,11 @@
             },
             {
               "path": "src/claude_multi/discovery.py",
-              "sha256": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17"
+              "sha256": "d6c7b4b2752f20756b15e7b3b206a8cec17125d52194bd47a3c37b1d20104c2f"
             },
             {
               "path": "src/claude_multi/profile.py",
-              "sha256": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de"
+              "sha256": "476baaa6cabe85043bf0f9dd0a27b8b9c85b065a9e1492b49507863ebd9da147"
             },
             {
               "path": "src/claude_multi/compiler.py",
@@ -199,7 +199,7 @@
           "skipped": 0,
           "status": "passed"
         },
-        "sha256": "9e9e2b5157548788b13f91db58e970b34574205cd006cd6250a64639be17a6a2"
+        "sha256": "30d07fb0c84abd5b6d4b6462571d385bb8ebf135cd8d9274597fa77501592022"
       },
       "tests.keyed_journeys.json": {
         "document": {
@@ -216,54 +216,54 @@
           "tables": {
             "J1": [
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_changes_and_failed_qualification_remain_selectable_with_warnings",
                 "status": "passed"
               },
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_onboarding_isolation.KeyedJourneyTests.test_keyed_cli_declare_approve_apply_admit_qualify_bind",
                 "status": "passed"
               },
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_packaging.PackageSourceTests.test_package_payload_excludes_operator_credentials_and_grants",
                 "status": "passed"
               },
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_closed_target_refuses_audit",
                 "status": "passed"
               },
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_open_target_requires_local_route_and_key_not_admission",
                 "status": "passed"
               },
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_rechecks_headers_origins_collisions",
                 "status": "passed"
               },
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_import_uses_existing_single_commit_barrier",
                 "status": "passed"
               },
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_portability.KeyedPortabilityTests.test_keyed_json_export_has_logical_refs_and_no_store_reads",
                 "status": "passed"
               },
               {
-                "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+                "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
                 "row": "tests.test_tui_pty.KeyedJourneyPTYTests.test_keyed_tui_optional_admission_qualification_and_binding",
                 "status": "passed"
               }
             ]
           }
         },
-        "sha256": "b17b2526594b2344363e62c578cff0404012e09327b691efb0e00ab373dc3e09"
+        "sha256": "2e8d3df138f754d217c036d9825cc32ce105c26428a0d81fcdf9934cc772a94e"
       },
       "tests.test_gateway_keyed_compat.json": {
         "document": {
@@ -308,9 +308,9 @@
               "src/claude_multi/cli/commands/models.py": "b044d6f365d6774dc58a342baacb1fbeacb1517610af89dfcb33931504e28044",
               "src/claude_multi/cli/commands/providers.py": "84b3b6daf5d4b013a8395b7170ac3392c4c96546bab55d40e5fa498d11b5f47c",
               "src/claude_multi/compiler.py": "9dedefcde35083e711d412136f5e997e48a822d543e5317e28e1f26f0e6d5f8c",
-              "src/claude_multi/discovery.py": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17",
-              "src/claude_multi/operator.py": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3",
-              "src/claude_multi/profile.py": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de",
+              "src/claude_multi/discovery.py": "d6c7b4b2752f20756b15e7b3b206a8cec17125d52194bd47a3c37b1d20104c2f",
+              "src/claude_multi/operator.py": "6b4d4b14a27686820823f14931c801efa956bf3c997d630740c7b660cbc1596e",
+              "src/claude_multi/profile.py": "476baaa6cabe85043bf0f9dd0a27b8b9c85b065a9e1492b49507863ebd9da147",
               "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
               "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
               "src/claude_multi/scope.py": "44c784dd9583b593d69df1c2e2d88cc698280ba60a529e44478c8afb0a2276ae",
@@ -468,7 +468,7 @@
             ]
           }
         },
-        "sha256": "b9a9451b8cb652c7126d3458ce4a92de0f618d94b151ad4b3fe5181be3d2b618"
+        "sha256": "69e98aae6e73c5ad39149aad7b4d19476c5f8e60698777265c31f086927f7e7a"
       },
       "tests.test_keyed_compat_client.json": {
         "document": {
@@ -513,9 +513,9 @@
               "src/claude_multi/cli/commands/models.py": "b044d6f365d6774dc58a342baacb1fbeacb1517610af89dfcb33931504e28044",
               "src/claude_multi/cli/commands/providers.py": "84b3b6daf5d4b013a8395b7170ac3392c4c96546bab55d40e5fa498d11b5f47c",
               "src/claude_multi/compiler.py": "9dedefcde35083e711d412136f5e997e48a822d543e5317e28e1f26f0e6d5f8c",
-              "src/claude_multi/discovery.py": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17",
-              "src/claude_multi/operator.py": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3",
-              "src/claude_multi/profile.py": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de",
+              "src/claude_multi/discovery.py": "d6c7b4b2752f20756b15e7b3b206a8cec17125d52194bd47a3c37b1d20104c2f",
+              "src/claude_multi/operator.py": "6b4d4b14a27686820823f14931c801efa956bf3c997d630740c7b660cbc1596e",
+              "src/claude_multi/profile.py": "476baaa6cabe85043bf0f9dd0a27b8b9c85b065a9e1492b49507863ebd9da147",
               "src/claude_multi/qualify.py": "46fc23e75fbfda166c7d5ea55a6c30fe8c34f97d2bb00fe688f741b912996d84",
               "src/claude_multi/render.py": "9f99ffb5721e872797b1aaf7c2da77a43949cdb7b5406a32b3803a094939dbfc",
               "src/claude_multi/scope.py": "44c784dd9583b593d69df1c2e2d88cc698280ba60a529e44478c8afb0a2276ae",
@@ -622,7 +622,7 @@
             ]
           }
         },
-        "sha256": "d6b61fd1fde7321d291c8e648201ecb1acab2df96c634882e5bbc411340ae3ce"
+        "sha256": "564ab75c37cac68938838c58bba59716289a833db6c109fbae8d16603805a16f"
       }
     },
     "validated_exit": 0
@@ -826,7 +826,7 @@
   "source_report": {
     "document": {
       "evidence_dir": "tests/fixtures",
-      "head": "053c881fcb4a893cd6fb3ae47cbfc07565130592",
+      "head": "2179486b8d822d546a66d480c7434e1a2e5c8644",
       "relevant_sources": [
         {
           "path": "src/claude_multi/catalog.py",
@@ -834,7 +834,7 @@
         },
         {
           "path": "src/claude_multi/operator.py",
-          "sha256": "f2a15e89f371343994ac6014674628522d1425d441ebd83ad12f88931f1681e3"
+          "sha256": "6b4d4b14a27686820823f14931c801efa956bf3c997d630740c7b660cbc1596e"
         },
         {
           "path": "src/claude_multi/render.py",
@@ -850,11 +850,11 @@
         },
         {
           "path": "src/claude_multi/discovery.py",
-          "sha256": "92d8f5abeab780f4c9649cfc9d3b02f39f23965fb831d8f84dee19f9a7d7ea17"
+          "sha256": "d6c7b4b2752f20756b15e7b3b206a8cec17125d52194bd47a3c37b1d20104c2f"
         },
         {
           "path": "src/claude_multi/profile.py",
-          "sha256": "8180d7881780ac16e225ea181aed8063b013eae359eeb709f1b45d1e348aa4de"
+          "sha256": "476baaa6cabe85043bf0f9dd0a27b8b9c85b065a9e1492b49507863ebd9da147"
         },
         {
           "path": "src/claude_multi/compiler.py",
@@ -894,7 +894,7 @@
         }
       ]
     },
-    "sha256": "3ba8ae62c8b09acf4810c09ef17ea20fb865d6a03ee075ea2077d79ec0338b53"
+    "sha256": "94159c99dee9e446c9bc6944ac43a652122ce934cd1fba0fac8e785533134d9f"
   },
   "version": 1
 }
