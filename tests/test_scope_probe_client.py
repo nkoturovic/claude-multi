@@ -1854,7 +1854,7 @@ class ExactClientProbe(_ProbeCase, unittest.TestCase):
 
 # ------------------------------------------------------------ client downgrade
 
-_DG_PREVIOUS = ("2.1.281", "56fe3da88458465fb27d7e9299dddb3fead55750fb9c2de795f233b5eea6dce1")
+_DG_PREVIOUS = ("2.1.286", "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f")
 _DG_MARKER = "PROBE-DG-SUMMARY"
 
 
@@ -1890,9 +1890,9 @@ class _DowngradeResponder:
 
 class DowngradeResumeTests(_ProbeCase, unittest.TestCase):
     """A session started on the candidate pin (a tool turn, then a
-    manual compaction) resumed on the previous pin (the generation-146
-    rollback client). Its result is the RUNBOOK's rollback disposition:
-    resumable on 2.1.281, or start fresh after a rollback."""
+    manual compaction) resumed on the previous release's pin, 2.1.286.
+    Only synthetic fixture history is exercised; operator transcripts and
+    supervisor takeover remain outside this rollback proof."""
 
     probe_id = "DG"
     test_observation = None  # one named test, not the shared observation runner

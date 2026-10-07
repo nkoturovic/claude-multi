@@ -310,7 +310,7 @@ class SeedLoadTests(unittest.TestCase):
     def test_version_json_is_the_development_release_and_catalog(self) -> None:
         bundle = catalog.load_catalog(CATALOG_ROOT)
         self.assertEqual(bundle.docs["version"]["launcher_version"], "1.1.0-dev")
-        self.assertEqual(bundle.docs["version"]["catalog_version"], 37)
+        self.assertEqual(bundle.docs["version"]["catalog_version"], 38)
 
     def test_removed_lines_are_retired_without_successor(self) -> None:
         # Catalog 33: out-of-favour lines leave; their providers stay.
@@ -1329,7 +1329,7 @@ class NativeContractTests(unittest.TestCase):
         bundle = catalog.load_catalog(CATALOG_ROOT)
         record = bundle.docs["native-contract"]
         self.assertEqual(record["version"], 2)
-        self.assertEqual(pin.version(record), "2.1.286")
+        self.assertEqual(pin.version(record), "2.1.292")
         self.assertNotIn("claude", record)  # path-free: no local install paths
         acceptance = record["acceptance"]
         # The real-client probe verdicts S1-S12 fold in as U11-U22 and S7c
@@ -1352,7 +1352,7 @@ class NativeContractTests(unittest.TestCase):
                 if entry["status"] == "failed":
                     self.assertIn("fallback", entry["note"])
                 if name in {f"U{n}" for n in range(11, 24)}:
-                    self.assertIn("client 2.1.286", entry["note"])
+                    self.assertIn("client 2.1.292", entry["note"])
                     self.assertIn("Radar: tests/test_client_", entry["note"])
         # The same-launch delivery record is deleted: contingency is the only
         # lead delivery, so no delivery record remains to drift.
@@ -1361,15 +1361,15 @@ class NativeContractTests(unittest.TestCase):
     def test_promoted_executable_facts_locked(self) -> None:
         bundle = catalog.load_catalog(CATALOG_ROOT)
         entry = bundle.docs["native-contract"]["verified"][0]
-        self.assertEqual(entry["version"], "2.1.286")
+        self.assertEqual(entry["version"], "2.1.292")
         self.assertEqual(
             entry["platforms"]["linux-x64"]["sha256"],
-            "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+            "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
         )
-        self.assertEqual(entry["platforms"]["linux-x64"]["size"], 241667256)
+        self.assertEqual(entry["platforms"]["linux-x64"]["size"], 251456696)
         self.assertEqual(entry["key_fingerprint"], "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE")
         self.assertEqual(entry["evidence"]["linux-x64"], "battery")
-        self.assertEqual(entry["verified_at"], "2026-10-01")
+        self.assertEqual(entry["verified_at"], "2026-10-07")
         self.assertEqual(bundle.docs["native-contract"]["recorded_at"], "2026-09-25")
         self.assertEqual(bundle.docs["native-contract"]["evidence_version"], 3)
         # Every listed platform has an evidence class (battery or identity+smoke).
@@ -1395,7 +1395,7 @@ class NativeContractTests(unittest.TestCase):
         # artifact version.
         bundle = catalog.load_catalog(CATALOG_ROOT)
         validated = pin.version(bundle.docs["native-contract"])
-        self.assertEqual(validated, "2.1.286")
+        self.assertEqual(validated, "2.1.292")
         floors = {"opus": "2.1.280", "fable": "2.1.257", "sonnet": "2.1.286"}
         # The OpenRouter lines record the pin their evidence ran on.
         floors.update({key: "2.1.286" for key, line in bundle.lines.items()
@@ -1660,7 +1660,7 @@ class ContractOverrideTests(unittest.TestCase):
         root = _copy_tree(self, CATALOG_ROOT)
         override = self._override_file(root, self._v1_doc("2.1.300"))
         bundle = catalog.load_catalog(root, contract_override=override)
-        self.assertEqual(pin.version(bundle.docs["native-contract"]), "2.1.286")
+        self.assertEqual(pin.version(bundle.docs["native-contract"]), "2.1.292")
         self.assertEqual(bundle.contract_source, "override-ignored-newer")
         self.assertEqual(bundle.contract_override_detail, "2.1.300")
         packaged = catalog.load_catalog(root)
@@ -1669,13 +1669,13 @@ class ContractOverrideTests(unittest.TestCase):
 
     def test_stale_old_format_override_is_ignored(self) -> None:
         root = _copy_tree(self, CATALOG_ROOT)
-        for version in ("2.1.100", "2.1.286"):
+        for version in ("2.1.100", "2.1.292"):
             with self.subTest(version=version):
                 override = self._override_file(root, self._v1_doc(version))
                 bundle = catalog.load_catalog(root, contract_override=override)
                 self.assertEqual(bundle.contract_source, "override-ignored-stale")
                 self.assertEqual(bundle.contract_override_detail, version)
-                self.assertEqual(pin.version(bundle.docs["native-contract"]), "2.1.286")
+                self.assertEqual(pin.version(bundle.docs["native-contract"]), "2.1.292")
 
     def test_other_overrides_are_ignored_as_unusable(self) -> None:
         root = _copy_tree(self, CATALOG_ROOT)
@@ -1684,7 +1684,7 @@ class ContractOverrideTests(unittest.TestCase):
                 target = self._override_file(root, document)
                 bundle = catalog.load_catalog(root, contract_override=target)
                 self.assertEqual(bundle.contract_source, "override-ignored-invalid")
-                self.assertEqual(pin.version(bundle.docs["native-contract"]), "2.1.286")
+                self.assertEqual(pin.version(bundle.docs["native-contract"]), "2.1.292")
 
     def test_legacy_override_still_raises_for_its_removal(self) -> None:
         root = _copy_tree(self, CATALOG_ROOT)

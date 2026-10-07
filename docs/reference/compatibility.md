@@ -4,7 +4,7 @@
 
 Each claude-multi release runs exactly one Claude Code version: the one
 its release pins, verified for every platform the release builds. This
-release pins **Claude Code 2.1.286**. `claude-multi --version` names the
+release pins **Claude Code 2.1.292**. `claude-multi --version` names the
 pinned version, and doctor shows the pin, when it was verified, and the
 evidence class for your platform.
 
@@ -60,6 +60,37 @@ until the session's next start; doctor and the next resume report it.
 A Claude Code settings file with keys the pinned version does not know (a
 newer Claude Code wrote them) makes a launch use the default permission
 mode, naming the keys.
+
+### Verified behavior and limits
+
+The Linux client probes use isolated fixture providers, not real accounts.
+They verify agent discovery and reload, lifecycle notices, model-switch
+fences, effort transmission, helper-token rotation, and compaction. They do
+not establish supervisor takeover or a real provider's acceptance of large
+contexts or signed reasoning history.
+
+- Agent frontmatter effort is a default: an explicit `effort` on an Agent
+  call overrides it and the session effort. Low through max frontmatter
+  values reach the wire; `ultracode` in frontmatter is silently ignored by
+  the client, so claude-multi rejects it there. A lead's `ultracode` sends
+  `xhigh` on the wire.
+- Canonical Opus 5.5 with or without `[1m]` books a 1M client window and
+  sends a 128K output cap on the first turn, both at startup and after a
+  model switch. Only `[1m]` sends the long-context beta. The fixture's
+  advertised 300K/16K limits are not fetched through the custom endpoint;
+  this is not proof of server-limit negotiation or provider acceptance.
+- Hook lineup notices survive startup, resume, compaction and prompts,
+  including markup-looking text. The client escapes embedded
+  `system-reminder` tag openings; it does not discard the notice.
+- After a lineup change, spawn fresh agents. Continuing an old agent with
+  SendMessage can use its new model with its old prompt and history.
+- A synthetic session made by 2.1.292, including a tool turn and manual
+  compaction, resumes on the previous pin, 2.1.286, from its summary without
+  replaying the old tool turn. This does not verify every operator session
+  or background-supervisor rollback.
+- Qualification evidence recorded against an older client remains stored
+  with that identity and becomes stale; a re-pin does not rerun paid
+  qualification automatically.
 
 ## Agent context
 

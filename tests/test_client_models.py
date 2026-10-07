@@ -35,12 +35,17 @@ the test).
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
 import shutil
+import sys
 import tempfile
 import threading
+import time
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any
 
@@ -219,11 +224,13 @@ class _SpikeResponder:
         self,
         *,
         agents: tuple[str, ...] = (),
+        agent_efforts: dict[str, str] | None = None,
         refuse: dict[str, str | None] | None = None,
         not_found: tuple[str, ...] = (),
         server_fallback: str | None = None,
     ):
         self._agents = tuple(agents)
+        self._agent_efforts = dict(agent_efforts or {})
         self._refuse = dict(refuse or {})
         self._not_found = frozenset(not_found)
         # A refusal may also carry the API lane's served-fallback
@@ -293,6 +300,8 @@ class _SpikeResponder:
                         "description": f"client check {index}",
                         "subagent_type": agent,
                         "prompt": "Reply with exactly: PROBE-OK",
+                        **({"effort": self._agent_efforts[agent]}
+                           if agent in self._agent_efforts else {}),
                     },
                 }
                 for index, agent in enumerate(self._agents)
@@ -646,6 +655,126 @@ class SelectorRecognitionProbe(_SpikeTestCase):
         )
 
 
+class _ModelLimitsHandler(probe._ProviderHandler):
+    """Advertise discriminating limits on the fixture's Models API only."""
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/v1/models" or path.startswith("/v1/models/"):
+            provider = self.server.provider
+            provider.limit_queries.append(path)
+            models = [
+                {"id": _wire(selector), "type": "model",
+                 "display_name": "fixture", "created_at": "2026-01-01T00:00:00Z",
+                 "max_input_tokens": 300000, "max_tokens": 16000}
+                for selector in (_OPUS, _SONNET)
+            ]
+            payload = ({"data": models, "has_more": False,
+                        "first_id": models[0]["id"], "last_id": models[-1]["id"]}
+                       if path == "/v1/models" else
+                       next((row for row in models if path.endswith("/" + row["id"])), models[0]))
+            self._send_json(200, payload)
+            return
+        super().do_GET()
+
+
+class SelectorLimitsProbe(_SpikeTestCase):
+    """Canonical suffixless/[1m] limits on the first turn, fresh or switched."""
+
+    def _case(self, selector, *, switched):
+        fixture = self._fixture()
+        lead = _FABLE if switched else selector
+        settings_argv = self._settings_argv(fixture, lead, (_OPUS, _wire(_OPUS), _FABLE))
+        settings_path = Path(settings_argv[1])
+        settings = strict_json.load(settings_path)
+        settings["modelPicker"] = {
+            "options": [{"model": model, "label": f"CHECKS7MODEL{index}", "description": "fixture"}
+                        for index, model in enumerate((_wire(_OPUS), _OPUS, _FABLE))],
+            "replaceBuiltInOptions": True,
+        }
+        # A fixture status line reports only model/window metadata, so the
+        # in-process switch is measured without reading a transcript or
+        # inferring the window from a beta header.
+        window_path = fixture.root / "window.json"
+        script = fixture.root / "window.py"
+        state.atomic_write(script, (
+            "import json, pathlib, sys\n"
+            "data = json.load(sys.stdin)\n"
+            "row = {'model': data.get('model', {}).get('id'), "
+            "'window': data.get('context_window', {}).get('context_window_size')}\n"
+            "pathlib.Path(sys.argv[1]).write_text(json.dumps(row))\n"
+            "print('CHECKS7-WINDOW')\n"
+        ).encode())
+        settings["statusLine"] = {"type": "command", "command": " ".join(
+            shlex.quote(str(part)) for part in (sys.executable, script, window_path))}
+        state.atomic_write(settings_path, strict_json.canonical_file_bytes(settings))
+        prompt = "❯".encode()
+        steps = [probe.PTYInteraction(b"Choose", b"2\r"),
+                 probe.PTYInteraction(b"Press", b"\r")]
+        if switched:
+            # Select another canonical model before the first turn, so this
+            # measures the first request after /model, not a cached later one.
+            steps.append(probe.PTYInteraction(prompt, f"/model {selector}\r".encode(),
+                                              before_send=lambda: time.sleep(0.5)))
+        steps.extend([
+            probe.PTYInteraction(prompt, b"CHECKS7-TURN\r", before_send=lambda: time.sleep(0.5)),
+            probe.PTYInteraction(b"PROBE-OK", b"", preserve_after_wait=True),
+        ])
+        window = {}
+
+        def capture_window():
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    row = json.loads(window_path.read_bytes())
+                except (OSError, ValueError):
+                    row = {}
+                if row.get("model") == selector and isinstance(row.get("window"), int):
+                    window.update(row)
+                    return
+                time.sleep(0.05)
+            self.fail(f"status line did not report the selected model/window: {row}")
+
+        steps.append(probe.PTYInteraction(prompt, b"/exit\r", before_send=capture_window))
+        responder = _SpikeResponder()
+        provider = _BetaRecordingProvider(responder=responder)
+        provider.limit_queries = []
+        with mock.patch.object(probe, "_ProviderHandler", _ModelLimitsHandler), provider:
+            result = probe.run_native_pty(
+                ("--model", lead, *settings_argv), steps,
+                trusted=self.trusted, fixture=fixture, provider=provider,
+                timeout=_RUN_TIMEOUT, allow_real=True, environ=self.environ,
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(result.timed_out)
+        self.assertTrue(result.daemon.unchanged)
+        rows = [row for row in responder.rows if row["model"] == _wire(selector) and row["tool_count"]]
+        self.assertTrue(rows, "selected model sent no turn")
+        first = rows[0]
+        return {"window": window["window"], "max_tokens": first["max_tokens"],
+                "long_context": any(name.startswith("context-1m-")
+                                    for name in provider.beta_names[first["ordinal"]]),
+                "limit_queries": provider.limit_queries}
+
+    def test_s7_canonical_limits_fresh_and_after_switch(self):
+        observed = {}
+        for selector in (_wire(_OPUS), _OPUS):
+            for switched in (False, True):
+                label = f"{selector}/{'switch' if switched else 'fresh'}"
+                observed[label] = self._case(selector, switched=switched)
+        # This custom endpoint does not get Models API lookups: advertised
+        # 300K/16K limits do not replace the client's 1M/128K defaults. The
+        # [1m] suffix changes the beta, not the canonical Opus window.
+        for selector in (_wire(_OPUS), _OPUS):
+            for kind in ("fresh", "switch"):
+                self.assertEqual(observed[f"{selector}/{kind}"], {
+                    "window": 1000000,
+                    "max_tokens": 128000, "long_context": selector.endswith("[1m]"),
+                    "limit_queries": [],
+                })
+        print(f"client check S7-limits: PASS {self._identity()} {observed}")
+
+
 class SafetySwitchTests(_SpikeTestCase):
     """The refusal probe and the 2.1.282-2.1.286 release-note refusal shapes on the
     exact client, offline, with the compiled family defaults (every managed
@@ -775,7 +904,7 @@ class SafetySwitchTests(_SpikeTestCase):
 class AgentEffortProbe(_SpikeTestCase):
     """S8: agent frontmatter effort on the subagent's wire."""
 
-    _EFFORTS = ("none", "ultracode", "low", "medium", "xhigh")
+    _EFFORTS = ("none", "ultracode", "low", "medium", "high", "xhigh", "max")
 
     def test_s8_agent_effort_vocabulary(self) -> None:
         fixture = self._fixture()
@@ -812,12 +941,11 @@ class AgentEffortProbe(_SpikeTestCase):
             wire[effort] = tagged[0]
             self.assertEqual(tagged[0]["model"], "claude-opus-5-5")
             self.assertEqual(tagged[0]["thinking_type"], "adaptive")
-        # low/medium/xhigh reach the wire verbatim; ultracode is rejected by
-        # the loader (debug-log "has invalid effort", no stderr/UI marker) and
-        # the agent silently inherits the session effort like "none".
-        self.assertEqual(wire["low"]["effort"], "low")
-        self.assertEqual(wire["medium"]["effort"], "medium")
-        self.assertEqual(wire["xhigh"]["effort"], "xhigh")
+        # Valid frontmatter efforts reach the wire verbatim; ultracode is
+        # rejected by the loader (debug-log only) and silently inherits the
+        # session effort like "none".
+        for effort in ("low", "medium", "high", "xhigh", "max"):
+            self.assertEqual(wire[effort]["effort"], effort)
         self.assertEqual(wire["ultracode"]["effort"], lead["effort"])
         self.assertEqual(wire["none"]["effort"], lead["effort"])
         self.assertEqual(result.returncode, 0)
@@ -828,6 +956,44 @@ class AgentEffortProbe(_SpikeTestCase):
             f"wire={lead['effort']}; agent frontmatter {summary} "
             "(ultracode rejected silently: debug-log only, inherits session effort)"
         )
+
+    def test_s8_explicit_agent_effort_precedence(self) -> None:
+        fixture = self._fixture()
+        cases = {
+            "omitted": ("low", None),
+            "high": ("low", "high"),
+            "max": ("low", "max"),
+            "no-frontmatter": (None, "high"),
+        }
+        markers, agents, explicit = {}, [], {}
+        for label, (frontmatter, argument) in cases.items():
+            name = f"client-check-explicit-{label}"
+            marker = f"CLIENT-CHECK-S8-EXPLICIT-{label.upper()}-MARK"
+            self._write_agent(fixture, name, model=_OPUS, effort=frontmatter, marker=marker)
+            markers[label] = marker
+            agents.append(name)
+            if argument is not None:
+                explicit[name] = argument
+        result, rows = self._run(
+            "S8-explicit", _OPUS,
+            responder=_SpikeResponder(agents=tuple(agents), agent_efforts=explicit),
+            extra=("--effort", "medium", "--dangerously-skip-permissions"),
+            fixture=fixture, markers=markers,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(rows[0]["effort"], "medium")
+        observed = {}
+        for label, (frontmatter, argument) in cases.items():
+            tagged = [row for row in rows if row["markers"] == (label,)]
+            self.assertEqual(len(tagged), 1, label)
+            self.assertEqual(tagged[0]["model"], _wire(_OPUS), label)
+            self.assertEqual(tagged[0]["thinking_type"], "adaptive", label)
+            observed[label] = tagged[0]["effort"]
+        self.assertEqual(observed, {
+            "omitted": "low", "high": "high", "max": "max", "no-frontmatter": "high",
+        })
+        print(f"client check S8-explicit: PASS {self._identity()} session=medium "
+              f"frontmatter=low; Agent argument wire={observed}")
 
 
 class NativeAgentWireProbe(_SpikeTestCase):

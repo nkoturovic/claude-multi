@@ -1,9 +1,14 @@
 # The recorded class of each real-binary probe (tests/test_scope_probe_client.py).
+# Re-observed on signed client 2.1.292 (linux-x64), 2026-10-07.
+# PASS names an observed class, not a blanket capability or provider guarantee.
 # A diagnostic probe whose new run differs reports 'changed recorded=<class>';
 # the correctness-essential classes are asserted by the probes themselves.
 client probe CE: PASS class=CE-A
 client probe DAH: PASS class=DAH-override
 client probe U1: PASS class=U1-proc
+# U1/OC/RET pass on the private copied client. With the staged pin on a
+# different filesystem from TMPDIR they report BOUNDARY (hardlink control).
+# U1-c remains BOUNDARY on the private copy: no retained non-pinned sibling.
 client probe X5: PASS class=X5-silent-hours
 client probe SC: PASS class=SC-caps
 client probe SX: PASS class=SX-open-continue-dies
@@ -14,3 +19,13 @@ client probe R19: PASS class=R19-open
 client probe SK: PASS class=SK-kept
 client probe OC: PASS class=OC-untouched
 client probe FL: PASS class=FL-ok
+client probe CC: PASS class=CC-bash-child
+client probe FD: PASS class=FD-env-off-subagent-withheld
+# FD: notify restores the lead; the subagent notify control is unavailable.
+client probe XC: PASS class=XC-exact
+client probe DG: PASS class=DG-resumable
+# DG: 2.1.292 tool turn + /compact resumes on 2.1.286 with summary only.
+client probe SL: BOUNDARY class=unavailable
+# SL: no newer-than-pin client retained; not a successful resume observation.
+# Supervisor takeover and staged marketplace-plugin updates remain INCONCLUSIVE
+# offline. Signed real-provider behavior is not established by these fixtures.

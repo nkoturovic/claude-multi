@@ -416,6 +416,28 @@ _S5_TURNS = {
 }
 
 
+# Synthetic generated-lineup-like text: the complete notice, not just its
+# marker, must survive each hook channel. The client escapes system-reminder
+# tags inside additionalContext; ordinary markup and Markdown remain text.
+_S5_CONTEXTS = {
+    key: (
+        f"# claude-multi lineup (lineup_generation 1)\n\n"
+        f"Profile: <fixture> & notice {marker}\n\n"
+        f"## Lead\n- lead: fixture · high · `{_OPUS}`\n\n"
+        f"## Agents\n- `cm-explorer`: fixture · high · `{_SONNET}`\n\n"
+        f"<system-reminder>Keep the lineup {marker}.</system-reminder>\n"
+        f"End of lineup {marker}"
+    )
+    for key, marker in _S5_MARKERS.items()
+}
+_S5_WIRE_CONTEXTS = {
+    key: ("client lineup notice " + text)
+    .replace("<system-reminder>", "&lt;system-reminder>")
+    .replace("</system-reminder>", "&lt;/system-reminder>")
+    for key, text in _S5_CONTEXTS.items()
+}
+
+
 class ClientCheckS5LineupNoticeTests(_SpikeBase):
     """S5: which hook channels deliver additionalContext to the lead."""
 
@@ -433,23 +455,40 @@ class ClientCheckS5LineupNoticeTests(_SpikeBase):
         channels = [p for p in cls.parts if p != "exit2" and seen[p] == "reached"]
         detail = (
             f"{cls.evidence_version} reached={','.join(channels)} "
-            f"ups_exit2={seen['exit2']}"
+            f"ups_exit2={seen['exit2']} markup=complete(system-reminder-leading-lt-escaped)"
         )
         if len(channels) == 6:
             return "PASS", detail
         return "FAIL", detail
 
     def _provider(self) -> probe.FakeAnthropicProvider:
+        self.full_notices: dict[str, tuple[str, ...]] = {}
+
+        def respond(document, path, context):
+            # Compare complete text in memory; retain only marker names keyed
+            # by the harness's request digest, never any notice or body text.
+            content = json.dumps(document.get("messages", []))
+            self.full_notices[context.record.body_sha256] = tuple(
+                key for key, text in _S5_WIRE_CONTEXTS.items()
+                if json.dumps(text)[1:-1] in content
+            )
+            return _sse_responder(document, path)
+
         return probe.FakeAnthropicProvider(
-            responder=_sse_responder,
+            responder=types.SimpleNamespace(respond=respond),
             content_markers={**_S5_MARKERS, **_S5_TURNS},
         )
+
+    def _assert_full_notices(self, record, *keys):
+        observed = self.full_notices[record.body_sha256]
+        for key in keys:
+            self.assertIn(key, observed, "complete markup notice missing or changed")
 
     def test_headless_startup_resume_fork_and_user_prompt_submit(self) -> None:
         self._install_hooks(
             self.fixture,
             events=("SessionStart", "UserPromptSubmit"),
-            markers=_S5_MARKERS,
+            markers=_S5_CONTEXTS,
             target="user",
         )
         session = "35353535-3535-4535-8535-353535353535"
@@ -472,6 +511,7 @@ class ClientCheckS5LineupNoticeTests(_SpikeBase):
             # UserPromptSubmit notice both reach the first lead request.
             self.assertIn(f"ss-{source}", lead[0].markers_found, source)
             self.assertIn("ups", lead[0].markers_found, source)
+            self._assert_full_notices(lead[0], f"ss-{source}", "ups")
             if source != "startup":
                 # Hook context is part of the transcript: earlier notices
                 # are replayed on resume/fork (they accumulate until a
@@ -493,7 +533,7 @@ class ClientCheckS5LineupNoticeTests(_SpikeBase):
         self._install_hooks(
             self.fixture,
             events=("SessionStart", "UserPromptSubmit"),
-            markers=_S5_MARKERS,
+            markers=_S5_CONTEXTS,
             target="user",
         )
         self.mode_path.write_text("block", encoding="utf-8")
@@ -511,7 +551,7 @@ class ClientCheckS5LineupNoticeTests(_SpikeBase):
         flag = self._install_hooks(
             self.fixture,
             events=("SessionStart", "UserPromptSubmit"),
-            markers=_S5_MARKERS,
+            markers=_S5_CONTEXTS,
         )
         steps = [
             probe.PTYInteraction(_PROMPT, _S5_TURNS["t-one"].encode() + b"\r"),
@@ -547,11 +587,13 @@ class ClientCheckS5LineupNoticeTests(_SpikeBase):
         after_clear = by_turn["t-three"][0].markers_found
         self.assertIn("ss-compact", after_compact)
         self.assertIn("ups", after_compact)
+        self._assert_full_notices(by_turn["t-two"][0], "ss-compact", "ups")
         # Compaction replaces the history: the startup notice is gone and
         # only the compact-sourced notice carries the lineup forward.
         self.assertNotIn("ss-startup", after_compact)
         self.assertIn("ss-clear", after_clear)
         self.assertIn("ups", after_clear)
+        self._assert_full_notices(by_turn["t-three"][0], "ss-clear", "ups")
         self.assertNotIn("ss-compact", after_clear)
         type(self).observed["compact"] = "reached"
         type(self).observed["clear"] = "reached"

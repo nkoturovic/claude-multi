@@ -9,39 +9,39 @@
       "status": "verified"
     },
     "U11": {
-      "note": "Client check S1 (re-run on client 2.1.286): /reload-plugins re-reads an edited add-dir agent (model and body); agents are not hot-watched, so without it the next spawn keeps the old binding. Staged plugin update not stageable offline. Radar: tests/test_client_agents.py test_s1_reload_plugins_rebinds_next_spawn.",
+      "note": "Client check S1 (re-run on client 2.1.292): /reload-plugins re-reads an edited add-dir agent (model and body); agents are not hot-watched, so without it the next spawn keeps the old binding. Staged plugin update not stageable offline. Radar: tests/test_client_agents.py test_s1_reload_plugins_rebinds_next_spawn.",
       "status": "verified"
     },
     "U12": {
-      "note": "Client check S2 (re-run on client 2.1.286): after a live change, /compact and a relaunch with the same --resume argv keep the new binding; relaunch waits for the compact boundary; supervisor takeover stays user acceptance (U1). Radar: tests/test_client_agents.py test_s2_*.",
+      "note": "Client check S2 (re-run on client 2.1.292): after a live change, /compact and a relaunch with the same --resume argv keep the new binding; relaunch waits for the compact boundary; supervisor takeover stays user acceptance (U1). Radar: tests/test_client_agents.py test_s2_*.",
       "status": "verified"
     },
     "U13": {
-      "note": "Client check S3 (re-run on client 2.1.286) FAIL: a SendMessage-resumed agent is rebound to the current frontmatter model with its original prompt and transcript. Adopted fallback: lead-prompt wording and the lineup notice say spawn fresh after a lineup change, never SendMessage-continue. Radar: tests/test_client_agents.py test_s3_*.",
+      "note": "Client check S3 (re-run on client 2.1.292) FAIL: a SendMessage-resumed agent is rebound to the current frontmatter model with its original prompt and transcript. Adopted fallback: lead-prompt wording and the lineup notice say spawn fresh after a lineup change, never SendMessage-continue. Radar: tests/test_client_agents.py test_s3_*.",
       "status": "failed"
     },
     "U14": {
-      "note": "Client check S4 (re-run on client 2.1.286): the /cm skill runs the launcher at expansion with no model turn; body '$ARGUMENTS' is single-quoted and the launcher refuses more than one argument after --session <id> (balanced apostrophes word-split). Radar: tests/test_client_skill_workflow.py test_s4_cm_scope_skill_invocation.",
+      "note": "Client check S4 (re-run on client 2.1.292): the /cm skill runs the launcher at expansion with no model turn; body '$ARGUMENTS' is single-quoted and the launcher refuses more than one argument after --session <id> (balanced apostrophes word-split). Radar: tests/test_client_skill_workflow.py test_s4_cm_scope_skill_invocation.",
       "status": "verified"
     },
     "U15": {
-      "note": "Client check S5 (re-run on client 2.1.286): hook additionalContext reaches the lead for SessionStart startup/resume/fork/compact/clear and UserPromptSubmit; notices replay until compaction; exit 2 blocks the prompt, so hooks never exit 2. Radar: tests/test_client_hooks.py.",
+      "note": "Client check S5 (re-run on client 2.1.292): hook additionalContext reaches the lead for SessionStart startup/resume/fork/compact/clear and UserPromptSubmit; complete markup-looking lineup notices survive with only the leading < of embedded system-reminder tags escaped as &lt;; notices replay until compaction; exit 2 blocks the prompt, so hooks never exit 2. Radar: tests/test_client_hooks.py.",
       "status": "verified"
     },
     "U16": {
-      "note": "Client check S6 (re-run on client 2.1.286): PreModelSwitch/PostModelSwitch fire per surface; a picker Default row that resolves to the current model emits no switch event; a relaunch argv --model wins without PostModelSwitch and resume SessionStart carries no model, so takeover detection keeps the documented drift fallback; hint headers change headers only. Radar: tests/test_client_hooks.py.",
+      "note": "Client check S6 (re-run on client 2.1.292): PreModelSwitch/PostModelSwitch fire per surface; a picker Default row that resolves to the current model emits no switch event; a relaunch argv --model wins without PostModelSwitch and resume SessionStart carries no model, so takeover detection keeps the documented drift fallback; hint headers change headers only. Radar: tests/test_client_hooks.py.",
       "status": "verified"
     },
     "U17": {
-      "note": "Client check S7a/b (re-run on client 2.1.286): canonical Anthropic ids are recognised (prompt bundle, output cap, fallback chain) while claude-multi-* Anthropic ids are unknown (32000 cap, no refusal fallback); bare family aliases resolve to the current generation (sonnet -> claude-sonnet-5-5 on 2.1.286). Radar: tests/test_client_models.py test_s7_selector_recognition.",
+      "note": "Client check S7a/b (re-run on client 2.1.292): canonical Anthropic ids are recognised; claude-multi-* ids are unknown (32000 cap, no refusal fallback); bare aliases use current generations. Opus 5.5 with/without [1m] books 1M and sends 128000 max_tokens, fresh or after /model; only [1m] adds the beta. Advertised 300K/16K limits are not fetched from the custom endpoint: server-limit negotiation is unverified. Radar: tests/test_client_models.py SelectorRecognitionProbe/SelectorLimitsProbe.",
       "status": "verified"
     },
     "U18": {
-      "note": "Client check S8 (re-run on client 2.1.286): agent frontmatter low, medium and xhigh are sent verbatim; ultracode is dropped silently to the session effort, visible only in the debug log. The catalog validator rejects agent ultracode. Radar: tests/test_client_models.py test_s8_agent_effort_vocabulary.",
+      "note": "Client check S8 (re-run on client 2.1.292): agent frontmatter low, medium, high, xhigh and max are sent verbatim; ultracode is dropped silently to the session effort, visible only in the debug log. An explicit Agent effort (high or max) overrides low frontmatter and medium session effort; omitting it keeps low frontmatter. The catalog validator rejects agent ultracode, but frontmatter is a default, not an immutable per-call effort. Radar: tests/test_client_models.py AgentEffortProbe.",
       "status": "verified"
     },
     "U19": {
-      "note": "Client check S9 (re-run on client 2.1.286): native Explore inherits an unrecognised (GPT) lead with or without CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP, and is capped to the Opus default under a Fable lead unless that flag is set (changed since 2.1.281); statusline-setup and claude-code-guide wires recorded. Radar: tests/test_client_models.py test_s9_native_agent_wires.",
+      "note": "Client check S9 (re-run on client 2.1.292): native Explore inherits an unrecognised (GPT) lead with or without CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP, and is capped to the Opus default under a Fable lead unless that flag is set (changed since 2.1.281); statusline-setup and claude-code-guide wires recorded. Radar: tests/test_client_models.py test_s9_native_agent_wires.",
       "status": "verified"
     },
     "U2": {
@@ -49,19 +49,19 @@
       "status": "unverified"
     },
     "U20": {
-      "note": "Client check S10 (re-run on client 2.1.286): workflow agent() type, model and cwd behave as recorded; a workflow default binding must be inside availableModels; Workflow is on by default and disableWorkflows:true is the off control. Radar: tests/test_client_skill_workflow.py test_s10_*.",
+      "note": "Client check S10 (re-run on client 2.1.292): workflow agent() type, model and cwd behave as recorded; a workflow default binding must be inside availableModels; Workflow is on by default and disableWorkflows:true is the off control. Radar: tests/test_client_skill_workflow.py test_s10_*.",
       "status": "verified"
     },
     "U21": {
-      "note": "Client check S11 (re-run on client 2.1.286): helper-only gateway auth rotates in-process with one 401 and a ~1 s retry using the new helper token; an env token outranks the helper and freezes it, so durable launches unset ANTHROPIC_AUTH_TOKEN. Radar: tests/test_client_gateway_auth.py test_s11_*.",
+      "note": "Client check S11 (re-run on client 2.1.292): helper-only gateway auth rotates in-process with one 401 and a ~1 s retry using the new helper token; an env token outranks the helper and freezes it, so durable launches unset ANTHROPIC_AUTH_TOKEN. Radar: tests/test_client_gateway_auth.py test_s11_*.",
       "status": "verified"
     },
     "U22": {
-      "note": "Client check S12 (re-run on client 2.1.286) PASS with caveat: the client strips [1m] from a codex selector, sends the 1M beta and books 1M; the gateway forwards the wire id with no window field and no 272K cap. Provider acceptance above 272K is not decidable offline (consent-gated live call). Radar: tests/test_client_gateway_auth.py test_s12_gpt6_1m_selector_client_and_gateway.",
+      "note": "Client check S12 (re-run on client 2.1.292) PASS with caveat: the client strips [1m] from a codex selector, sends the 1M beta and books 1M; the gateway forwards the wire id with no window field and no 272K cap. Provider acceptance above 272K is not decidable offline (consent-gated live call). Radar: tests/test_client_gateway_auth.py test_s12_gpt6_1m_selector_client_and_gateway.",
       "status": "verified"
     },
     "U23": {
-      "note": "Client check S7c (re-run on client 2.1.286): a categorized refusal retries once on the same wire, then switches only to a fenced hard-coded target (Opus/Fable: cyber -> claude-opus-4-8, bio, frontier_llm -> claude-opus-5; Sonnet 5.5: cyber, frontier_llm -> claude-sonnet-5); lead-only fences, server-named targets and switchModelsOnFlag:false never switch. Targets stay fallback-only passthrough routes. Radar: tests/test_client_models.py SelectorRecognitionProbe.",
+      "note": "Client check S7c (re-run on client 2.1.292): a categorized refusal retries once on the same wire, then switches only to a fenced hard-coded target (Opus/Fable: cyber -> claude-opus-4-8, bio, frontier_llm -> claude-opus-5; Sonnet 5.5: cyber, frontier_llm -> claude-sonnet-5); lead-only fences, server-named targets and switchModelsOnFlag:false never switch. Targets stay fallback-only passthrough routes. Radar: tests/test_client_models.py SelectorRecognitionProbe.",
       "status": "verified"
     },
     "U5": {
@@ -74,7 +74,7 @@
     }
   },
   "agent_efforts": {
-    "evidence": "Pinned client 2.1.281 accepts exactly low, medium, high, xhigh and max in agent frontmatter (static check). Client check S8 sent low, medium and xhigh verbatim on the subagent wire and silently dropped ultracode to the session effort, so the validator is the only guard. high and max rest on ordinary v1 operation.",
+    "evidence": "Client check S8 on 2.1.292 sends low, medium, high, xhigh and max frontmatter verbatim and silently drops ultracode to the session effort. Explicit Agent effort high/max overrides low frontmatter and medium session effort; omitted effort keeps the frontmatter default. The validator guards frontmatter, not the lead's per-call effort choice.",
     "status": "verified",
     "values": [
       "low",
@@ -119,7 +119,7 @@
     ]
   },
   "lead_efforts": {
-    "evidence": "Lead efforts are the agent efforts plus ultracode; an ultracode lead sends xhigh on the wire. low and medium were not exercised as lead efforts on 2.1.281.",
+    "evidence": "Re-run on client 2.1.292: S8 sends lead ultracode as xhigh; D5 sends low, medium, high, xhigh and max with adaptive thinking on Sonnet. XC confirms the same five wire levels on its fixture line. These are client wire observations, not real-provider acceptance.",
     "status": "provisionally-trusted",
     "values": [
       "low",
@@ -131,8 +131,8 @@
     ]
   },
   "lifecycle_evidence": {
-    "evidence_id": "deepwork-claude-multi-durable-session-config-phase0-2.1.286",
-    "inspected_version": "2.1.286"
+    "evidence_id": "deepwork-claude-multi-durable-session-config-phase0-2.1.292",
+    "inspected_version": "2.1.292"
   },
   "nested_subagents": {
     "concurrency_key": {
@@ -153,42 +153,42 @@
       "evidence": {
         "linux-x64": "battery",
         "others": "identity+smoke",
-        "receipt_sha256": "9410f9ebf106ba2a16dd8b763f0515e3cb80c6b37f1a2c55bfb89ec2da11892e"
+        "receipt_sha256": "fbad98ad19140bef199c2556bffb91b9cdb1ca9152c32cbb5425ed2aa4b39fbb"
       },
       "key_fingerprint": "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE",
-      "manifest_sha256": "c84e2bef8910fdec338c5e198192fc02d574182f71e57f2c262519541c697523",
+      "manifest_sha256": "64f5abe05a43151810acf8c25169872e41293c96d3ae73d6508733a8b336e2b1",
       "platforms": {
         "darwin-arm64": {
-          "sha256": "75e3016e9d2570767b08e43a7467d4817a4f149232c169ca295f2c95fef21433",
-          "size": 225167728
+          "sha256": "97a01e5bc74a199e67189435d0331ea3a24eac2e07db4b76d9148c5b0386138f",
+          "size": 235017328
         },
         "darwin-x64": {
-          "sha256": "53e6a936e89519d695230f9cc97943991286b72766674fba11bee845f0a7c047",
-          "size": 233607424
+          "sha256": "a9739a215728ce72435885fedb19d1317ee1ccec61e246fbfb3acaf01689c473",
+          "size": 243514624
         },
         "linux-arm64": {
-          "sha256": "0292fa22ac2fd43e16be9d0e511ddd8347280d6e0ebaca744ef5b27e05d8d0f8",
-          "size": 241033208
+          "sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+          "size": 250798072
         },
         "linux-arm64-musl": {
-          "sha256": "5b9b9e41b8b347ba573924342b29b1133d88a7bec51362d5a90a9f22cd6f76cf",
-          "size": 233387840
+          "sha256": "a17c919b13df206371a55de716ab81e3dcd7c039f66b79003ed87b7665fdc15f",
+          "size": 243152704
         },
         "linux-x64": {
-          "sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
-          "size": 241667256
+          "sha256": "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3",
+          "size": 251456696
         },
         "linux-x64-musl": {
-          "sha256": "410780234cc3e54afe41a958ef26a4b4f1d253849b769c760f6bcf0bb525fb09",
-          "size": 235417688
+          "sha256": "d23f28ef84f5459a25d2d4cf999a7debd41df83507160446983d4ca65554e50f",
+          "size": 245203032
         },
         "win32-arm64": {
-          "sha256": "9109c7b0a0de5b40fd013b9009411e517199c8275d2363b824e851cc1133d3c3",
-          "size": 232616096
+          "sha256": "0bfe32208d4f34d9bc01454ac8aa226f71bbf24617d913e78db5792ad937b784",
+          "size": 242380960
         },
         "win32-x64": {
-          "sha256": "0b6ecec8edef1ce3069682f696c894d1553239faa6b84e56e167a3ced88fa333",
-          "size": 245092000
+          "sha256": "eb95bb65955f8b1702e800815f9a2c0388a5de0f196c354c7ee1dd5cb9a2ba23",
+          "size": 254858400
         }
       },
       "settings_keys": [
@@ -282,6 +282,7 @@
         "gcpAuthRefresh",
         "hooks",
         "httpHookAllowedEnvVars",
+        "idleCompaction",
         "includeCoAuthoredBy",
         "includeGitInstructions",
         "inputNeededNotifEnabled",
@@ -376,9 +377,9 @@
         "wslInheritsWindowsSettings",
         "xaaIdp"
       ],
-      "signature_sha256": "b0c7db2f8f7e185cc57a0bf0f6ed448359a7db095c3133773126275e3e911d22",
-      "verified_at": "2026-10-01",
-      "version": "2.1.286"
+      "signature_sha256": "537e1a8bcca1646fd5e52d3dc8d16509395a88f6f18b13765b2c085d057567ea",
+      "verified_at": "2026-10-07",
+      "version": "2.1.292"
     }
   ],
   "version": 2
