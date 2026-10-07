@@ -1342,7 +1342,8 @@ class ModelsAndDirectTests(unittest.TestCase):
         self.assertEqual(model.new_keys, (key,))
         self.assertEqual(model.new_rows[0][-1], "New · not admitted")
         self.assertIn("optional badge", model.new_heading)
-        self.assertIn("use: available · admission: not admitted (optional)", model.details[key])
+        self.assertIn("use: available", model.details[key])
+        self.assertIn("admission: not admitted (optional)", model.details[key])
         self.assertEqual(
             model.retired, "retired  " + " · ".join(f"{k} → (none)" for k in sorted(retired))
         )
@@ -1354,7 +1355,8 @@ class ModelsAndDirectTests(unittest.TestCase):
         self.assertTrue(admitted.new_heading.endswith(": —"))
         self.assertEqual(admitted.retired, "retired  3 continuity aliases retained")
         self.assertTrue(admitted.details[key][0].endswith(" · admitted (New, stored in Settings)"))
-        self.assertIn("use: available · admission: admitted (optional)", admitted.details[key])
+        self.assertIn("use: available", admitted.details[key])
+        self.assertIn("admission: admitted (optional)", admitted.details[key])
         self.assertEqual(admitted.details[key][-1], "radar!")
 
     def test_custom_rows_listed_once_after_the_catalog_rows(self) -> None:
