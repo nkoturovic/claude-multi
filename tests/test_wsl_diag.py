@@ -33,6 +33,11 @@ def artifact() -> dict:
             "digest": diag.ARTIFACT_DIGEST, "head_sha": diag.SHA}
 
 
+def watchdog() -> dict:
+    return {"schema": 1, "status": "resume-timeout", "elapsed_ms": 130000, "armed_at_ms": 0,
+            "launcher_exit_code": None, "namespace_exit_confirmed": False, "terminate_state": "timeout"}
+
+
 def process() -> dict:
     return {"pid": 42, "ppid": 1, "pgid": 42, "start_ticks": 100,
             "state": "S", "exe": "claude", "wchan": "locks_lock_inode_wait"}
@@ -47,6 +52,7 @@ class ScratchTests(unittest.TestCase):
         self.meta.mkdir()
         self.output = self.root / "validated"
         diag.atomic_json(self.meta / "artifact.json", artifact())
+        diag.atomic_json(self.meta / "watchdog.json", watchdog())
 
 
 class SourcePatchTests(ScratchTests):
@@ -173,10 +179,12 @@ class MetadataTests(ScratchTests):
         diag.append_json(self.meta / "fixture.jsonl", row, diag.LIMITS["fixture.jsonl"])
         with mock.patch.object(diag, "safe_read", wraps=diag.safe_read) as read:
             diag.validate_directory(self.meta, self.output)
-        self.assertEqual({call.args[0].name for call in read.call_args_list}, {"artifact.json", "fixture.jsonl"})
-        self.assertEqual({p.name for p in self.output.iterdir()}, {"artifact.json", "fixture.jsonl"})
+        self.assertEqual({call.args[0].name for call in read.call_args_list}, set(diag.LIMITS))
+        self.assertEqual({p.name for p in self.output.iterdir()},
+                         {"artifact.json", "watchdog.json", "fixture.jsonl", "validation.json"})
         self.assertNotIn("never-export", "".join(p.read_text() for p in self.output.iterdir()))
         self.assertEqual(json.loads((self.output / "artifact.json").read_text()), artifact())
+        diag.check_export(self.output)
 
     def test_unknown_keys_raw_paths_wrong_types_and_model_are_rejected(self) -> None:
         good = {"schema": 1, "pid": 42, "pgid": 42, "start_ticks": 99, "deadline_seconds": 120}
@@ -198,16 +206,17 @@ class MetadataTests(ScratchTests):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 diag.validate_record("fixture.jsonl", {**row, field: value})
 
-    def test_bad_json_and_oversize_reject_without_sanitized_output(self) -> None:
+    def test_bad_mandatory_json_and_oversize_reject_without_sanitized_output(self) -> None:
         for raw in (b'{"schema":1,"schema":1}', b'{"schema":NaN}', b"{not json", b"x" * 2049):
             with self.subTest(raw=raw[:30]):
-                (self.meta / "resume-start.json").write_bytes(raw)
+                (self.meta / "watchdog.json").write_bytes(raw)
                 with self.assertRaises(ValueError):
                     diag.validate_directory(self.meta, self.output)
                 self.assertFalse(self.output.exists())
 
-    def test_symlinks_directories_and_fifos_are_not_opened(self) -> None:
-        path = self.meta / "outcome.json"
+    def test_mandatory_symlinks_directories_and_fifos_are_not_opened(self) -> None:
+        path = self.meta / "watchdog.json"
+        path.unlink()
         path.symlink_to(self.meta / "artifact.json")
         with self.assertRaises(ValueError):
             diag.validate_directory(self.meta, self.output)
@@ -227,12 +236,13 @@ class MetadataTests(ScratchTests):
         diag.append_json(path, row, len(diag.encoded(row)))
         with self.assertRaises(ValueError):
             diag.append_json(path, row, len(diag.encoded(row)))
-        path.write_bytes(diag.encoded(row) * 257)
+        path.write_bytes(diag.encoded(row) * 256)
         with self.assertRaises(ValueError):
-            diag.validate_directory(self.meta, self.output)
-        path.write_bytes(b'{"event":')  # A torn last line is not silently accepted.
+            diag.append_json(path, row, diag.LIMITS["fixture.jsonl"])
+        self.assertEqual(len(path.read_bytes().splitlines()), 256)
+        path.write_bytes(b'{"event":')  # The producer must not append onto a torn record.
         with self.assertRaises(ValueError):
-            diag.validate_directory(self.meta, self.output)
+            diag.append_json(path, row, diag.LIMITS["fixture.jsonl"])
         path.write_bytes(diag.encoded(row))
         self.output.mkdir()
         with self.assertRaises(FileExistsError):
@@ -285,6 +295,95 @@ class MetadataTests(ScratchTests):
         self.assertNotIn("never-export", json.dumps(row))
         (directory / "wchan").write_text("never-export")
         self.assertEqual(diag.process_metadata(42, proc)["wchan"], "other")
+
+
+class ExportTests(ScratchTests):
+    def assert_timeout_evidence_preserved(self) -> None:
+        diag.atomic_json(self.meta / "outcome.json",
+                         {"schema": 1, "managed_turn_passed": False, "journey_exit_code": 1})
+        diag.validate_directory(self.meta, self.output)
+        self.assertEqual(json.loads((self.output / "artifact.json").read_text()), artifact())
+        self.assertEqual(json.loads((self.output / "watchdog.json").read_text()), watchdog())
+        self.assertFalse(json.loads((self.output / "outcome.json").read_text())["managed_turn_passed"])
+        self.assertFalse((self.output / "fixture.jsonl").exists())
+        self.assertEqual(json.loads((self.output / "validation.json").read_text()),
+                         {"schema": 1, "optional_metadata_valid": False,
+                          "omitted": [{"file": "fixture.jsonl", "reason": "invalid-metadata"}]})
+        self.assertNotIn("NEVER-EXPORT", "".join(p.read_text() for p in self.output.iterdir()))
+        with self.assertRaises(ValueError):
+            diag.check_export(self.output)
+
+    def test_resume_timeout_watchdog_survives_257_valid_fixture_records(self) -> None:
+        row = diag.fixture_record({"method": "POST", "path": "/v1/chat/completions", "model": "fixture-model-1",
+                                   "stream": True, "reply": 2, "carried": [1]})
+        raw = diag.encoded(row) * 257
+        self.assertLess(len(raw), diag.LIMITS["fixture.jsonl"])
+        (self.meta / "fixture.jsonl").write_bytes(raw)
+        self.assert_timeout_evidence_preserved()
+
+    def test_resume_timeout_watchdog_survives_truncated_final_jsonl(self) -> None:
+        row = diag.fixture_record({"method": "GET", "path": "/v1/models"})
+        (self.meta / "fixture.jsonl").write_bytes(diag.encoded(row) + b'{"event":"NEVER-EXPORT"')
+        self.assert_timeout_evidence_preserved()
+
+    def test_mandatory_invalid_or_missing_artifact_and_watchdog_fail_closed(self) -> None:
+        (self.meta / "fixture.jsonl").write_bytes(b'{"event":"NEVER-EXPORT"')
+        for name in diag.MANDATORY:
+            path = self.meta / name
+            original = path.read_bytes()
+            with self.subTest(name=name, kind="invalid"):
+                path.write_bytes(diag.encoded({**json.loads(original), "raw": "NEVER-EXPORT"}))
+                with self.assertRaises(ValueError):
+                    diag.validate_directory(self.meta, self.output)
+                self.assertFalse(self.output.exists())
+            with self.subTest(name=name, kind="missing"):
+                path.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    diag.validate_directory(self.meta, self.output)
+                self.assertFalse(self.output.exists())
+            path.write_bytes(original)
+
+    def test_jsonl_producers_and_validator_share_record_limits(self) -> None:
+        fixture = diag.fixture_record({"method": "GET", "path": "/v1/models"})
+        snapshot = {"event": "periodic", "elapsed_ms": 0, "processes": [], "locks": [],
+                    "processes_truncated": False, "locks_available": True, "locks_truncated": False}
+        for filename, name, row in (("fixture.jsonl", "fixture.jsonl", fixture),
+                                    ("fixture.log", "fixture.jsonl", fixture),
+                                    ("snapshots.jsonl", "snapshots.jsonl", snapshot)):
+            with self.subTest(filename=filename):
+                path = self.meta / filename
+                maximum = diag.RECORD_LIMITS[name]
+                raw = diag.encoded(row)
+                path.write_bytes(raw * (maximum - 1))
+                diag.append_json(path, row, diag.LIMITS[name])
+                self.assertEqual(diag.validated_bytes(path, name), raw * maximum)
+                with self.assertRaises(ValueError):
+                    diag.append_json(path, row, diag.LIMITS[name])
+                self.assertEqual(path.read_bytes(), raw * maximum)
+
+    def test_export_and_job_integrity_have_separate_cli_outcomes(self) -> None:
+        (self.meta / "fixture.jsonl").write_bytes(b'{"event":"NEVER-EXPORT"')
+        exported = subprocess.run([sys.executable, str(SCRIPTS / "wsl_diag.py"), "validate",
+                                   str(self.meta), str(self.output)], stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=5)
+        self.assertEqual(exported.returncode, 0, exported.stderr)
+        self.assertEqual(exported.stdout + exported.stderr, "")
+        checked = subprocess.run([sys.executable, str(SCRIPTS / "wsl_diag.py"), "check-export", str(self.output)],
+                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        self.assertEqual(checked.returncode, 1)
+        self.assertNotIn("NEVER-EXPORT", checked.stdout + checked.stderr)
+        self.assertEqual(json.loads((self.output / "watchdog.json").read_text()), watchdog())
+
+    def test_omission_report_accepts_only_fixed_file_identities_and_reason(self) -> None:
+        good = {"schema": 1, "optional_metadata_valid": False,
+                "omitted": [{"file": "fixture.jsonl", "reason": "invalid-metadata"}]}
+        diag.validate_record("validation.json", good)
+        for omission in ({"file": "raw-turn.txt", "reason": "invalid-metadata"},
+                         {"file": "fixture.jsonl", "reason": "NEVER-EXPORT"}):
+            with self.subTest(omission=omission), self.assertRaises(ValueError):
+                diag.validate_record("validation.json", {**good, "omitted": [omission]})
+        with self.assertRaises(ValueError):
+            diag.validate_record("validation.json", {**good, "optional_metadata_valid": True})
 
 
 class ResumeTests(ScratchTests):
@@ -430,8 +529,15 @@ class WorkflowContainmentTests(unittest.TestCase):
         self.assertIn("digest-mismatch: error", text)
         self.assertIn("timeout-minutes: 8", text)
         self.assertIn("steps.validate.outcome == 'success'", text)
+        integrity = text[text.index("      - name: Invalid optional metadata still fails the diagnostic"):
+                         text.index("      - uses: actions/upload-artifact@")]
+        self.assertIn("if: always() && steps.validate.outcome == 'success'", integrity)
+        self.assertIn('wsl_diag.py check-export "$env:CM_DIAG_UPLOAD"', integrity)
+        self.assertIn('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }', integrity)
+        upload = text[text.index("      - uses: actions/upload-artifact@") :]
+        self.assertIn("if: always() && steps.validate.outcome == 'success'", upload)
         uploaded = re.findall(r"\$\{\{ env.CM_DIAG_UPLOAD \}\}/([^\s]+)", text)
-        self.assertEqual(set(uploaded), set(diag.LIMITS))
+        self.assertEqual(set(uploaded), set(diag.EXPORT_LIMITS))
         self.assertTrue(all("*" not in name and "/" not in name for name in uploaded))
 
     def test_namespace_has_no_fallback_and_product_paths_are_linux_only(self) -> None:

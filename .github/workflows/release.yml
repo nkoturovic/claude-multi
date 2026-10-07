@@ -225,6 +225,13 @@ jobs:
         run: |
           python harness/.github/scripts/wsl_diag.py validate "$env:CM_DIAG_METADATA" "$env:CM_DIAG_UPLOAD"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Invalid optional metadata still fails the diagnostic
+        if: always() && steps.validate.outcome == 'success'
+        timeout-minutes: 1
+        run: |
+          python harness/.github/scripts/wsl_diag.py check-export "$env:CM_DIAG_UPLOAD"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Upload remains gated on safe export, not the separate integrity outcome.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.validate.outcome == 'success'
         with:
@@ -243,3 +250,4 @@ jobs:
             ${{ env.CM_DIAG_UPLOAD }}/watchdog.json
             ${{ env.CM_DIAG_UPLOAD }}/fixture.jsonl
             ${{ env.CM_DIAG_UPLOAD }}/snapshots.jsonl
+            ${{ env.CM_DIAG_UPLOAD }}/validation.json

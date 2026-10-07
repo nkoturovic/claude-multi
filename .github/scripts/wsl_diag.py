@@ -32,6 +32,11 @@ LIMITS = {
     "outcome.json": 2048, "watchdog.json": 2048,
     "fixture.jsonl": 1024 * 1024, "snapshots.jsonl": 8 * 1024 * 1024,
 }
+MANDATORY = ("artifact.json", "watchdog.json")
+OPTIONAL = frozenset(LIMITS).difference(MANDATORY)
+EXPORT_LIMITS = {**LIMITS, "validation.json": 4096}
+RECORD_LIMITS = {"fixture.jsonl": 256, "snapshots.jsonl": 128}
+LINE_LIMITS = {"fixture.jsonl": 4096, "snapshots.jsonl": 65536}
 EXES = frozenset(("claude", "cli-proxy-api", "python3", "python3.14", "dash", "bash", "sh",
                   "runuser", "unshare", "sleep", "sed", "head", "grep", "cat", "other", "unavailable"))
 # Unknown kernel symbols are deliberately generalized, never copied verbatim.
@@ -157,6 +162,7 @@ def validate_record(name: str, row: dict) -> None:
         "resume-end.json": "schema timed_out exit_code kill_sent group_gone wait_bounded",
         "outcome.json": "schema managed_turn_passed journey_exit_code",
         "watchdog.json": "schema status elapsed_ms armed_at_ms launcher_exit_code namespace_exit_confirmed terminate_state",
+        "validation.json": "schema optional_metadata_valid omitted",
     }
     keys(row, fields[name])
     require(type(row["schema"]) is int and row["schema"] == 1)
@@ -199,6 +205,17 @@ def validate_record(name: str, row: dict) -> None:
         code(row["launcher_exit_code"])
         boolean(row["namespace_exit_confirmed"])
         require(row["terminate_state"] in ("not-needed", "pending", "returned", "failed", "timeout", "launch-failed"))
+    elif name == "validation.json":
+        boolean(row["optional_metadata_valid"])
+        require(type(row["omitted"]) is list and len(row["omitted"]) <= len(OPTIONAL))
+        names = []
+        for omission in row["omitted"]:
+            keys(omission, "file reason")
+            require(type(omission["file"]) is str and omission["file"] in OPTIONAL)
+            require(omission["reason"] == "invalid-metadata")
+            names.append(omission["file"])
+        require(names == sorted(set(names)))
+        require(row["optional_metadata_valid"] == (not names))
 
 
 def encoded(row: dict) -> bytes:
@@ -222,13 +239,17 @@ _APPEND_LOCK = threading.Lock()
 
 def append_json(path: Path, row: dict, limit: int) -> None:
     # The fixture's local file has the same schema as its exported metadata.
-    validate_record("fixture.jsonl" if path.name == "fixture.log" else path.name, row)
+    name = "fixture.jsonl" if path.name == "fixture.log" else path.name
+    validate_record(name, row)
     raw = encoded(row)
+    require(len(raw) <= LINE_LIMITS[name])
     # ThreadingHTTPServer can parse requests concurrently. One writer owns
     # each JSONL file, and this lock serializes its bound check with its write.
     with _APPEND_LOCK:
-        size = path.stat().st_size if path.exists() else 0
-        require(size + len(raw) <= limit)
+        previous = safe_read(path, limit) if os.path.lexists(path) else b""
+        require(not previous or previous.endswith(b"\n"))
+        require(previous.count(b"\n") < RECORD_LIMITS[name])
+        require(len(previous) + len(raw) <= limit)
         with open(path, "ab", buffering=0) as handle:
             handle.write(raw)
             os.fsync(handle.fileno())
@@ -260,30 +281,49 @@ def safe_read(path: Path, limit: int) -> bytes:
     return raw
 
 
+def validated_bytes(path: Path, name: str) -> bytes:
+    raw = safe_read(path, LIMITS[name])
+    records = raw.splitlines() if name.endswith(".jsonl") else [raw]
+    require(len(records) <= RECORD_LIMITS.get(name, 1))
+    clean = []
+    for record in records:
+        require(len(record) <= LINE_LIMITS.get(name, 4096))
+        row = parse(record)
+        validate_record(name, row)
+        clean.append(encoded(row))
+    return b"".join(clean)
+
+
 def validate_directory(source: Path, destination: Path) -> None:
     info = source.lstat()
     require(stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400)
     require(not source.is_symlink() and source.resolve() != destination.resolve())
-    sanitized = {}
+    # Missing or invalid mandatory evidence fails closed, before any export.
+    sanitized = {name: validated_bytes(source / name, name) for name in MANDATORY}
+    omitted = []
     # Never enumerate, open or copy unknown files, nor recurse into a HOME.
-    for name, limit in LIMITS.items():
-        path = source / name
-        if not os.path.lexists(path):
+    for name in sorted(OPTIONAL):
+        try:
+            sanitized[name] = validated_bytes(source / name, name)
+        except FileNotFoundError:
             continue  # A failed bootstrap may leave only partial metadata.
-        raw = safe_read(path, limit)
-        records = raw.splitlines() if name.endswith(".jsonl") else [raw]
-        require(len(records) <= (128 if name == "snapshots.jsonl" else 256))
-        clean = []
-        for record in records:
-            require(len(record) <= (65536 if name == "snapshots.jsonl" else 4096))
-            row = parse(record)
-            validate_record(name, row)
-            clean.append(encoded(row))
-        sanitized[name] = b"".join(clean)
-    require("artifact.json" in sanitized)
+        except (OSError, ValueError, KeyError, TypeError, RecursionError):
+            # Keep independently valid evidence, never partial rows or error text.
+            omitted.append({"file": name, "reason": "invalid-metadata"})
+    report = {"schema": 1, "optional_metadata_valid": not omitted, "omitted": omitted}
+    validate_record("validation.json", report)
+    sanitized["validation.json"] = encoded(report)
+    require(len(sanitized["validation.json"]) <= EXPORT_LIMITS["validation.json"])
     destination.mkdir()  # Refuse stale or reparse-point upload destinations.
     for name, raw in sanitized.items():
         (destination / name).write_bytes(raw)
+
+
+def check_export(directory: Path) -> None:
+    report = parse(safe_read(directory / "validation.json", EXPORT_LIMITS["validation.json"]))
+    validate_record("validation.json", report)
+    # Export safety and job outcome are separate: omitted bad metadata still fails.
+    require(report["optional_metadata_valid"])
 
 
 def patch_text(text: str, replacements: tuple) -> str:
@@ -553,8 +593,8 @@ def run(scratch: Path, metadata: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("patch", "verify-dist", "verify-client", "validate", "namespace",
-                                             "run", "resume", "outcome"))
+    parser.add_argument("command", choices=("patch", "verify-dist", "verify-client", "validate", "check-export",
+                                             "namespace", "run", "resume", "outcome"))
     parser.add_argument("paths", nargs="*")
     args = parser.parse_args()
     paths = [Path(p) for p in args.paths]
@@ -566,6 +606,8 @@ def main() -> int:
         verify_client(*paths)
     elif args.command == "validate":
         validate_directory(*paths)
+    elif args.command == "check-export":
+        check_export(paths[0])
     elif args.command == "namespace":
         metadata, status = paths
         value = None if str(status) == "pending" else int(str(status))
