@@ -15,8 +15,8 @@ Observation never declares or admits:
   sends; a changed fingerprint is a stale plan.
 - **Marks and drift** compare a listing with the effective view; absence is
   reported only for a complete, successful listing, and never as retirement.
-- **Declaration planning** turns one listed model into a New·Off operator
-  line document for the declaration transaction.
+- **Declaration planning** turns one listed model into a New · not admitted
+  operator line document for the declaration transaction.
 """
 
 from __future__ import annotations
@@ -675,7 +675,7 @@ class OperatorState:
     key: str
     provider_id: str
     wire: str
-    status: str  # off | admitted | changed — re-admit | route unapproved
+    status: str  # not admitted | admitted | changed — re-admit | route unapproved
     declared_tokens: int
     efforts: tuple[str, ...]
 
@@ -697,7 +697,7 @@ def operator_states(
         elif key in granted or grant is not None:
             status = "changed — re-admit"
         else:
-            status = "off"
+            status = "not admitted"
         entry = line.core_entry
         efforts = entry["efforts"]
         levels = tuple(efforts) if isinstance(efforts, list) else tuple(sorted(efforts))
@@ -806,7 +806,7 @@ def drift_lines(
                 f"{key}: listing efforts now include {', '.join(sorted(set(listed_efforts)))}",
                 f"  edit: claude-multi models edit {key}",
                 "  consequence: only reviewed contracts are eligible; re-admission and qualification are "
-                "required after a definition change",
+                "optional after a definition change",
             ])
     return lines
 
@@ -928,7 +928,7 @@ def declaration_line(
     source_ref: str, context_override: int | None = None, over_listed: str | None = None,
     registry_model: catalog_mod.RegistryModel | None = None, registry_ref: str | None = None,
 ) -> dict[str, Any]:
-    """One New·Off operator line document from a listed model.
+    """One New · not admitted operator line document from a listed model.
 
     Context: the listing value, else the registry value, else the explicit
     ``--context``; raising above a listing-stated value needs
