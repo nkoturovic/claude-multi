@@ -255,13 +255,20 @@ jobs:
           name: dist
           path: dist
       - name: govulncheck on each shipped gateway binary
+        env:
+          HARNESS_SHA: ${{ github.sha }}
         run: |
           umask 077
           GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           mkdir -p evidence
+          # Pin current review controls to this harness revision; keep the product frozen.
+          [[ "$HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::invalid harness revision'; exit 1; }
+          git fetch --no-tags --depth=1 origin "$HARNESS_SHA"
+          git show "$HARNESS_SHA:gateway/vulnerability-dispositions.json" > "$RUNNER_TEMP/release-dispositions.json"
+          printf 'Release vulnerability controls: harness %s\n' "$HARNESS_SHA"
           python3 tools/_build/vulncheck.py --dist dist --out evidence/vulncheck.json \
             --govulncheck "$RUNNER_TEMP/bin/govulncheck" \
-            --dispositions gateway/vulnerability-dispositions.json
+            --dispositions "$RUNNER_TEMP/release-dispositions.json"
       - name: No Claude Code bytes
         id: guard
         if: always()

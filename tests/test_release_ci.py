@@ -1298,7 +1298,7 @@ class VulncheckTests(unittest.TestCase):
     """Exact dispositions over a fake release and a hermetic scanner stub."""
 
     IDS = {"GO-2026-5841", "GO-2026-5932", "GO-2026-6213", "GO-2026-6214",
-           "GO-2026-6303", "GO-2026-6354", "GO-2026-6355"}
+           "GO-2026-6303", "GO-2026-6354", "GO-2026-6355", "GO-2026-6629"}
     TARGETS = ("linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-arm64")
 
     @classmethod
@@ -1371,18 +1371,18 @@ if mode == "fail":
         self.assertTrue(out.is_file(), "failed checks must still produce evidence")
         return code, json.loads(out.read_text()), output.getvalue()
 
-    def test_exact_seven_reviewed_findings_pass_without_hiding_them(self) -> None:
+    def test_exact_eight_reviewed_findings_pass_without_hiding_them(self) -> None:
         code, report, output = self.run_check()
         self.assertEqual(code, 0, report)
         self.assertEqual({entry["target"] for entry in report["targets"]}, set(self.TARGETS))
         for entry in report["targets"]:
             self.assertEqual(entry["result"], "reviewed")
             self.assertEqual(set(entry["findings"]), self.IDS)
-            self.assertEqual(len(entry["raw_findings"]), 7)
+            self.assertEqual(len(entry["raw_findings"]), 8)
             self.assertEqual({item["id"] for item in entry["reviewed_dispositions"]}, self.IDS)
             self.assertEqual(entry["unreviewed_findings"], [])
             self.assertEqual(entry["scanner_stdout"].strip(), self.stream_file.read_text())
-        self.assertIn("reviewed dispositions: 7", output)
+        self.assertIn("reviewed dispositions: 8", output)
         self.assertNotIn("no vulnerabilities", output.lower())
 
     def test_unknown_findings_remain_blocking_and_visible(self) -> None:
@@ -1391,7 +1391,7 @@ if mode == "fail":
         self.assertEqual(code, 1)
         for entry in report["targets"]:
             self.assertEqual(entry["unreviewed_findings"], ["GO-2026-9999"])
-            self.assertEqual(len(entry["reviewed_dispositions"]), 7)
+            self.assertEqual(len(entry["reviewed_dispositions"]), 8)
 
     def test_module_and_reported_trace_changes_require_review(self) -> None:
         original = json.dumps(self.messages)
@@ -1423,7 +1423,7 @@ if mode == "fail":
             self.assertIn(self.policy["dispositions"][0]["advisory_modified"], output)
             self.assertIn(self.messages[3]["osv"]["modified"], output)
             for entry in report["targets"]:
-                self.assertEqual(len(entry["reviewed_dispositions"]), 7)
+                self.assertEqual(len(entry["reviewed_dispositions"]), 8)
                 self.assertEqual(len(entry["warnings"]), 1)
                 self.assertNotEqual(entry["advisory_revisions"][0]["reviewed_sha256"],
                                     entry["advisory_revisions"][0]["current_sha256"])
@@ -1449,7 +1449,7 @@ if mode == "fail":
     def test_malformed_or_incomplete_scans_never_pass(self) -> None:
         streams = ["", "not json", "[]", '{"config":{}}', '{"finding":null}',
                    '{"finding":{"osv":"GO-2026-5841","trace":[]}}', '{"error":{"message":"failed"}}']
-        streams.extend("\n".join(json.dumps(m) for m in self.messages[:end]) for end in (1, 2, 3, 4, 5, 16))
+        streams.extend("\n".join(json.dumps(m) for m in self.messages[:end]) for end in (1, 2, 3, 4, 5, 16, 18))
         for index in (0, 1, 2, 3):
             streams.append("\n".join(json.dumps(m) for i, m in enumerate(self.messages) if i != index))
         streams.append("\n".join(json.dumps(m) for m in self.messages) + '\n{"finding":')
@@ -1526,6 +1526,55 @@ if mode == "fail":
         (self.release.dir / archive).unlink()
         self.assertEqual(self.run_check()[0], 1)
 
+    def test_nickname_disposition_has_exact_reviewed_bindings(self) -> None:
+        policy = self.tool.dispositions(REPO_ROOT / "gateway/vulnerability-dispositions.json")
+        entry = next(entry for entry in policy["dispositions"] if entry["id"] == "GO-2026-6629")
+        expected = {
+            "id": "GO-2026-6629", "module": "golang.org/x/text", "version": "v0.40.0",
+            "class": "feature-excluded", "advisory_modified": "2026-10-07T14:09:43Z",
+            "advisory_sha256": "98f94e2a194dd631cb5d2d3f13cc69dba620db4f936cc509cd818758a5e9127a",
+            "trace_count": 13,
+            "trace_sha256": "a063585705828dda128dc3e65e0c9b28073c9c60790891d348e29608b47fa797",
+        }
+        self.assertEqual({key: entry[key] for key in expected}, expected)
+        self.assertEqual(policy["gateway"]["targets"], {
+            "darwin-arm64": "4fe62123d464de988a2c869d3c144c920140212442f4478070df7ad984e693f8",
+            "darwin-x86_64": "3ecce779efecae87b4fd49270da9b570d4b71afd74a8a21789cdf7691718b031",
+            "linux-aarch64": "7a5d72e0e4cfbd0cb57c1caafb49a19f5c578d58aaeec16c3cdaab4d5861340a",
+            "linux-x86_64": "e5ffe87601ef548388713e88ada5fd46d18029c276032c8b09a70d8bc0098b7e",
+        })
+        for fact in ("nickAdditionalMapping.Transform", "present", "only external PRECIS consumer",
+                     "OpaqueString", "Profile.String is reachable", "PGSTORE_", ".env"):
+            self.assertIn(fact, entry["reason"])
+        triggers = " ".join(entry["re_review"])
+        for trigger in ("consumer", "profile", "PGSTORE_", ".env", "dependency", "toolchain", "patch"):
+            self.assertIn(trigger, triggers)
+
+    def test_workflow_fetches_review_controls_without_changing_the_product_checkout(self) -> None:
+        job = _jobs((WORKFLOWS_DIR / "release.yml").read_text())["vulnerabilities"]
+        steps = _steps(job)
+        checkout = next(step for step in steps if "uses: actions/checkout@" in step)
+        self.assertEqual(job.count("uses: actions/checkout@"), 1)
+        self.assertIn("ref: ${{ needs.resolve.outputs.sha }}", checkout)
+        self.assertIn("persist-credentials: false", checkout)
+        self.assertNotIn("HARNESS_SHA", checkout)
+        step = next(step for step in steps if "name: govulncheck on each shipped gateway binary" in step)
+        self.assertIn("HARNESS_SHA: ${{ github.sha }}", step)
+        commands = [line for line in _commands(step) if line and not line.startswith("#")]
+        scan = next(index for index, line in enumerate(commands) if line.startswith("python3 tools/_build/vulncheck.py"))
+        controls = [
+            '[[ "$HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo \'::error::invalid harness revision\'; exit 1; }',
+            'git fetch --no-tags --depth=1 origin "$HARNESS_SHA"',
+            'git show "$HARNESS_SHA:gateway/vulnerability-dispositions.json" > "$RUNNER_TEMP/release-dispositions.json"',
+            'printf \'Release vulnerability controls: harness %s\\n\' "$HARNESS_SHA"',
+        ]
+        self.assertEqual(commands[scan - 4:scan], controls)
+        self.assertEqual([line for line in commands if line.startswith("git ")], controls[1:3])
+        self.assertIn("--dist dist --out evidence/vulncheck.json", commands[scan])
+        self.assertIn('--govulncheck "$RUNNER_TEMP/bin/govulncheck"', commands[scan])
+        self.assertIn('--dispositions "$RUNNER_TEMP/release-dispositions.json"', commands[scan])
+        self.assertNotIn("${{", "\n".join(commands))
+
     def test_public_policy_and_blocking_workflow_are_bound(self) -> None:
         policy = json.loads((REPO_ROOT / "gateway/vulnerability-dispositions.json").read_text())
         self.assertEqual({entry["id"] for entry in policy["dispositions"]}, self.IDS)
@@ -1533,7 +1582,7 @@ if mode == "fail":
         upstream = json.loads((REPO_ROOT / "gateway/UPSTREAM.json").read_text())
         self.assertEqual(policy["gateway"]["version"], upstream["upstream"]["version"])
         job = _jobs((WORKFLOWS_DIR / "release.yml").read_text())["vulnerabilities"]
-        self.assertIn("--dispositions gateway/vulnerability-dispositions.json", job)
+        self.assertIn('--dispositions "$RUNNER_TEMP/release-dispositions.json"', job)
         self.assertIn("ref: ${{ needs.resolve.outputs.sha }}", job)
         self.assertNotIn("continue-on-error", job)
         self.assertIn("actions/upload-artifact@", job)
