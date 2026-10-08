@@ -626,6 +626,20 @@ class FrozenInputTests(ScratchTests):
 
 
 class WorkflowHostedTests(unittest.TestCase):
+    def test_ps_helper_never_assigns_automatic_home_and_real_guard_is_covered(self) -> None:
+        text = (SCRIPTS / "wsl_diag_watchdog.ps1").read_text()
+        assignment = r"(?im)\$(?:(?:global|script|local|private):)?home\b\s*(?:[+\-*/%]?=|\+\+|--)"
+        for example in ("$home = 'x'", "$HOME = 'x'", "$local:HoMe += 'x'"):
+            self.assertRegex(example, assignment)
+        self.assertNotRegex(text, assignment)
+        guard = text[text.index("function Assert-DiagHostEnvironment"):text.index("function Initialize-DiagHostedWorker")]
+        self.assertIn("$windowsHome = [Environment]::GetFolderPath", guard)
+        self.assertNotRegex(guard, r"(?i)\$home\b")
+        native = (REPO_ROOT / "tests/pwsh/wsl_diag_watchdog.ps1").read_text()
+        self.assertLess(native.index("\nAssert-DiagHostEnvironment\n"),
+                        native.index("\nfunction Assert-DiagHostEnvironment"))
+        self.assertIn("Assert-True ($HOME -ceq $automaticHomeBefore)", native)
+
     def test_dispatch_only_single_read_only_job_and_original_artifact(self) -> None:
         text = WORKFLOW.read_text()
         jobs = re.findall(r"(?m)^  ([a-z][a-z-]+):$", text.split("jobs:\n")[1])

@@ -11,6 +11,12 @@ function Assert-True {
     param($Value)
     if (-not $Value) { throw 'Assertion failed' }
 }
+# Exercise the REAL guard on the clean Windows test worker before it is mocked
+# below. It performs no WSL call and must not assign the automatic, read-only HOME.
+$automaticHomeBefore = $HOME
+Assert-DiagHostEnvironment
+Assert-True ($HOME -ceq $automaticHomeBefore)
+
 # Parse every inline PowerShell block as data, without executing the workflow.
 $github = Split-Path -Parent (Split-Path -Parent $Harness)
 $lines = [IO.File]::ReadAllLines((Join-Path $github 'workflows/release.yml'))

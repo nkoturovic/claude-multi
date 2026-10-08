@@ -46,12 +46,12 @@ function Assert-DiagHostEnvironment {
             throw 'Hosted fixture environment refused'
         }
     }
-    $home = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-    if (-not $home) { throw 'Fresh hosted Windows home required' }
+    $windowsHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    if (-not $windowsHome) { throw 'Fresh hosted Windows home required' }
     $paths = @('.claude', '.claude.json', '.anthropic', '.config\claude', '.config\claude-multi', '.local\share\claude-multi\auth',
         'AppData\Roaming\Claude', 'AppData\Roaming\ClaudeCode')
     foreach ($relative in $paths) {
-        $path = Join-Path $home $relative
+        $path = Join-Path $windowsHome $relative
         $directory = [IO.DirectoryInfo]::new($path)
         $file = [IO.FileInfo]::new($path)
         if ($directory.Exists) {
