@@ -277,4 +277,6 @@ jobs:
             ${{ env.CM_DIAG_UPLOAD }}/watchdog.json
             ${{ env.CM_DIAG_UPLOAD }}/fixture.jsonl
             ${{ env.CM_DIAG_UPLOAD }}/snapshots.jsonl
+            ${{ env.CM_DIAG_UPLOAD }}/location-request.json
+            ${{ env.CM_DIAG_UPLOAD }}/locations.jsonl
             ${{ env.CM_DIAG_UPLOAD }}/validation.json

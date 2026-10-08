@@ -203,6 +203,17 @@ Assert-Equal $script:writes[0].armed_at_ms 2000 # Only the complete validated re
 Assert-Equal $script:writes[0].arm_basis 'first-fixture-request'
 Assert-Equal $script:fixtureReads 2
 
+Reset-Scenario @(0, 59999, 60000, 89999, 90000, 129999, 130000)
+$script:hasFirstRequest = $true
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
+$locations = @($script:jsonWrites | Where-Object { $_.name -eq 'location-request.json' })
+Assert-Equal $locations.Count 2 # At most 60s/90s captures, never a deadline extension.
+Assert-Equal $locations[0].row.capture 1
+Assert-Equal $locations[1].row.capture 2
+Assert-Equal $locations[0].row.mode 'hosted-disposable-wsl-fixture-only'
+Assert-Equal $script:writes[0].status 'resume-timeout'
+Assert-Equal $script:fixtureReads 1
+
 Reset-Scenario @(179999, 360000)
 Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
 Assert-Equal $script:writes[0].status 'absolute-timeout'

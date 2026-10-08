@@ -270,7 +270,7 @@ function Test-DiagObserverEnd {
 }
 
 function Write-DiagJson {
-    param([string]$Directory, [ValidateSet('watchdog.json', 'hosted-ci.json', 'capture-request.json', 'cleanup.json')][string]$Name, [hashtable]$Row)
+    param([string]$Directory, [ValidateSet('watchdog.json', 'hosted-ci.json', 'capture-request.json', 'location-request.json', 'cleanup.json')][string]$Name, [hashtable]$Row)
     $path = Join-Path $Directory $Name
     $pending = "$path.pending"
     [IO.File]::WriteAllText($pending, (($Row | ConvertTo-Json -Depth 4 -Compress) + "`n"), [Text.UTF8Encoding]::new($false))
@@ -322,6 +322,7 @@ function Invoke-DiagWatchdog {
     $process = $null
     $owned = $false
     $armedAt = -1L
+    $locationRequests = 0
     $row = @{ schema = 1; mode = $script:DiagMode; status = 'launch-failed'; elapsed_ms = 0L; armed_at_ms = $null
         arm_basis = 'first-fixture-request'; launcher_exit_code = $null
         capture_confirmed = $false; cleanup_confirmed = $false; terminate_state = 'pending' }
@@ -342,6 +343,13 @@ function Invoke-DiagWatchdog {
                 try {
                     if (Test-DiagFirstFixtureRequest $Directory) { $armedAt = $elapsed; $row.armed_at_ms = $armedAt }
                 } catch { $row.status = 'invalid-metadata'; break }
+            }
+            if ($armedAt -ge 0 -and $locationRequests -lt 2) {
+                $due = if ($locationRequests -eq 0) { 60000 } else { 90000 }
+                if ($elapsed - $armedAt -ge $due) {
+                    $locationRequests++
+                    Write-DiagJson $Directory 'location-request.json' @{ schema = 1; mode = $script:DiagMode; capture = $locationRequests }
+                }
             }
             if ($process.HasExited) {
                 $row.launcher_exit_code = $process.ExitCode

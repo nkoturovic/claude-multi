@@ -86,7 +86,8 @@ class SourcePatchTests(ScratchTests):
         self.assertNotIn("trap cleanup EXIT", journey)
         self.assertIn("trap ':' EXIT", journey)
         self.assertIn('show_tail() { return 0; }', journey)
-        self.assertIn(diag.RESUME_ANCHOR, journey)
+        expected_resume = diag.RESUME_ANCHOR.replace('"$cm" -c', '"$HOME/diag/claude-multi-resume-diag" -c', 1)
+        self.assertIn(expected_resume, journey)
         self.assertNotIn('wsl_diag.py" resume', journey)
         self.assertIn('first=$(reply_number "$work/turn1.txt")', journey)
         self.assertIn('second=$(reply_number "$work/turn2.txt")', journey)
@@ -103,17 +104,21 @@ class SourcePatchTests(ScratchTests):
         for name, raw in originals.items():
             self.assertEqual((SCRIPTS / name).read_bytes(), raw)
 
-    def test_original_foreground_resume_and_inter_turn_bytes_are_exact(self) -> None:
+    def test_only_resume_executable_changes_other_inter_turn_bytes_are_exact(self) -> None:
         original = (SCRIPTS / "journey.sh").read_bytes()
         diag.patch(SCRIPTS, self.root)
         patched = (self.root / "journey.sh").read_bytes()
         first = b'\tfirst=$(reply_number "$work/turn1.txt")'
         second = b'\tsecond=$(reply_number "$work/turn2.txt")'
         block = original[original.index(first):original.index(second) + len(second)]
-        self.assertEqual(patched.count(block), 1)
-        self.assertEqual(patched.count(diag.RESUME_ANCHOR.encode()), 1)
+        expected = block.replace(b'"$cm" -c', b'"$HOME/diag/claude-multi-resume-diag" -c', 1)
+        self.assertEqual(patched.count(expected), 1)
+        self.assertEqual(block.count(b'"$cm" -c'), 1)
         self.assertNotIn(b'wsl_diag.py" resume', patched)
-        self.assertFalse(any(old == diag.RESUME_ANCHOR for old, _ in diag.JOURNEY_PATCHES))
+        self.assertTrue(any(old == diag.RESUME_ANCHOR for old, _ in diag.JOURNEY_PATCHES))
+        first_turn = b'(cd "$work/project" && "$cm" direct --model custom-journey-fixture -- -p "journey turn one")'
+        self.assertEqual(original.count(first_turn), 1)
+        self.assertEqual(patched.count(first_turn), 1)
         # This byte span includes first-turn extraction/completion, the original
         # foreground argv/CWD/redirections/null stdin, and resume failure handling.
 
@@ -352,6 +357,18 @@ class ExportTests(ScratchTests):
         (self.meta / "fixture.jsonl").write_bytes(diag.encoded(row) + b'{"event":"NEVER-EXPORT"')
         self.assert_timeout_evidence_preserved()
 
+    def test_bad_optional_locations_do_not_suppress_mandatory_watchdog(self) -> None:
+        (self.meta / "locations.jsonl").write_bytes(b'{"private":"NEVER-EXPORT"')
+        diag.validate_directory(self.meta, self.output)
+        self.assertEqual(json.loads((self.output / "watchdog.json").read_text()), watchdog())
+        self.assertEqual(json.loads((self.output / "artifact.json").read_text()), artifact())
+        self.assertFalse((self.output / "locations.jsonl").exists())
+        self.assertEqual(json.loads((self.output / "validation.json").read_text())["omitted"],
+                         [{"file": "locations.jsonl", "reason": "invalid-metadata"}])
+        with self.assertRaises(ValueError):
+            diag.check_export(self.output)
+        self.assertNotIn("NEVER-EXPORT", "".join(p.read_text() for p in self.output.iterdir()))
+
     def test_mandatory_invalid_or_missing_artifact_and_watchdog_fail_closed(self) -> None:
         (self.meta / "fixture.jsonl").write_bytes(b'{"event":"NEVER-EXPORT"')
         for name in diag.MANDATORY:
@@ -539,8 +556,13 @@ class HostedBaselineTests(ScratchTests):
         with mock.patch.object(diag.os, "geteuid", return_value=1000), \
              mock.patch.object(Path, "home", return_value=Path("/home/journey")), \
              mock.patch.object(diag, "snapshot", side_effect=observed), \
+             mock.patch.object(diag.subprocess, "run", return_value=mock.Mock(returncode=0)) as exported, \
              mock.patch.object(diag.subprocess, "Popen", side_effect=AssertionError("observer launched journey")):
             diag.observe(self.meta)
+        self.assertEqual(exported.call_args.args[0][-4:],
+                         ["export", "/home/journey/.local/share/claude-multi/install/current", "/home/journey/diag",
+                          str(self.meta / "locations.jsonl")])
+        self.assertEqual(exported.call_args.kwargs["timeout"], 2)
         self.assertEqual([json.loads(line)["event"] for line in (self.meta / "snapshots.jsonl").read_text().splitlines()],
                          ["start", "end"])
         self.assertEqual(json.loads((self.meta / "observer.json").read_text()),
@@ -763,6 +785,24 @@ class WorkflowHostedTests(unittest.TestCase):
                      "other-model", "'delivered'", "'\"reply\":1.0'", "* 257", "* 1048577",
                      "fixtureReads 1", "fixtureReads 2", "armed_at_ms 2000", "arm_basis 'first-fixture-request'"):
             self.assertIn(case, native)
+
+    def test_only_bounded_60_90_second_location_markers_are_added(self) -> None:
+        text = (SCRIPTS / "wsl_diag_watchdog.ps1").read_text()
+        self.assertIn('$locationRequests = 0', text)
+        self.assertIn('$armedAt -ge 0 -and $locationRequests -lt 2', text)
+        self.assertIn('$due = if ($locationRequests -eq 0) { 60000 } else { 90000 }', text)
+        self.assertIn("'location-request.json' @{ schema = 1; mode = $script:DiagMode; capture = $locationRequests }", text)
+        self.assertLess(text.index('if ($deadline) { $row.status = $deadline; break }'), text.index('$due = if'))
+        for capture in (1, 2):
+            diag.validate_record('location-request.json', {'schema': 1, 'mode': diag.MODE, 'capture': capture})
+        with self.assertRaises(ValueError):
+            diag.validate_record('location-request.json', {'schema': 1, 'mode': diag.MODE, 'capture': 3})
+        native = (REPO_ROOT / 'tests/pwsh/wsl_diag_watchdog.ps1').read_text()
+        self.assertIn('Reset-Scenario @(0, 59999, 60000, 89999, 90000, 129999, 130000)', native)
+        self.assertIn('Assert-Equal $locations.Count 2', native)
+        workflow = WORKFLOW.read_text()
+        self.assertNotIn('resume-locations.raw.jsonl', workflow)
+        self.assertIn('${{ env.CM_DIAG_UPLOAD }}/locations.jsonl', workflow)
 
     def test_watchdog_has_monotonic_deadlines_one_arm_and_no_synchronous_wsl(self) -> None:
         text = (SCRIPTS / "wsl_diag_watchdog.ps1").read_text()

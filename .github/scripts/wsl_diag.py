@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -19,6 +20,10 @@ import subprocess
 import sys
 import threading
 import time
+
+_location_spec = importlib.util.spec_from_file_location("cm_resume_locations", Path(__file__).with_name("resume_locations.py"))
+locations = importlib.util.module_from_spec(_location_spec)
+_location_spec.loader.exec_module(locations)
 
 SHA = "8b4ec9e1572d41d33396dbc67a3a1951bb2561b0"
 RUN = 37633707710
@@ -37,14 +42,14 @@ OPERATOR_ENV_NAMES = frozenset(("CLAUDECODE", "CLAUDE_CONFIG_DIR", "CLAUDE_MODEL
 LIMITS = {
     "artifact.json": 2048, "dist.json": 2048, "client.json": 2048,
     "hosted-ci.json": 2048, "preflight.json": 2048, "observer.json": 2048, "capture-request.json": 2048, "cleanup.json": 2048,
-    "outcome.json": 2048, "watchdog.json": 2048,
-    "fixture.jsonl": 1024 * 1024, "snapshots.jsonl": 8 * 1024 * 1024,
+    "outcome.json": 2048, "watchdog.json": 2048, "location-request.json": 2048,
+    "fixture.jsonl": 1024 * 1024, "snapshots.jsonl": 8 * 1024 * 1024, "locations.jsonl": locations.MAX_TOTAL_BYTES,
 }
 MANDATORY = ("artifact.json", "watchdog.json")
 OPTIONAL = frozenset(LIMITS).difference(MANDATORY)
 EXPORT_LIMITS = {**LIMITS, "validation.json": 4096}
-RECORD_LIMITS = {"fixture.jsonl": 256, "snapshots.jsonl": 128}
-LINE_LIMITS = {"fixture.jsonl": 4096, "snapshots.jsonl": 65536}
+RECORD_LIMITS = {"fixture.jsonl": 256, "snapshots.jsonl": 128, "locations.jsonl": 2}
+LINE_LIMITS = {"fixture.jsonl": 4096, "snapshots.jsonl": 65536, "locations.jsonl": locations.MAX_CAPTURE_BYTES}
 EXES = frozenset(("claude", "cli-proxy-api", "python3", "python3.14", "dash", "bash", "sh",
                   "runuser", "unshare", "sleep", "sed", "head", "grep", "cat", "other", "unavailable"))
 # Unknown kernel symbols are deliberately generalized, never copied verbatim.
@@ -69,6 +74,7 @@ CARRIED_ANCHOR = '''\tfx carried --log "$work/fixture.log" --reply "$second" --e
 \tsay "resumed managed session: ok (fixture reply $second carried reply $first)"'''
 JOURNEY_PATCHES = (
     (TAIL_ANCHOR, 'show_tail() { return 0; }'),
+    (RESUME_ANCHOR, RESUME_ANCHOR.replace('"$cm" -c', '"$HOME/diag/claude-multi-resume-diag" -c', 1)),
     ('trap cleanup EXIT\n', "trap ':' EXIT # PID namespace teardown owns all process cleanup.\n"),
     (CARRIED_ANCHOR, CARRIED_ANCHOR.replace('\tsay ',
         '\t"$install_dir/runtime/python/bin/python3" -I "$here/wsl_diag.py" outcome\n\tsay ')),
@@ -134,6 +140,9 @@ def digest(value: object) -> None:
 
 
 def validate_record(name: str, row: dict) -> None:
+    if name == "locations.jsonl":
+        locations.validate_report(row)
+        return
     if name == "fixture.jsonl":
         keys(row, "event method path_category model stream reply carried")
         require(row["event"] == "request-parsed")  # Before response, not delivery evidence.
@@ -180,6 +189,7 @@ def validate_record(name: str, row: dict) -> None:
         "preflight.json": "schema mode ordinary_user fresh_home linux_filesystem provider_auth_empty credential_environment_clear verified_release verified_client candidate_windows_cwd",
         "observer.json": "schema mode end_captured",
         "capture-request.json": "schema mode stop",
+        "location-request.json": "schema mode capture",
         "cleanup.json": "schema mode capture_confirmed cleanup_confirmed terminate_state",
         "outcome.json": "schema mode managed_turn_passed journey_exit_code",
         "watchdog.json": "schema mode status elapsed_ms armed_at_ms arm_basis launcher_exit_code capture_confirmed cleanup_confirmed terminate_state",
@@ -187,7 +197,7 @@ def validate_record(name: str, row: dict) -> None:
     }
     keys(row, fields[name])
     require(type(row["schema"]) is int and row["schema"] == 1)
-    if name in ("hosted-ci.json", "preflight.json", "observer.json", "capture-request.json", "cleanup.json", "outcome.json", "watchdog.json"):
+    if name in ("hosted-ci.json", "preflight.json", "observer.json", "capture-request.json", "location-request.json", "cleanup.json", "outcome.json", "watchdog.json"):
         require(row["mode"] == MODE)
     if name == "artifact.json":
         require(row == {"schema": 1, "repository": "nkoturovic/claude-multi", "run_id": RUN,
@@ -206,6 +216,8 @@ def validate_record(name: str, row: dict) -> None:
         require(row["end_captured"] is True)
     elif name == "capture-request.json":
         require(row["stop"] is True)
+    elif name == "location-request.json":
+        require(type(row["capture"]) is int and row["capture"] in (1, 2))
     elif name == "outcome.json":
         boolean(row["managed_turn_passed"])
         code(row["journey_exit_code"])
@@ -575,8 +587,9 @@ def hosted_preflight(metadata: Path, workspace: Path) -> None:
     for name in ("artifact.json", "hosted-ci.json"):
         row = parse(safe_read(metadata / name, LIMITS[name]))
         validate_record(name, row)
-    for name in ("preflight.json", "outcome.json", "observer.json", "capture-request.json"):
+    for name in ("preflight.json", "outcome.json", "observer.json", "capture-request.json", "location-request.json", "locations.jsonl"):
         require(not os.path.lexists(metadata / name))
+    require(not os.path.lexists(Path("/home/journey/diag") / locations.EVIDENCE))
     require(os.geteuid() != 0 and pwd.getpwuid(os.geteuid()).pw_name == "journey")
     home = Path.home()
     require(home == Path("/home/journey"))
@@ -620,6 +633,15 @@ def observe(metadata: Path) -> None:
             time.sleep(0.1)
         append_json(metadata / "snapshots.jsonl", snapshot(Path.home(), "end", time.monotonic() - start),
                     LIMITS["snapshots.jsonl"])
+        install = Path.home() / ".local/share/claude-multi/install/current"
+        scratch = Path.home() / "diag"
+        # Use the bundle's grammar for its verified runtime sources. This helper
+        # only sanitizes private code-location records, never launches the journey.
+        copied = subprocess.run([str(install / "runtime/python/bin/python3"), "-I", str(scratch / "resume_locations.py"),
+                                 "export", str(install), str(scratch), str(metadata / "locations.jsonl")],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=2, check=False)
+        require(copied.returncode == 0)
         atomic_json(metadata / "observer.json", {"schema": 1, "mode": MODE, "end_captured": True})
     finally:
         signal.signal(signal.SIGTERM, previous)

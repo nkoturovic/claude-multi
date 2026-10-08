@@ -15,7 +15,7 @@ stage)
     chown journey:journey "$metadata"
     chmod 0777 "$metadata"
     mkdir "$scratch"
-    cp "$harness/wsl_diag.py" "$harness/wsl_diag.sh" "$scratch/"
+    cp "$harness/wsl_diag.py" "$harness/wsl_diag.sh" "$harness/resume_locations.py" "$scratch/"
     /usr/bin/python3 -I "$scratch/wsl_diag.py" patch "$candidate" "$scratch"
     chown -R journey:journey "$scratch"
     ;;
@@ -35,6 +35,8 @@ prefetch)
         -o "$scratch/claude" "$1"
     chmod 755 "$scratch/claude"
     /usr/bin/python3 -I "$scratch/wsl_diag.py" verify-client "$scratch/claude" "$install" "$metadata"
+    "$install/runtime/python/bin/python3" -I "$scratch/resume_locations.py" prepare \
+        "$install" "$PWD/../dist" "$scratch" "$metadata"
     ;;
 journey)
     metadata=${2:?metadata}
