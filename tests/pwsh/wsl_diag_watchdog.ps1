@@ -33,8 +33,9 @@ for ($i = 0; $i -lt $lines.Count; $i++) {
 Assert-True ($parsedBlocks -gt 0)
 
 function New-FakeProcess {
-    param([bool]$Exited = $false, [int]$Code = 0)
-    $p = [pscustomobject]@{ HasExited = $Exited; ExitCode = $Code; Killed = $false; Disposed = $false }
+    param([bool]$Exited = $false, [int]$Code = 0, [string]$Output = '')
+    $p = [pscustomobject]@{ HasExited = $Exited; ExitCode = $Code; Killed = $false; Disposed = $false
+        StandardOutput = [IO.StringReader]::new($Output) }
     $p | Add-Member -MemberType ScriptMethod -Name Kill -Value { $this.Killed = $true }
     $p | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $this.Disposed = $true }
     return $p
@@ -110,6 +111,9 @@ Assert-True $rejected
 
 $realStop = ${function:Stop-DiagDistribution}
 function Assert-DiagMetadataPath { param($Path) }
+function Assert-DiagHostedWorker { }
+function Assert-DiagHostedMarker { param($Directory) if ($script:markerMissing) { throw 'synthetic missing marker' } }
+function Assert-DiagHostEnvironment { if ($script:hostUnsafe) { throw 'synthetic unsafe host' } }
 function Start-Sleep { param($Milliseconds) }
 function Get-DiagMilliseconds {
     param($Clock)
@@ -119,6 +123,7 @@ function Get-DiagMilliseconds {
 }
 function Start-DiagProcess {
     param([string[]]$Arguments)
+    $script:launches++
     $script:argumentsSeen = $Arguments
     if ($script:launchFails) { throw 'synthetic launch failure' }
     return $script:process
@@ -130,17 +135,17 @@ function Test-DiagFirstFixtureRequest {
     if ($script:partialFixture) { $script:partialFixture = $false; return $false }
     return $script:hasFirstRequest
 }
-function Test-DiagNamespaceExit { param($Directory) return $script:namespaceExited }
-function Write-DiagResult {
-    param($Directory, $Row)
-    $script:writes.Add($Row.Clone())
-}
+function Write-DiagJson { param($Directory, $Name, $Row) $script:jsonWrites.Add(@{ name = $Name; row = $Row.Clone() }) }
+function Write-DiagResult { param($Directory, $Row) $script:writes.Add($Row.Clone()); $script:order.Add('write') }
+function Request-DiagEndCapture { param($Directory) $script:order.Add('capture'); return $script:captureAvailable }
 function Stop-DiagDistribution {
-    # The first failure result MUST already be durable before termination.
+    # Persist success/failure and request capture BEFORE any termination.
     Assert-True ($script:writes.Count -eq 1)
     Assert-Equal $script:writes[0].terminate_state 'pending'
+    Assert-Equal ($script:order -join ',') 'write,capture'
+    $script:order.Add('terminate')
     $script:terminated = $true
-    return 'returned'
+    return $script:terminationState
 }
 function Reset-Scenario {
     param([long[]]$Times)
@@ -150,25 +155,34 @@ function Reset-Scenario {
     $script:hasFirstRequest = $false
     $script:invalidFixture = $false
     $script:partialFixture = $false
-    $script:namespaceExited = $false
+    $script:captureAvailable = $true
+    $script:markerMissing = $false
+    $script:hostUnsafe = $false
     $script:terminated = $false
+    $script:terminationState = 'returned'
     $script:launchFails = $false
+    $script:launches = 0
     $script:writes = [Collections.Generic.List[object]]::new()
+    $script:jsonWrites = [Collections.Generic.List[object]]::new()
+    $script:order = [Collections.Generic.List[string]]::new()
     $script:process = New-FakeProcess
 }
 
 Reset-Scenario @(179999, 180000)
-Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
 Assert-Equal $script:writes[0].status 'bootstrap-timeout'
 Assert-True $script:terminated
 Assert-True $script:process.Killed
-Assert-Equal $script:writes[1].namespace_exit_confirmed $false
+Assert-Equal $script:writes[1].cleanup_confirmed $true
+Assert-Equal $script:writes[1].mode 'hosted-disposable-wsl-fixture-only'
 Assert-Equal $script:argumentsSeen[0] '--distribution'
-Assert-Equal $script:argumentsSeen[-1] '/mnt/d/a/meta'
+Assert-Equal $script:argumentsSeen[-1] '/mnt/d/a/repo/candidate'
+Assert-Equal ($script:argumentsSeen -contains '--user') $false
+Assert-Equal ($script:argumentsSeen -contains '--cd') $true
 
 Reset-Scenario @(179000, 308999, 309000)
 $script:hasFirstRequest = $true
-Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
 Assert-Equal $script:writes[0].status 'resume-timeout'
 Assert-Equal $script:writes[0].armed_at_ms 179000
 Assert-Equal $script:fixtureReads 1 # Repeated/rewritten fixture records cannot rearm.
@@ -177,41 +191,78 @@ Assert-Equal $script:writes[0].arm_basis 'first-fixture-request'
 Reset-Scenario @(1000, 2000, 131999, 132000)
 $script:hasFirstRequest = $true
 $script:partialFixture = $true
-Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
 Assert-Equal $script:writes[0].status 'resume-timeout'
 Assert-Equal $script:writes[0].armed_at_ms 2000 # Only the complete validated record arms.
 Assert-Equal $script:writes[0].arm_basis 'first-fixture-request'
 Assert-Equal $script:fixtureReads 2
 
 Reset-Scenario @(179999, 360000)
-Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
 Assert-Equal $script:writes[0].status 'absolute-timeout'
 
 Reset-Scenario @(0)
 $script:process = New-FakeProcess -Exited $true
-Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
-Assert-Equal $script:writes[0].status 'completed'
-Assert-Equal $script:writes[0].namespace_exit_confirmed $false
-Assert-True $script:terminated # Launcher exit alone is not Linux cleanup proof.
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 0
+Assert-Equal $script:writes[0].cleanup_confirmed $false # Launcher exit alone is not cleanup proof.
+Assert-Equal $script:writes[1].cleanup_confirmed $true
+Assert-Equal $script:writes[1].capture_confirmed $true
+Assert-True $script:terminated # SUCCESS also terminates the disposable distro.
+Assert-Equal $script:writes.Count 2
 
 Reset-Scenario @(0)
 $script:process = New-FakeProcess -Exited $true
-$script:namespaceExited = $true
-Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 0
-Assert-Equal $script:writes[0].terminate_state 'not-needed'
-Assert-Equal $script:terminated $false
-Assert-Equal $script:writes.Count 1
+$script:terminationState = 'timeout'
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
+Assert-Equal $script:writes[1].cleanup_confirmed $false
+
+Reset-Scenario @(0)
+$script:process = New-FakeProcess -Exited $true -Code 1
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
+Assert-True $script:terminated # FAILURE also terminates the disposable distro.
+
+Reset-Scenario @(0)
+$script:process = New-FakeProcess -Exited $true
+$script:captureAvailable = $false
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
+Assert-Equal $script:writes[1].capture_confirmed $false
+Assert-True $script:terminated
 
 Reset-Scenario @(0)
 $script:invalidFixture = $true
-Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
 Assert-Equal $script:writes[0].status 'invalid-metadata'
 
 Reset-Scenario @(0)
 $script:launchFails = $true
-Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
 Assert-Equal $script:writes[0].status 'launch-failed'
 Assert-True $script:terminated
+
+Reset-Scenario @(0)
+$script:hostUnsafe = $true
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
+Assert-Equal $script:launches 0 # Unsafe host stops before any journey/client launch.
+Assert-True $script:terminated
+
+Reset-Scenario @(0)
+$script:markerMissing = $true
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta' '/mnt/d/a/repo/candidate') 1
+Assert-Equal $script:launches 0
+Assert-Equal $script:terminated $false # Never terminate an unowned/operator distribution.
+Assert-Equal $script:writes[1].terminate_state 'not-owned'
+
+Reset-Scenario @(0)
+$script:process = New-FakeProcess -Exited $true
+Initialize-DiagHostedWorker $Scratch
+Assert-Equal $script:jsonWrites[0].name 'hosted-ci.json'
+Assert-Equal $script:jsonWrites[0].row.distribution_was_absent $true
+Reset-Scenario @(0)
+$script:process = New-FakeProcess -Exited $true -Output 'Ubuntu-24.04'
+$rejected = $false
+try { Initialize-DiagHostedWorker $Scratch } catch { $rejected = $true }
+Assert-True $rejected
+Assert-Equal $script:jsonWrites.Count 0
 
 # Restore the actual termination loop. Its process and clocks stay mocked.
 Set-Item Function:Stop-DiagDistribution $realStop
@@ -220,7 +271,6 @@ Assert-Equal (Stop-DiagDistribution) 'timeout'
 Assert-True $script:process.Killed
 Assert-True $script:process.Disposed
 Assert-Equal ($script:argumentsSeen -join ',') '--terminate,Ubuntu-24.04'
-
 Reset-Scenario @(0)
 $script:process = New-FakeProcess -Exited $true -Code 1
 Assert-Equal (Stop-DiagDistribution) 'failed'
@@ -230,4 +280,4 @@ Assert-Equal (Stop-DiagDistribution) 'returned'
 Reset-Scenario @(0)
 $script:launchFails = $true
 Assert-Equal (Stop-DiagDistribution) 'launch-failed'
-Write-Output 'watchdog mock assertions: PASS (no WSL execution)'
+Write-Output 'watchdog hosted mock assertions: PASS (no WSL execution)'

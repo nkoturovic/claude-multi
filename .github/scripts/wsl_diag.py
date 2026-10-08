@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import signal
@@ -25,16 +26,17 @@ ARTIFACT_ID = 11488260478
 ARTIFACT_DIGEST = "sha256:c3d5f116bccab719c962df4502dca9efcbcca5ef0884ced6af7dcd8514fff6d3"
 CLIENT_SHA = "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3"
 CLIENT_SIZE = 251456696
-ENV_MODE = "inherited-from-existing-launcher"
-ENV_REFUSAL = "WSL diagnostic refused unsafe inherited environment"
+MODE = "hosted-disposable-wsl-fixture-only"
+ENV_REFUSAL = "WSL diagnostic refused unsafe hosted fixture environment"
 CREDENTIAL_NAME = re.compile(
     r"(?:^|_)(?:APIKEY|ACCESSKEY|ACCESSTOKEN|AUTH(?:ORIZATION)?|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|COOKIE|KEY|JWT|BEARER|PAT)(?:_|$)", re.I)
-OPERATOR_ENV_NAMES = frozenset(("CLAUDECODE", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL",
-                               "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"))
+OPERATOR_ENV_NAMES = frozenset(("CLAUDECODE", "CLAUDE_CONFIG_DIR", "CLAUDE_MODEL", "CLAUDE_CODE_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_DISABLE_FAST_MODE",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    "DEPLOY", "WRITABLE_PATH", "MANAGEMENT_STATIC_PATH", "META_MINT_URL"))
 LIMITS = {
     "artifact.json": 2048, "dist.json": 2048, "client.json": 2048,
-    "containment.json": 2048, "namespace.json": 2048,
-    "resume-start.json": 2048, "resume-end.json": 2048,
+    "hosted-ci.json": 2048, "preflight.json": 2048, "observer.json": 2048, "capture-request.json": 2048, "cleanup.json": 2048,
     "outcome.json": 2048, "watchdog.json": 2048,
     "fixture.jsonl": 1024 * 1024, "snapshots.jsonl": 8 * 1024 * 1024,
 }
@@ -96,32 +98,18 @@ def require(condition: bool) -> None:
         raise ValueError("diagnostic metadata or input rejected")
 
 
-class InheritedEnvironmentRefused(ValueError):
-    """A fixed, value-free refusal; no inherited variable is removed."""
+class HostedEnvironmentRefused(ValueError):
+    """A fixed refusal; no credential value is inspected or variable unset."""
 
 
-def admit_inherited_environment(environ) -> None:
-    # Inspect names only for credentials or operator-state selection. Runtime
-    # flags and temporary-directory choices otherwise remain inherited.
+def admit_hosted_environment(environ) -> None:
+    # The hosted baseline intentionally retains WSL interop and shared runtime.
+    # Only names are inspected for credentials, provider bypasses and state/model selectors.
     for name in environ:
         upper = name.upper()
-        if CREDENTIAL_NAME.search(name) or upper in OPERATOR_ENV_NAMES or upper.startswith("CLAUDE_MULTI_"):
-            raise InheritedEnvironmentRefused(ENV_REFUSAL)
-    if "WSL_INTEROP" not in environ:
-        return
-    # This is the sole value inspected: prove its socket target is absent under
-    # a masked root. Never connect, expose the socket, or report its path.
-    try:
-        target = Path(environ["WSL_INTEROP"])
-        if target.anchor != "/" or len(target.parts) < 3 or target.parts[1] not in ("run", "tmp", "mnt") \
-                or ".." in target.parts:
-            raise InheritedEnvironmentRefused(ENV_REFUSAL)
-        target.lstat()
-    except FileNotFoundError:
-        return
-    except (OSError, ValueError, TypeError, KeyError):
-        raise InheritedEnvironmentRefused(ENV_REFUSAL) from None
-    raise InheritedEnvironmentRefused(ENV_REFUSAL)
+        if CREDENTIAL_NAME.search(name) or upper in OPERATOR_ENV_NAMES or upper.startswith(
+                ("CLAUDE_MULTI_", "ANTHROPIC_", "CLAUDE_CODE_USE_", "PGSTORE_", "GITSTORE_", "OBJECTSTORE_")):
+            raise HostedEnvironmentRefused(ENV_REFUSAL)
 
 
 def keys(record: object, names: str) -> None:
@@ -188,16 +176,19 @@ def validate_record(name: str, row: dict) -> None:
         "artifact.json": "schema repository run_id artifact_id name size_bytes digest head_sha",
         "dist.json": "schema sha256sums_verified sums_sha256 launcher_version client_version client_sha256",
         "client.json": "schema installed_version client_version sha256 size_bytes verified",
-        "containment.json": "schema env_mode network_private pid_private ipc_private proc_private loopback_up ordinary_user linux_filesystem",
-        "namespace.json": "schema phase exited exit_code",
-        "resume-start.json": "schema pid pgid start_ticks deadline_seconds",
-        "resume-end.json": "schema timed_out exit_code kill_sent group_gone wait_bounded",
-        "outcome.json": "schema managed_turn_passed journey_exit_code",
-        "watchdog.json": "schema status elapsed_ms armed_at_ms arm_basis launcher_exit_code namespace_exit_confirmed terminate_state",
+        "hosted-ci.json": "schema mode github_hosted_windows windows_worker distribution_was_absent native_home_clean credential_environment_clear",
+        "preflight.json": "schema mode ordinary_user fresh_home linux_filesystem provider_auth_empty credential_environment_clear verified_release verified_client candidate_windows_cwd",
+        "observer.json": "schema mode end_captured",
+        "capture-request.json": "schema mode stop",
+        "cleanup.json": "schema mode capture_confirmed cleanup_confirmed terminate_state",
+        "outcome.json": "schema mode managed_turn_passed journey_exit_code",
+        "watchdog.json": "schema mode status elapsed_ms armed_at_ms arm_basis launcher_exit_code capture_confirmed cleanup_confirmed terminate_state",
         "validation.json": "schema optional_metadata_valid omitted",
     }
     keys(row, fields[name])
     require(type(row["schema"]) is int and row["schema"] == 1)
+    if name in ("hosted-ci.json", "preflight.json", "observer.json", "capture-request.json", "cleanup.json", "outcome.json", "watchdog.json"):
+        require(row["mode"] == MODE)
     if name == "artifact.json":
         require(row == {"schema": 1, "repository": "nkoturovic/claude-multi", "run_id": RUN,
                         "artifact_id": ARTIFACT_ID, "name": "dist", "size_bytes": 204873528,
@@ -209,26 +200,20 @@ def validate_record(name: str, row: dict) -> None:
     elif name == "client.json":
         require(row["installed_version"] == "1.1.0" and row["client_version"] == "2.1.292"
                 and row["sha256"] == CLIENT_SHA and row["size_bytes"] == CLIENT_SIZE and row["verified"] is True)
-    elif name == "containment.json":
-        require(row["env_mode"] == ENV_MODE)
-        require(all(row[field] is True for field in row if field not in ("schema", "env_mode")))
-    elif name == "namespace.json":
-        boolean(row["exited"])
-        code(row["exit_code"])
-        require(row["exited"] == (row["exit_code"] is not None))
-        require(row["phase"] in ("starting", "unavailable", "finished"))
-        require((row["phase"] == "starting") == (not row["exited"]))
-    elif name == "resume-start.json":
-        for field in ("pid", "pgid", "start_ticks"):
-            integer(row[field])
-        require(type(row["deadline_seconds"]) is int and row["deadline_seconds"] == 120)
-    elif name == "resume-end.json":
-        for field in ("timed_out", "kill_sent", "group_gone", "wait_bounded"):
-            boolean(row[field])
-        code(row["exit_code"])
+    elif name in ("hosted-ci.json", "preflight.json"):
+        require(all(row[field] is True for field in row if field not in ("schema", "mode")))
+    elif name == "observer.json":
+        require(row["end_captured"] is True)
+    elif name == "capture-request.json":
+        require(row["stop"] is True)
     elif name == "outcome.json":
         boolean(row["managed_turn_passed"])
         code(row["journey_exit_code"])
+    elif name == "cleanup.json":
+        boolean(row["capture_confirmed"])
+        boolean(row["cleanup_confirmed"])
+        require(row["terminate_state"] in ("returned", "failed", "timeout", "launch-failed"))
+        require(row["cleanup_confirmed"] == (row["terminate_state"] == "returned"))
     elif name == "watchdog.json":
         require(row["arm_basis"] == "first-fixture-request")
         require(row["status"] in ("completed", "bootstrap-timeout", "resume-timeout", "absolute-timeout",
@@ -237,8 +222,10 @@ def validate_record(name: str, row: dict) -> None:
         if row["armed_at_ms"] is not None:
             integer(row["armed_at_ms"], 0, 360000)
         code(row["launcher_exit_code"])
-        boolean(row["namespace_exit_confirmed"])
-        require(row["terminate_state"] in ("not-needed", "pending", "returned", "failed", "timeout", "launch-failed"))
+        boolean(row["capture_confirmed"])
+        boolean(row["cleanup_confirmed"])
+        require(row["terminate_state"] in ("pending", "returned", "failed", "timeout", "launch-failed", "not-owned"))
+        require(row["cleanup_confirmed"] == (row["terminate_state"] == "returned"))
     elif name == "validation.json":
         boolean(row["optional_metadata_valid"])
         require(type(row["omitted"]) is list and len(row["omitted"]) <= len(OPTIONAL))
@@ -548,88 +535,109 @@ def snapshot(home: Path, event: str, elapsed: float) -> dict:
             "processes_truncated": len(processes) > 64, "locks_available": available, "locks_truncated": truncated}
 
 
-def group_gone(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)
-        return False
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
+def empty_by_names(path: Path) -> None:
+    """Fresh-state guard: stat/list names only, never open any record or config."""
+    if not os.path.lexists(path):
+        return
+    require(stat.S_ISDIR(path.lstat().st_mode))
+    with os.scandir(path) as entries:
+        require(next(entries, None) is None)
 
 
-def kill_group(child: subprocess.Popen) -> tuple[bool, bool]:
-    sent = False
-    try:
-        os.killpg(child.pid, signal.SIGKILL)
-        sent = True
-    except ProcessLookupError:
-        pass
-    try:
-        child.wait(timeout=2)
-        bounded = True
-    except subprocess.TimeoutExpired:
-        bounded = False
-    return sent, bounded
+def linux_filesystem(path: Path) -> None:
+    checked = subprocess.run(["/usr/bin/stat", "-f", "-c", "%T", str(path)], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=2, check=False)
+    require(checked.returncode == 0 and checked.stdout.strip() in
+            (b"ext2/ext3", b"ext4", b"xfs", b"btrfs", b"tmpfs", b"overlayfs"))
 
 
-def resume(cm: str, cwd: Path, work: Path, metadata: Path) -> int:
-    timed_out = False
-    with open(work / "turn2.txt", "wb") as stdout, open(work / "turn2.err", "wb") as stderr:
-        child = subprocess.Popen([cm, "-c", "--", "-p", "journey turn two"], cwd=cwd,
-                                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
-        try:
-            facts = process_metadata(child.pid)
-            atomic_json(metadata / "resume-start.json", {"schema": 1, "pid": child.pid, "pgid": child.pid,
-                "start_ticks": facts["start_ticks"] if facts else 0, "deadline_seconds": 120})
-            try:
-                child.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-        finally:
-            # Includes same-group descendants even when the launcher already exited.
-            sent, bounded = kill_group(child)
-        atomic_json(metadata / "resume-end.json", {"schema": 1, "timed_out": timed_out,
-            "exit_code": child.returncode, "kill_sent": sent, "group_gone": group_gone(child.pid),
-            "wait_bounded": bounded})
-    return 124 if timed_out or not bounded else (child.returncode if child.returncode is not None else 1)
+def fresh_home(home: Path) -> None:
+    # No native Claude state, provider auth, declarations or credential files are imported.
+    for relative in (".claude", ".config/claude", ".local/share/claude-multi/auth", ".config/claude-multi",
+                     ".local/state/claude-multi/sessions", ".local/state/claude-multi/scopes",
+                     ".local/state/claude-multi/last-session-by-cwd"):
+        empty_by_names(home / relative)
+    for relative in (".claude.json", ".config/claude-multi/api-key", ".config/claude-multi/previous-key",
+                     ".config/claude-multi/config.yaml", ".config/claude-multi/custom.json"):
+        require(not os.path.lexists(home / relative))
+    for path in (home, home / ".local/share/claude-multi/install/current", Path(os.environ.get("TMPDIR") or "/tmp")):
+        linux_filesystem(path)
+    if os.environ.get("CLAUDE_CODE_TMPDIR"):
+        linux_filesystem(Path(os.environ["CLAUDE_CODE_TMPDIR"]))
 
 
-def run(scratch: Path, metadata: Path) -> int:
+def hosted_preflight(metadata: Path, workspace: Path) -> None:
+    """Only the reviewed hosted Windows VM + its fresh WSL distro may run clients."""
+    require(sys.platform.startswith("linux") and "microsoft" in platform.release().lower()
+            and "wsl" in platform.release().lower())
+    import pwd
+
+    for name in ("artifact.json", "hosted-ci.json"):
+        row = parse(safe_read(metadata / name, LIMITS[name]))
+        validate_record(name, row)
+    for name in ("preflight.json", "outcome.json", "observer.json", "capture-request.json"):
+        require(not os.path.lexists(metadata / name))
+    require(os.geteuid() != 0 and pwd.getpwuid(os.geteuid()).pw_name == "journey")
+    home = Path.home()
+    require(home == Path("/home/journey"))
+    require(re.fullmatch(r"/mnt/[a-z]/[A-Za-z0-9/_. -]+/candidate", str(workspace)) is not None)
+    require(Path.cwd().resolve() == workspace.resolve())
+    admit_hosted_environment(os.environ)
+    fresh_home(home)
+    install = home / ".local/share/claude-multi/install/current"
+    verify_dist(workspace.parent / "dist", metadata)
+    verify_client(home / "diag/claude", install, metadata)
+    atomic_json(metadata / "preflight.json", {"schema": 1, "mode": MODE, **{field: True for field in
+        "ordinary_user fresh_home linux_filesystem provider_auth_empty credential_environment_clear verified_release verified_client candidate_windows_cwd".split()}})
+    atomic_json(metadata / "outcome.json", {"schema": 1, "mode": MODE,
+                                          "managed_turn_passed": False, "journey_exit_code": None})
+
+
+def observe(metadata: Path) -> None:
+    """Background sibling only: observe fresh-distro PIDs, never launch/reparent a journey."""
+    preflight = parse(safe_read(metadata / "preflight.json", LIMITS["preflight.json"]))
+    validate_record("preflight.json", preflight)
     require(os.geteuid() != 0 and Path.home() == Path("/home/journey"))
-    atomic_json(metadata / "containment.json", {"schema": 1, "env_mode": ENV_MODE, **{field: True for field in
-        "network_private pid_private ipc_private proc_private loopback_up ordinary_user linux_filesystem".split()}})
-    atomic_json(metadata / "outcome.json", {"schema": 1, "managed_turn_passed": False, "journey_exit_code": None})
-    admit_inherited_environment(os.environ)
+    stopping = False
+    def stop(_signum, _frame):
+        nonlocal stopping
+        stopping = True
+    previous = signal.signal(signal.SIGTERM, stop)
     start = time.monotonic()
-    append_json(metadata / "snapshots.jsonl", snapshot(Path.home(), "start", 0), LIMITS["snapshots.jsonl"])
-    armed = False
-    with open(scratch / "journey.stdout", "wb") as stdout, open(scratch / "journey.stderr", "wb") as stderr:
-        child = subprocess.Popen(["sh", str(scratch / "journey.sh"), "installed", "1.1.0"], cwd=scratch,
-                                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
-        try:
-            while child.poll() is None and time.monotonic() - start < 345:
-                resumed = (metadata / "resume-start.json").exists() and not armed
-                event = "resume-start" if resumed else "periodic"
-                armed = armed or resumed
-                append_json(metadata / "snapshots.jsonl", snapshot(Path.home(), event, time.monotonic() - start),
+    next_sample = start + 3
+    try:
+        append_json(metadata / "snapshots.jsonl", snapshot(Path.home(), "start", 0), LIMITS["snapshots.jsonl"])
+        while not stopping and time.monotonic() - start < 345:
+            if (metadata / "capture-request.json").exists():
+                request = parse(safe_read(metadata / "capture-request.json", LIMITS["capture-request.json"]))
+                validate_record("capture-request.json", request)
+                break
+            now = time.monotonic()
+            if now >= next_sample:
+                append_json(metadata / "snapshots.jsonl", snapshot(Path.home(), "periodic", now - start),
                             LIMITS["snapshots.jsonl"])
-                time.sleep(3)
-        finally:
-            kill_group(child)
-    append_json(metadata / "snapshots.jsonl", snapshot(Path.home(), "end", time.monotonic() - start),
-                LIMITS["snapshots.jsonl"])
-    outcome = parse(safe_read(metadata / "outcome.json", 2048))
+                next_sample = now + 3
+            time.sleep(0.1)
+        append_json(metadata / "snapshots.jsonl", snapshot(Path.home(), "end", time.monotonic() - start),
+                    LIMITS["snapshots.jsonl"])
+        atomic_json(metadata / "observer.json", {"schema": 1, "mode": MODE, "end_captured": True})
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def finish(metadata: Path, status: int) -> None:
+    code(status)
+    outcome = parse(safe_read(metadata / "outcome.json", LIMITS["outcome.json"]))
     validate_record("outcome.json", outcome)
-    outcome["journey_exit_code"] = child.returncode
+    outcome["journey_exit_code"] = status
     atomic_json(metadata / "outcome.json", outcome)
-    return 0 if child.returncode == 0 and outcome["managed_turn_passed"] else 1
+    atomic_json(metadata / "capture-request.json", {"schema": 1, "mode": MODE, "stop": True})
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("patch", "verify-dist", "verify-client", "validate", "check-export",
-                                             "namespace", "run", "resume", "outcome"))
+                                             "guard-environment", "hosted-preflight", "observe", "finish", "outcome"))
     parser.add_argument("paths", nargs="*")
     args = parser.parse_args()
     paths = [Path(p) for p in args.paths]
@@ -643,28 +651,25 @@ def main() -> int:
         validate_directory(*paths)
     elif args.command == "check-export":
         check_export(paths[0])
-    elif args.command == "namespace":
-        metadata, status = paths
-        value = None if str(status) == "pending" else int(str(status))
-        phase = "starting" if value is None else ("finished" if (metadata / "containment.json").exists() else "unavailable")
-        atomic_json(metadata / "namespace.json", {"schema": 1, "phase": phase,
-                                                  "exited": value is not None, "exit_code": value})
-    else:
+    elif args.command == "guard-environment":
+        admit_hosted_environment(os.environ)
+    elif args.command == "hosted-preflight":
+        hosted_preflight(paths[0], paths[1])
+    elif args.command == "observe":
+        observe(paths[0])
+    elif args.command == "finish":
+        finish(paths[0], int(str(paths[1])))
+    elif args.command == "outcome":
         metadata = Path(os.environ["CM_DIAG_METADATA"])
-        if args.command == "run":
-            return run(paths[0], metadata)
-        if args.command == "resume":
-            return resume(str(paths[0]), paths[1], paths[2], metadata)
-        if args.command == "outcome":
-            atomic_json(metadata / "outcome.json", {"schema": 1, "managed_turn_passed": True,
-                                                    "journey_exit_code": None})
+        atomic_json(metadata / "outcome.json", {"schema": 1, "mode": MODE, "managed_turn_passed": True,
+                                                "journey_exit_code": None})
     return 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except InheritedEnvironmentRefused:
+    except HostedEnvironmentRefused:
         sys.exit(ENV_REFUSAL)
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
         # No exception repr, raw subprocess output, record or path in public logs.

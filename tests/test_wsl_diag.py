@@ -34,9 +34,19 @@ def artifact() -> dict:
 
 
 def watchdog() -> dict:
-    return {"schema": 1, "status": "resume-timeout", "elapsed_ms": 130000, "armed_at_ms": 0,
+    return {"schema": 1, "mode": diag.MODE, "status": "resume-timeout", "elapsed_ms": 130000, "armed_at_ms": 0,
             "arm_basis": "first-fixture-request", "launcher_exit_code": None,
-            "namespace_exit_confirmed": False, "terminate_state": "timeout"}
+            "capture_confirmed": False, "cleanup_confirmed": False, "terminate_state": "timeout"}
+
+
+def hosted_ci() -> dict:
+    return {"schema": 1, "mode": diag.MODE, **{name: True for name in
+        "github_hosted_windows windows_worker distribution_was_absent native_home_clean credential_environment_clear".split()}}
+
+
+def preflight() -> dict:
+    return {"schema": 1, "mode": diag.MODE, **{name: True for name in
+        "ordinary_user fresh_home linux_filesystem provider_auth_empty credential_environment_clear verified_release verified_client candidate_windows_cwd".split()}}
 
 
 def process() -> dict:
@@ -203,12 +213,12 @@ class MetadataTests(ScratchTests):
         diag.check_export(self.output)
 
     def test_unknown_keys_raw_paths_wrong_types_and_model_are_rejected(self) -> None:
-        good = {"schema": 1, "pid": 42, "pgid": 42, "start_ticks": 99, "deadline_seconds": 120}
-        bad_rows = [dict(good, argv="private"), dict(good, pid=True), dict(good, start_ticks=-1),
-                    dict(good, deadline_seconds=121), dict(good, schema=True)]
+        good = {"schema": 1, "mode": diag.MODE, "end_captured": True}
+        bad_rows = [dict(good, argv="private"), dict(good, pid=True), dict(good, end_captured="true"),
+                    dict(good, mode="private-namespace"), dict(good, schema=True)]
         for row in bad_rows:
             with self.subTest(row=row), self.assertRaises(ValueError):
-                diag.validate_record("resume-start.json", row)
+                diag.validate_record("observer.json", row)
         snapshot = {"event": "periodic", "elapsed_ms": 3, "processes": [process()], "locks": [],
                     "processes_truncated": False, "locks_available": True, "locks_truncated": False}
         for field, value in (("exe", "/home/private/client"), ("wchan", "raw-unknown-symbol"),
@@ -316,7 +326,7 @@ class MetadataTests(ScratchTests):
 class ExportTests(ScratchTests):
     def assert_timeout_evidence_preserved(self) -> None:
         diag.atomic_json(self.meta / "outcome.json",
-                         {"schema": 1, "managed_turn_passed": False, "journey_exit_code": 1})
+                         {"schema": 1, "mode": diag.MODE, "managed_turn_passed": False, "journey_exit_code": 1})
         diag.validate_directory(self.meta, self.output)
         self.assertEqual(json.loads((self.output / "artifact.json").read_text()), artifact())
         self.assertEqual(json.loads((self.output / "watchdog.json").read_text()), watchdog())
@@ -402,186 +412,155 @@ class ExportTests(ScratchTests):
             diag.validate_record("validation.json", {**good, "optional_metadata_valid": True})
 
 
-class VariantATests(ScratchTests):
-    def test_watchdog_basis_is_fixed_and_resume_markers_can_be_absent(self) -> None:
+class HostedBaselineTests(ScratchTests):
+    def test_honest_mode_and_cleanup_confirmation_only_from_termination(self) -> None:
+        self.assertEqual(diag.MODE, "hosted-disposable-wsl-fixture-only")
         diag.validate_record("watchdog.json", watchdog())
-        for basis in ("resume-start", "client-pid", None):
-            with self.subTest(basis=basis), self.assertRaises(ValueError):
-                diag.validate_record("watchdog.json", {**watchdog(), "arm_basis": basis})
+        for changed in ({**watchdog(), "namespace_exit_confirmed": True},
+                        {**watchdog(), "net_private": True}, {**watchdog(), "cleanup_confirmed": True},
+                        {**watchdog(), "mode": "private-namespace"}):
+            with self.assertRaises(ValueError):
+                diag.validate_record("watchdog.json", changed)
+        diag.validate_record("watchdog.json", {**watchdog(), "terminate_state": "returned", "cleanup_confirmed": True})
+        self.assertFalse(any(name in diag.LIMITS for name in
+                             ("containment.json", "namespace.json", "resume-start.json", "resume-end.json")))
         diag.validate_directory(self.meta, self.output)
-        for name in ("resume-start.json", "resume-end.json"):
-            self.assertFalse((self.meta / name).exists())
-            self.assertFalse((self.output / name).exists())
-        self.assertEqual(json.loads((self.output / "watchdog.json").read_text())["arm_basis"],
-                         "first-fixture-request")
         diag.check_export(self.output)
 
-    def test_observer_keeps_journey_launcher_without_wrapping_continuation(self) -> None:
-        scratch = self.root / "scratch"
-        scratch.mkdir()
-        child = mock.Mock(pid=42, returncode=0)
-        child.poll.return_value = 0
-        inherited = {"HOME": "/home/journey", "WSL_DISTRO_NAME": "Ubuntu-24.04", "WSLENV": "FIXTURE_FLAG/u",
-                     "FIXTURE_FLAG": "kept", "TMPDIR": "/tmp/inherited", "CLAUDE_CODE_TMPDIR": "/tmp/inherited-code"}
-        def launched(*args, **kwargs):
-            for name in inherited:
-                self.assertEqual(os.environ[name], inherited[name])
-            diag.atomic_json(self.meta / "outcome.json",
-                             {"schema": 1, "managed_turn_passed": True, "journey_exit_code": None})
-            return child
+    def test_names_only_guard_rejects_credentials_provider_bypasses_and_state_selectors(self) -> None:
+        class NamesOnly(dict):
+            def __getitem__(self, name):
+                raise AssertionError("environment value read")
+        allowed = NamesOnly.fromkeys(("PATH", "TMPDIR", "CLAUDE_CODE_TMPDIR", "WSL_DISTRO_NAME",
+                                      "WSL_INTEROP", "WSLENV", "XDG_RUNTIME_DIR"))
+        diag.admit_hosted_environment(allowed)
+        for name in ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN", "AWS_SECRET_ACCESS_KEY",
+                     "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                     "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+                     "CLAUDE_CONFIG_DIR", "CLAUDE_MULTI_ASSETS", "XDG_STATE_HOME", "HTTP_PROXY",
+                     "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_DISABLE_FAST_MODE", "PGSTORE_DSN",
+                     "GITSTORE_GIT_URL", "OBJECTSTORE_ENDPOINT", "DEPLOY", "WRITABLE_PATH", "META_MINT_URL"):
+            environment = NamesOnly({name: "NEVER-EXPORT"})
+            with self.subTest(name=name), self.assertRaises(diag.HostedEnvironmentRefused) as caught:
+                diag.admit_hosted_environment(environment)
+            self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
+            self.assertEqual(set(environment), {name})
+
+    def test_provider_auth_directory_is_checked_by_names_stat_never_contents(self) -> None:
+        home = self.root / "home"
+        home.mkdir()
+        auth = home / ".local/share/claude-multi/auth"
+        auth.mkdir(parents=True)
+        with mock.patch.object(diag, "linux_filesystem"), mock.patch("builtins.open", side_effect=AssertionError("config read")):
+            diag.fresh_home(home)
+        credential = auth / "fixture-account.json"
+        credential.write_text("NEVER-EXPORT")
+        with mock.patch.object(diag, "linux_filesystem"), mock.patch("builtins.open", side_effect=AssertionError("credential read")):
+            with self.assertRaises(ValueError):
+                diag.fresh_home(home)
+        credential.unlink()
+        auth.rmdir()
+        auth.symlink_to(home, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            diag.fresh_home(home)
+
+    def test_stale_operator_configuration_or_session_names_are_not_imported(self) -> None:
+        for relative in (".config/claude-multi/endpoint.json", ".config/claude-multi/profiles/profile.json",
+                         ".local/state/claude-multi/sessions/record.json", ".claude.json"):
+            with self.subTest(relative=relative):
+                home = self.root / relative.replace("/", "_")
+                path = home / relative
+                path.parent.mkdir(parents=True)
+                path.write_text("NEVER-EXPORT")
+                with mock.patch.object(diag, "linux_filesystem"), \
+                     mock.patch("builtins.open", side_effect=AssertionError("operator state read")):
+                    with self.assertRaises(ValueError):
+                        diag.fresh_home(home)
+
+    def test_local_or_unproven_hosted_execution_refuses_before_any_client(self) -> None:
+        with mock.patch.object(diag.platform, "release", return_value="ordinary-linux"), \
+             mock.patch.object(diag.subprocess, "Popen") as client, mock.patch.object(diag, "verify_client") as pin:
+            with self.assertRaises(ValueError):
+                diag.hosted_preflight(self.meta, Path("/mnt/d/a/repo/candidate"))
+            client.assert_not_called()
+            pin.assert_not_called()
+        diag.atomic_json(self.meta / "hosted-ci.json", hosted_ci())
+        bad = {**hosted_ci(), "distribution_was_absent": False}
+        (self.meta / "hosted-ci.json").write_text(json.dumps(bad))
+        with mock.patch.object(diag.platform, "release", return_value="microsoft-standard-WSL2"), \
+             mock.patch.object(diag.subprocess, "Popen") as client:
+            with self.assertRaises(ValueError):
+                diag.hosted_preflight(self.meta, Path("/mnt/d/a/repo/candidate"))
+            client.assert_not_called()
+
+    def test_all_preflight_guards_and_hashes_precede_foreground_admission(self) -> None:
+        workspace = Path("/mnt/d/a/repo/candidate")
+        diag.atomic_json(self.meta / "hosted-ci.json", hosted_ci())
+        order = []
+        with mock.patch.object(diag.platform, "release", return_value="microsoft-standard-WSL2"), \
+             mock.patch.object(diag.os, "geteuid", return_value=1000), \
+             mock.patch("pwd.getpwuid", return_value=mock.Mock(pw_name="journey")), \
+             mock.patch.object(Path, "home", return_value=Path("/home/journey")), \
+             mock.patch.object(Path, "cwd", return_value=workspace), \
+             mock.patch.dict(os.environ, {"WSL_INTEROP": "/run/WSL/fixture_interop"}, clear=True), \
+             mock.patch.object(diag, "fresh_home", side_effect=lambda _: order.append("fresh-home")), \
+             mock.patch.object(diag, "verify_dist", side_effect=lambda *a: order.append("bundle-hash")), \
+             mock.patch.object(diag, "verify_client", side_effect=lambda *a: order.append("client-hash")), \
+             mock.patch.object(diag.subprocess, "Popen", side_effect=AssertionError("client launched")):
+            diag.hosted_preflight(self.meta, workspace)
+        self.assertEqual(order, ["fresh-home", "bundle-hash", "client-hash"])
+        self.assertEqual(json.loads((self.meta / "preflight.json").read_text()), preflight())
+        self.assertFalse(json.loads((self.meta / "outcome.json").read_text())["managed_turn_passed"])
+
+    def test_credential_guard_fails_before_hashes_or_client_and_never_unsets(self) -> None:
+        workspace = Path("/mnt/d/a/repo/candidate")
+        diag.atomic_json(self.meta / "hosted-ci.json", hosted_ci())
+        with mock.patch.object(diag.platform, "release", return_value="microsoft-standard-WSL2"), \
+             mock.patch.object(diag.os, "geteuid", return_value=1000), \
+             mock.patch("pwd.getpwuid", return_value=mock.Mock(pw_name="journey")), \
+             mock.patch.object(Path, "home", return_value=Path("/home/journey")), \
+             mock.patch.object(Path, "cwd", return_value=workspace), \
+             mock.patch.dict(os.environ, {"GH_TOKEN": "NEVER-EXPORT"}, clear=True), \
+             mock.patch.object(diag, "verify_client") as pin, mock.patch.object(diag.subprocess, "Popen") as client:
+            with self.assertRaises(diag.HostedEnvironmentRefused):
+                diag.hosted_preflight(self.meta, workspace)
+            self.assertIn("GH_TOKEN", os.environ)
+            pin.assert_not_called()
+            client.assert_not_called()
+        self.assertFalse((self.meta / "preflight.json").exists())
+        self.assertNotIn("NEVER-EXPORT", "".join(p.read_text() for p in self.meta.iterdir()))
+
+    def test_observer_is_a_nonlaunching_sibling_and_captures_before_ack(self) -> None:
+        diag.atomic_json(self.meta / "preflight.json", preflight())
+        diag.atomic_json(self.meta / "capture-request.json", {"schema": 1, "mode": diag.MODE, "stop": True})
         def observed(home, event, elapsed):
             return {"event": event, "elapsed_ms": int(elapsed * 1000), "processes": [], "locks": [],
                     "processes_truncated": False, "locks_available": True, "locks_truncated": False}
         with mock.patch.object(diag.os, "geteuid", return_value=1000), \
-             mock.patch.object(diag.Path, "home", return_value=Path("/home/journey")), \
+             mock.patch.object(Path, "home", return_value=Path("/home/journey")), \
              mock.patch.object(diag, "snapshot", side_effect=observed), \
-             mock.patch.object(diag.subprocess, "Popen", side_effect=launched) as popen, \
-             mock.patch.object(diag.os, "killpg"), mock.patch.dict(os.environ, inherited, clear=True):
-            self.assertEqual(diag.run(scratch, self.meta), 0)
-        popen.assert_called_once()
-        self.assertEqual(popen.call_args.args[0], ["sh", str(scratch / "journey.sh"), "installed", "1.1.0"])
-        self.assertEqual(popen.call_args.kwargs["cwd"], scratch)
-        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
-        self.assertNotIn("env", popen.call_args.kwargs)
-        self.assertTrue(popen.call_args.kwargs["start_new_session"]) # Whole-journey launcher unchanged.
-        self.assertEqual(json.loads((self.meta / "containment.json").read_text())["env_mode"],
-                         "inherited-from-existing-launcher")
-        self.assertFalse((self.meta / "resume-start.json").exists())
-        self.assertFalse((self.meta / "resume-end.json").exists())
+             mock.patch.object(diag.subprocess, "Popen", side_effect=AssertionError("observer launched journey")):
+            diag.observe(self.meta)
         self.assertEqual([json.loads(line)["event"] for line in (self.meta / "snapshots.jsonl").read_text().splitlines()],
                          ["start", "end"])
+        self.assertEqual(json.loads((self.meta / "observer.json").read_text()),
+                         {"schema": 1, "mode": diag.MODE, "end_captured": True})
 
+    def test_finish_preserves_failure_and_requests_capture(self) -> None:
+        diag.atomic_json(self.meta / "outcome.json", {"schema": 1, "mode": diag.MODE,
+                                                    "managed_turn_passed": False, "journey_exit_code": None})
+        diag.finish(self.meta, 1)
+        self.assertEqual(json.loads((self.meta / "outcome.json").read_text()),
+                         {"schema": 1, "mode": diag.MODE, "managed_turn_passed": False, "journey_exit_code": 1})
+        self.assertEqual(json.loads((self.meta / "capture-request.json").read_text()),
+                         {"schema": 1, "mode": diag.MODE, "stop": True})
 
-class InheritedEnvironmentTests(ScratchTests):
-    def test_runtime_flags_are_admitted_without_reading_values_or_mutation(self) -> None:
-        class NamesOnly(dict):
-            def __getitem__(self, name):
-                raise AssertionError("unexpected environment value read")
-        environment = NamesOnly.fromkeys(("PATH", "TMPDIR", "CLAUDE_CODE_TMPDIR", "WSL_DISTRO_NAME",
-                                          "WSLENV", "WSL2_GUI_APPS_ENABLED", "XDG_RUNTIME_DIR"))
-        before = set(environment)
-        with mock.patch("builtins.open", side_effect=AssertionError("config read")):
-            diag.admit_inherited_environment(environment)
-        self.assertEqual(set(environment), before)
-
-    def test_credential_and_operator_selection_names_refuse_without_value_reads(self) -> None:
-        class NamesOnly(dict):
-            def __getitem__(self, name):
-                raise AssertionError("credential value read")
-        for name in ("ANTHROPIC_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "SYSTEM_ACCESSTOKEN",
-                     "HTTP_AUTHORIZATION", "ACTIONS_RUNTIME_TOKEN",
-                     "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "AWS_SECRET_ACCESS_KEY", "SSH_AUTH_SOCK",
-                     "management_password", "PRIVATE_KEY", "some_apikey", "CLAUDECODE",
-                     "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
-                     "XDG_STATE_HOME", "CLAUDE_MULTI_ASSETS", "claude_multi_managed_id"):
-            environment = NamesOnly({name: "NEVER-EXPORT"})
-            with self.subTest(name=name), self.assertRaises(diag.InheritedEnvironmentRefused) as caught:
-                diag.admit_inherited_environment(environment)
-            self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
-            self.assertEqual(set(environment), {name}) # Even empty/unsafe variables are not unset.
-        with self.assertRaises(diag.InheritedEnvironmentRefused):
-            diag.admit_inherited_environment({"GH_TOKEN": ""})
-
-    def test_interop_pointer_requires_absent_target_under_a_masked_root(self) -> None:
-        for path in ("/run/WSL/fixture_interop", "/tmp/fixture_interop", "/mnt/c/fixture_interop"):
-            with self.subTest(path=path), mock.patch.object(Path, "lstat", side_effect=FileNotFoundError) as probe:
-                diag.admit_inherited_environment({"WSL_INTEROP": path})
-                probe.assert_called_once()
-        for path in ("", "relative", "/home/journey/socket", "/run/../home/journey/socket"):
-            with self.subTest(path=path), mock.patch.object(Path, "lstat") as probe:
-                with self.assertRaises(diag.InheritedEnvironmentRefused) as caught:
-                    diag.admit_inherited_environment({"WSL_INTEROP": path})
-                self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
-                probe.assert_not_called()
-        for side_effect in (None, PermissionError("NEVER-EXPORT")):
-            with self.subTest(side_effect=side_effect), mock.patch.object(Path, "lstat", side_effect=side_effect):
-                with self.assertRaises(diag.InheritedEnvironmentRefused) as caught:
-                    diag.admit_inherited_environment({"WSL_INTEROP": "/run/WSL/fixture_interop"})
-                self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
-
-    def test_unsafe_inheritance_stops_before_observer_and_any_journey_client(self) -> None:
-        for name, value in (("GH_TOKEN", "NEVER-EXPORT"), ("XDG_STATE_HOME", "/NEVER-EXPORT")):
-            with self.subTest(name=name), \
-                 mock.patch.object(diag.os, "geteuid", return_value=1000), \
-                 mock.patch.object(diag.Path, "home", return_value=Path("/home/journey")), \
-                 mock.patch.dict(os.environ, {name: value}, clear=True), \
-                 mock.patch.object(diag, "snapshot") as observer, \
-                 mock.patch.object(diag.subprocess, "Popen") as client:
-                with self.assertRaises(diag.InheritedEnvironmentRefused) as caught:
-                    diag.run(self.root, self.meta)
-                self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
-                client.assert_not_called()
-                observer.assert_not_called()
-            self.assertFalse(json.loads((self.meta / "outcome.json").read_text())["managed_turn_passed"])
-            self.assertNotIn("NEVER-EXPORT", "".join(p.read_text() for p in self.meta.iterdir()))
-
-    def test_env_mode_is_fixed_metadata_not_an_environment_dump(self) -> None:
-        row = {"schema": 1, "env_mode": "inherited-from-existing-launcher", **{name: True for name in
-            "network_private pid_private ipc_private proc_private loopback_up ordinary_user linux_filesystem".split()}}
-        diag.validate_record("containment.json", row)
-        self.assertLess(len(diag.encoded(row)), diag.LIMITS["containment.json"])
-        for changed in ({**row, "env_mode": "ordinary-wsl-user"}, {**row, "environment": {"flag": "value"}}):
+    def test_linux_filesystem_guard_refuses_windows_or_unknown_work_roots(self) -> None:
+        with mock.patch.object(diag.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=b"9p\n")) as checked:
             with self.assertRaises(ValueError):
-                diag.validate_record("containment.json", changed)
-
-
-class ResumeTests(ScratchTests):
-    def exercise(self, waits: list, returncode: int | None) -> tuple:
-        work = self.root / "local-turns"
-        work.mkdir()
-        cwd = self.root / "project"
-        cwd.mkdir()
-        child = mock.Mock(pid=42, returncode=returncode)
-        def wait(*, timeout):
-            self.assertTrue((self.meta / "resume-start.json").exists())
-            result = waits.pop(0)
-            if isinstance(result, Exception):
-                raise result
-            return result
-        child.wait.side_effect = wait
-        def launch(*args, **kwargs):
-            kwargs["stdout"].write(b"RAW-TURN-NEVER-EXPORT")
-            kwargs["stderr"].write(b"RAW-ERR-NEVER-EXPORT")
-            return child
-        with mock.patch.object(diag.subprocess, "Popen", side_effect=launch) as popen, \
-             mock.patch.object(diag, "process_metadata", return_value=process()), \
-             mock.patch.object(diag.os, "killpg", side_effect=[None, ProcessLookupError()]) as kill, \
-             contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()) as stderr:
-            result = diag.resume("/private/bin/claude-multi", cwd, work, self.meta)
-        self.assertEqual(stdout.getvalue() + stderr.getvalue(), "")
-        argv, = popen.call_args.args
-        self.assertEqual(argv, ["/private/bin/claude-multi", "-c", "--", "-p", "journey turn two"])
-        self.assertEqual(popen.call_args.kwargs["cwd"], cwd)
-        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
-        self.assertTrue(popen.call_args.kwargs["start_new_session"])
-        self.assertEqual([call.kwargs["timeout"] for call in child.wait.call_args_list], [120, 2])
-        self.assertEqual(kill.call_args_list, [mock.call(42, signal.SIGKILL), mock.call(42, 0)])
-        self.assertFalse((self.meta / "resume-start.json.pending").exists())
-        self.assertEqual((work / "turn2.txt").read_bytes(), b"RAW-TURN-NEVER-EXPORT")
-        self.assertEqual((work / "turn2.err").read_bytes(), b"RAW-ERR-NEVER-EXPORT")
-        diag.validate_directory(self.meta, self.output)
-        self.assertNotIn("NEVER-EXPORT", "".join(p.read_text() for p in self.output.iterdir()))
-        return result, json.loads((self.meta / "resume-end.json").read_text())
-
-    def test_identical_argv_cwd_null_stdin_atomic_start_and_local_output(self) -> None:
-        result, end = self.exercise([0, 0], 0)
-        self.assertEqual(result, 0)
-        self.assertFalse(end["timed_out"])
-        self.assertTrue(end["wait_bounded"])
-
-    def test_120_second_deadline_kills_group_and_waits_only_two_seconds(self) -> None:
-        result, end = self.exercise([subprocess.TimeoutExpired("fixture", 120), -9], -9)
-        self.assertEqual(result, 124)
-        self.assertTrue(end["timed_out"])
-        self.assertTrue(end["kill_sent"])
-        self.assertTrue(end["group_gone"])
-
-    def test_unreaped_child_cannot_cause_unlimited_wait(self) -> None:
-        result, end = self.exercise([subprocess.TimeoutExpired("fixture", 120),
-                                     subprocess.TimeoutExpired("fixture", 2)], None)
-        self.assertEqual(result, 124)
-        self.assertFalse(end["wait_bounded"])
-        self.assertIsNone(end["exit_code"])
+                diag.linux_filesystem(self.root)
+        self.assertEqual(checked.call_args.args[0][:4], ["/usr/bin/stat", "-f", "-c", "%T"])
+        self.assertEqual(checked.call_args.kwargs["timeout"], 2)
 
 
 class FrozenInputTests(ScratchTests):
@@ -646,7 +625,7 @@ class FrozenInputTests(ScratchTests):
                 diag.verify_client(client, install, self.meta)
 
 
-class WorkflowContainmentTests(unittest.TestCase):
+class WorkflowHostedTests(unittest.TestCase):
     def test_dispatch_only_single_read_only_job_and_original_artifact(self) -> None:
         text = WORKFLOW.read_text()
         jobs = re.findall(r"(?m)^  ([a-z][a-z-]+):$", text.split("jobs:\n")[1])
@@ -679,30 +658,78 @@ class WorkflowContainmentTests(unittest.TestCase):
         self.assertEqual(set(uploaded), set(diag.EXPORT_LIMITS))
         self.assertTrue(all("*" not in name and "/" not in name for name in uploaded))
 
-    def test_namespace_has_no_fallback_and_product_paths_are_linux_only(self) -> None:
+    def test_original_hosted_foreground_with_observer_sibling_and_no_wrappers(self) -> None:
         text = (SCRIPTS / "wsl_diag.sh").read_text()
-        self.assertIn("unshare --net --pid --ipc --mount --fork --kill-child=KILL --mount-proc", text)
-        self.assertIn("ip link set dev lo up", text)
-        runtime = text.split("inside)\n", 1)[1]
-        self.assertIn('exec runuser -u journey -- /usr/bin/env HOME="$home" USER=journey LOGNAME=journey', runtime)
-        self.assertIn('CM_DIAG_METADATA=/cm-diag-metadata JOURNEY_CLIENT="$scratch/claude"', runtime)
-        self.assertIn('/usr/bin/python3 -I "$scratch/wsl_diag.py" run "$scratch"', runtime)
-        for removed in ("env -i", "PATH=", "TMPDIR=", "CLAUDE_CODE_TMPDIR="):
-            self.assertNotIn(removed, runtime)
-        self.assertIn('runuser -u journey -- env -i HOME="$home" PATH=/usr/bin:/bin', text.split("run)\n", 1)[0])
-        self.assertIn("mount --bind \"$metadata\" /cm-diag-metadata", text)
-        self.assertIn("tmpfs /mnt", text)
-        self.assertIn("tmpfs /run", text)
-        self.assertIn("tmpfs /tmp", text)
-        self.assertIn("home=/home/journey", text)
-        self.assertIn("no uncontained retry", text)
-        self.assertIn('metadata=$2', text)  # Save before parsing the contract URL/hash/size.
-        self.assertIn('"$install" "$metadata"', text)
+        runtime = text.split("journey)\n", 1)[1]
+        for absent in ("unshare", "runuser", "mount ", "env -i", "PATH=", "TMPDIR=", "CLAUDE_CODE_TMPDIR=", "setsid"):
+            self.assertNotIn(absent, runtime)
+        pre = runtime.index('hosted-preflight "$metadata" "$workspace"')
+        observe = runtime.index('observe "$metadata"')
+        foreground = runtime.index('sh "$scratch/journey.sh" installed 1.1.0')
+        self.assertLess(pre, observe)
+        self.assertLess(observe, foreground)
+        self.assertIn('>"$scratch/observer.stdout" 2>"$scratch/observer.stderr" &', runtime)
+        self.assertIn('CM_DIAG_METADATA="$metadata" JOURNEY_CLIENT="$scratch/claude"', runtime)
+        self.assertIn('for attempt in $(seq 50)', runtime)
+        self.assertNotIn('wait ', runtime)
+        helper = (SCRIPTS / "wsl_diag.py").read_text()
+        self.assertNotIn("subprocess.Popen", helper)
+        self.assertNotIn("start_new_session", helper)
+        workflow = WORKFLOW.read_text()
+        self.assertIn('wsl --distribution Ubuntu-24.04 --cd "$candidate" --exec sh', workflow)
+        self.assertIn('-LinuxWorkspace "$env:CM_DIAG_LINUX_WORKSPACE"', workflow)
+        self.assertIn("Initialize-DiagHostedWorker", workflow)
+        self.assertIn("steps.journey.outcome != 'success'", workflow)
+        self.assertLess(workflow.index("Bounded disposable-distro termination fallback"), workflow.index("actions/upload-artifact@"))
+
+    def test_frozen_fixture_routing_fences_and_fast_prefetch_controls_remain_owned(self) -> None:
+        original = (SCRIPTS / "journey.sh").read_text()
+        self.assertIn('base="http://127.0.0.1:$(cat "$work/fixture.port")/v1"', original)
+        self.assertIn('--as journey-fixture --base-url "$base"', original)
+        self.assertIn('direct --model custom-journey-fixture -- -p "journey turn one"', original)
+        compiler = (REPO_ROOT / "src/claude_multi/compiler.py").read_text()
+        self.assertIn('"ANTHROPIC_BASE_URL": meta.gateway_base_url', compiler)
+        self.assertIn('"CLAUDE_CODE_DISABLE_FAST_MODE": "1"', compiler)
+        scope = (REPO_ROOT / "src/claude_multi/scope.py").read_text()
+        self.assertIn('"availableModels"', scope)
+        self.assertIn('"apiKeyHelper"', scope)
+
+    def test_hosted_windows_guards_and_capture_cleanup_order_are_fail_closed(self) -> None:
+        text = (SCRIPTS / "wsl_diag_watchdog.ps1").read_text()
+        worker = text[text.index("function Assert-DiagHostedWorker"):text.index("function Get-DiagDeadline")]
+        for marker in ("$IsWindows", "26100", "GITHUB_ACTIONS", "RUNNER_OS", "RUNNER_ENVIRONMENT",
+                       "github-hosted", "GITHUB_EVENT_NAME", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"):
+            self.assertIn(marker, worker)
+        self.assertIn("[Environment]::GetEnvironmentVariables().Keys", worker)
+        self.assertIn(".EnumerateFileSystemInfos()", worker)
+        self.assertIn("'--list', '--quiet'", worker)
+        self.assertIn("$read.IsCompleted", worker)
+        self.assertIn("Preexisting or unavailable WSL distribution; no reuse", worker)
+        self.assertNotIn("ReadAllText", worker)
+        self.assertNotIn("Get-ItemProperty", worker)
+        self.assertNotIn("Get-NetTCPConnection", text)
+        self.assertNotIn("NetFirewall", text)
+        capture = text[text.index("function Request-DiagEndCapture"):text.index("function Stop-DiagDistribution")]
+        self.assertIn("-lt 2000", capture)
+        termination = text[text.index("function Stop-DiagDistribution"):text.index("function Invoke-DiagWatchdog")]
+        self.assertIn("Assert-DiagHostedWorker", termination)
+        self.assertIn("-lt 15000", termination)
+        invocation = text[text.index("function Invoke-DiagWatchdog"):]
+        self.assertLess(invocation.index("Request-DiagEndCapture $Directory"),
+                        invocation.index("$row.terminate_state = Stop-DiagDistribution"))
+        self.assertNotIn("if (-not $passed)", invocation)
+        native = (REPO_ROOT / "tests/pwsh/wsl_diag_watchdog.ps1").read_text()
+        for case in ("SUCCESS also terminates", "FAILURE also terminates", "Launcher exit alone is not cleanup proof",
+                     "launches 0", "not-owned", "Preexisting", "terminationState = 'timeout'"):
+            if case == "Preexisting":
+                self.assertIn("-Output 'Ubuntu-24.04'", native)
+            else:
+                self.assertIn(case, native)
 
     def test_watchdog_first_fixture_reader_is_bounded_strict_and_partial_safe(self) -> None:
         text = (SCRIPTS / "wsl_diag_watchdog.ps1").read_text()
         reader = text[text.index("function Test-DiagFirstFixtureRequest"):
-                      text.index("function Test-DiagNamespaceExit")]
+                      text.index("function Test-DiagObserverEnd")]
         self.assertEqual(re.findall(r"Join-Path \$Directory '([^']+)'", reader), ["fixture.jsonl"])
         self.assertIn(f'$limit = {diag.LIMITS["fixture.jsonl"]}', reader)
         self.assertIn(f'$records -ge {diag.RECORD_LIMITS["fixture.jsonl"]}', reader)
@@ -735,8 +762,19 @@ class WorkflowContainmentTests(unittest.TestCase):
         self.assertNotRegex(text, r"(?m)^\s*(?:&\s+)?wsl(?:\.exe)?\s")
         self.assertNotIn("\\\\wsl$", text)
         self.assertLess(text.index("Write-DiagResult $Directory $row"), text.index("$row.terminate_state = Stop-DiagDistribution"))
-        self.assertIn("namespace_exit_confirmed = $false", text)
-        self.assertIn("$row.launcher_exit_code -eq 0 -and $row.namespace_exit_confirmed", text)
+        self.assertNotIn("namespace_exit_confirmed", text)
+        self.assertNotIn("not-needed", text)
+        self.assertIn("$row.capture_confirmed -and $row.cleanup_confirmed", text)
+        self.assertIn("$row.cleanup_confirmed = $row.terminate_state -eq 'returned'", text)
+        self.assertIn("} finally {", text)
+        invocation = text[text.index("function Invoke-DiagWatchdog"):]
+        self.assertNotIn("'--user'", invocation)
+        self.assertIn("'--cd', $Workspace, '--exec'", invocation)
+        self.assertIn("'journey', $LinuxDirectory, $Workspace", invocation)
+        self.assertIn("Assert-DiagHostedWorker", invocation)
+        self.assertIn("Assert-DiagHostedMarker $Directory", invocation)
+        self.assertIn("Assert-DiagHostEnvironment", invocation)
+        self.assertLess(invocation.index("Assert-DiagHostEnvironment"), invocation.index("$process = Start-DiagProcess"))
         self.assertIn("Start-DiagProcess -Arguments @('--terminate', 'Ubuntu-24.04')", text)
         self.assertIn("Start-DiagProcess -Arguments @('--distribution'", text)
         # Executable native mock cases are kept separately for an authorized

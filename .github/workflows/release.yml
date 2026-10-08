@@ -97,6 +97,12 @@ jobs:
           if ((git -C candidate rev-parse HEAD).Trim() -cne '8b4ec9e1572d41d33396dbc67a3a1951bb2561b0') {
             throw 'Wrong candidate checkout'
           }
+      - name: Fresh hosted Windows worker only, no preexisting WSL or native credentials
+        timeout-minutes: 2
+        run: |
+          . ./harness/.github/scripts/wsl_diag_watchdog.ps1
+          try { Initialize-DiagHostedWorker "$env:CM_DIAG_METADATA" }
+          catch { throw 'Hosted disposable fixture preflight refused' }
       - name: Original WSL readiness and ordinary-user preparation (no Pester)
         timeout-minutes: 10
         run: |
@@ -108,15 +114,13 @@ jobs:
           $candidate = (wsl --distribution Ubuntu-24.04 --user root --exec wslpath -a "$PWD/candidate").Trim()
           wsl --distribution Ubuntu-24.04 --user root --cd "$candidate" --exec sh .github/scripts/wsl_prepare.sh
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          wsl --distribution Ubuntu-24.04 --user root --exec apt-get install --yes --no-install-recommends util-linux iproute2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           wsl --terminate Ubuntu-24.04
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           wsl --set-default Ubuntu-24.04
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Reuse the original install.ps1 loopback-HTTPS fixture sequence. Only
       # disposable fixture trust signs a Linux copy; original dist stays intact.
-      # No gateway, managed session or model fixture runs until the namespace.
+      # No gateway or client runs until hosted/distro/home/auth/hash guards pass.
       - name: Original signed fixture install through install.ps1, without setup
         timeout-minutes: 10
         run: |
@@ -204,13 +208,35 @@ jobs:
           wsl --distribution Ubuntu-24.04 --user root --exec sh "$workspace/harness/.github/scripts/wsl_diag.sh" `
             stage "$workspace/harness/.github/scripts" "$workspace/candidate/.github/scripts" "$metadata"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $candidate = "$workspace/candidate"
+          wsl --distribution Ubuntu-24.04 --cd "$candidate" --exec sh /home/journey/diag/wsl_diag.sh `
+            prefetch "$candidate/.github/scripts" "$metadata"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "CM_DIAG_LINUX_METADATA=$metadata" >> $env:GITHUB_ENV
-      - name: Contained managed turn and resume, Windows-local watchdog
+          "CM_DIAG_LINUX_WORKSPACE=$candidate" >> $env:GITHUB_ENV
+      - name: Hosted disposable WSL fixture journey, original foreground continuation
+        id: journey
         timeout-minutes: 8
         run: |
           & ./harness/.github/scripts/wsl_diag_watchdog.ps1 -MetadataDirectory "$env:CM_DIAG_METADATA" `
-            -LinuxMetadata "$env:CM_DIAG_LINUX_METADATA"
+            -LinuxMetadata "$env:CM_DIAG_LINUX_METADATA" -LinuxWorkspace "$env:CM_DIAG_LINUX_WORKSPACE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Bounded disposable-distro termination fallback before any upload
+        if: always() && steps.journey.outcome != 'success'
+        timeout-minutes: 1
+        run: |
+          . ./harness/.github/scripts/wsl_diag_watchdog.ps1
+          try {
+            Assert-DiagHostedWorker
+            Assert-DiagMetadataPath "$env:CM_DIAG_METADATA"
+            Assert-DiagHostedMarker "$env:CM_DIAG_METADATA"
+          } catch { throw 'Hosted disposable cleanup refused without ownership evidence' }
+          $capture = $false
+          try { $capture = Request-DiagEndCapture "$env:CM_DIAG_METADATA" } catch { }
+          $state = Stop-DiagDistribution
+          Write-DiagJson "$env:CM_DIAG_METADATA" 'cleanup.json' @{ schema = 1; mode = $script:DiagMode
+            capture_confirmed = $capture; cleanup_confirmed = ($state -eq 'returned'); terminate_state = $state }
+          if ($state -ne 'returned') { throw 'Disposable distro termination unconfirmed' }
       - name: Original source and dist still pristine
         if: always()
         timeout-minutes: 3
@@ -242,10 +268,11 @@ jobs:
             ${{ env.CM_DIAG_UPLOAD }}/artifact.json
             ${{ env.CM_DIAG_UPLOAD }}/dist.json
             ${{ env.CM_DIAG_UPLOAD }}/client.json
-            ${{ env.CM_DIAG_UPLOAD }}/containment.json
-            ${{ env.CM_DIAG_UPLOAD }}/namespace.json
-            ${{ env.CM_DIAG_UPLOAD }}/resume-start.json
-            ${{ env.CM_DIAG_UPLOAD }}/resume-end.json
+            ${{ env.CM_DIAG_UPLOAD }}/hosted-ci.json
+            ${{ env.CM_DIAG_UPLOAD }}/preflight.json
+            ${{ env.CM_DIAG_UPLOAD }}/observer.json
+            ${{ env.CM_DIAG_UPLOAD }}/capture-request.json
+            ${{ env.CM_DIAG_UPLOAD }}/cleanup.json
             ${{ env.CM_DIAG_UPLOAD }}/outcome.json
             ${{ env.CM_DIAG_UPLOAD }}/watchdog.json
             ${{ env.CM_DIAG_UPLOAD }}/fixture.jsonl
