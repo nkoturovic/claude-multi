@@ -2403,6 +2403,75 @@ class NativeLaneTests(unittest.TestCase):
                        "subjectAltName=DNS:localhost,IP:127.0.0.1", 'trap \'rm -rf "$work"\' EXIT'):
             self.assertIn(needle, prepare)
 
+    def test_windows_installed_journey_detaches_and_keeps_its_argv_and_exit_guard(self) -> None:
+        job = self.release["journeys-windows"]
+        commands = _commands(job)
+        journeys = [line for line in commands if "journey.sh installed" in line]
+        self.assertEqual(journeys, [
+            'wsl --distribution $distribution --cd "$workspace" --exec setsid --wait sh -c '
+            '\'umask 077; JOURNEY_CLIENT=fetch sh .github/scripts/journey.sh installed "$0"\' $version'])
+        self.assertEqual(commands[commands.index(journeys[0]) + 1],
+                         "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
+        self.assertEqual(job.count("setsid"), 1, "detach only the installed journey, not installer or readiness")
+
+    @unittest.skipUnless(shutil.which("setsid"), "BOUNDARY: util-linux setsid (--wait) is required for the PTY test")
+    def test_windows_installed_journey_detachment_is_headless_and_preserves_exit_status(self) -> None:
+        """A controlling PTY survives stdio redirection, but not setsid.
+        Make the setsid process a group leader so it must fork: --wait must
+        still propagate the shell's nonzero result, not just the fork's 0.
+        """
+
+        probe = """import json, os, sys
+try:
+    fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
+except OSError:
+    tty = False
+else:
+    os.close(fd)
+    tty = True
+print(json.dumps({'tty': tty, 'stdio': [os.isatty(fd) for fd in range(3)], 'version': sys.argv[1]}))
+sys.exit(int(sys.argv[2]))
+"""
+        harness = """import fcntl, json, os, signal, subprocess, sys, termios
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+master, slave = os.openpty()
+try:
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    rows = []
+    for detached in (False, True):
+        for code in (0, 23):
+            argv = ['sh', '-c', 'umask 077; "$1" -I -c "$2" "$0" "$3"',
+                    '1.2.3', sys.executable, sys.argv[2], str(code)]
+            if detached:
+                argv = [sys.argv[1], '--wait', *argv]
+            result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                    timeout=5, process_group=0)
+            rows.append({'detached': detached, 'code': code, 'status': result.returncode,
+                         'probe': json.loads(result.stdout), 'stderr': result.stderr})
+    print(json.dumps(rows))
+finally:
+    os.close(slave)
+    os.close(master)
+"""
+        with tempfile.TemporaryDirectory(prefix="claude-multi-journey-tty-") as root:
+            tmp = Path(root)
+            home = tmp / "home"
+            home.mkdir(mode=0o700)
+            env = {"HOME": str(home), "PATH": os.environ.get("PATH", os.defpath), "LC_ALL": "C"}
+            result = subprocess.run([sys.executable, "-I", "-c", harness, shutil.which("setsid"), probe],
+                                    cwd=tmp, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                    timeout=30, start_new_session=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = json.loads(result.stdout)
+        self.assertEqual([(row["detached"], row["code"]) for row in rows],
+                         [(False, 0), (False, 23), (True, 0), (True, 23)])
+        for row in rows:
+            with self.subTest(detached=row["detached"], code=row["code"]):
+                self.assertEqual(row["status"], row["code"], row)
+                self.assertEqual(row["probe"], {"tty": not row["detached"], "stdio": [False] * 3,
+                                                "version": "1.2.3"})
+                self.assertEqual(row["stderr"], "")
+
     def test_windows_server_cleanup_is_guaranteed_and_checks_the_linux_pid(self) -> None:
         job = self.release["journeys-windows"]
         self.assertIn("$server = $null", job, "the server needs an owner and guaranteed cleanup")

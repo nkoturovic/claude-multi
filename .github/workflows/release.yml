@@ -782,7 +782,8 @@ jobs:
               if ($null -ne $server) { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
             }
           }
-          wsl --distribution $distribution --cd "$workspace" --exec sh -c 'umask 077; JOURNEY_CLIENT=fetch sh .github/scripts/journey.sh installed "$0"' $version
+          # Detach explicitly: WSL can retain /dev/tty even with redirected stdin/stdout.
+          wsl --distribution $distribution --cd "$workspace" --exec setsid --wait sh -c 'umask 077; JOURNEY_CLIENT=fetch sh .github/scripts/journey.sh installed "$0"' $version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   draft:
