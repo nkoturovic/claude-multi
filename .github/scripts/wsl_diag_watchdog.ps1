@@ -3,6 +3,7 @@
 param([string]$MetadataDirectory, [string]$LinuxMetadata)
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Text.Json
 
 function Assert-DiagMetadataPath {
     param([string]$Path)
@@ -70,18 +71,101 @@ function Read-DiagJson {
     } finally { $stream.Dispose() }
 }
 
-function Test-DiagResumeStart {
-    param([string]$Directory)
-    $row = Read-DiagJson (Join-Path $Directory 'resume-start.json')
-    if ($null -eq $row) { return $false }
-    $names = ($row.Keys | Sort-Object) -join ','
-    if ($names -cne 'deadline_seconds,pgid,pid,schema,start_ticks' -or
-        $row.schema -ne 1 -or $row.deadline_seconds -ne 120) { throw 'Invalid metadata' }
-    foreach ($name in @('schema', 'deadline_seconds', 'pid', 'pgid', 'start_ticks')) {
-        if ($row[$name] -isnot [long] -and $row[$name] -isnot [int]) { throw 'Invalid metadata' }
-        if ($row[$name] -lt 0) { throw 'Invalid metadata' }
+function Get-DiagFixtureId {
+    param([System.Text.Json.JsonElement]$Element)
+    $value = 0L
+    if ($Element.ValueKind -ne [System.Text.Json.JsonValueKind]::Number -or
+        -not $Element.TryGetInt64([ref]$value) -or $value -lt 1 -or $value -gt 1000000) {
+        throw 'Invalid fixture metadata'
     }
-    return $true
+    return $value
+}
+
+function Test-DiagFixtureRecord {
+    param([string]$Line)
+    $document = [System.Text.Json.JsonDocument]::Parse($Line, [System.Text.Json.JsonDocumentOptions]::new())
+    try {
+        $root = $document.RootElement
+        if ($root.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { throw 'Invalid fixture metadata' }
+        # EnumerateObject retains duplicate keys; the exact key list rejects them.
+        $names = @($root.EnumerateObject() | ForEach-Object { $_.Name })
+        $keys = ($names | Sort-Object) -join ','
+        if ($keys -cne 'carried,event,method,model,path_category,reply,stream') {
+            throw 'Invalid fixture metadata'
+        }
+        foreach ($name in @('event', 'method', 'model', 'path_category')) {
+            if ($root.GetProperty($name).ValueKind -ne [System.Text.Json.JsonValueKind]::String) {
+                throw 'Invalid fixture metadata'
+            }
+        }
+        if ($root.GetProperty('event').GetString() -cne 'request-parsed' -or
+            $root.GetProperty('model').GetString() -cne 'fixture-model-1') { throw 'Invalid fixture metadata' }
+        $stream = $root.GetProperty('stream').ValueKind
+        if ($stream -notin @([System.Text.Json.JsonValueKind]::True, [System.Text.Json.JsonValueKind]::False)) {
+            throw 'Invalid fixture metadata'
+        }
+        $carried = $root.GetProperty('carried')
+        if ($carried.ValueKind -ne [System.Text.Json.JsonValueKind]::Array -or $carried.GetArrayLength() -gt 128) {
+            throw 'Invalid fixture metadata'
+        }
+        $previous = 0L
+        foreach ($item in $carried.EnumerateArray()) {
+            $number = Get-DiagFixtureId $item
+            if ($number -le $previous) { throw 'Invalid fixture metadata' }
+            $previous = $number
+        }
+        $method = $root.GetProperty('method').GetString()
+        $path = $root.GetProperty('path_category').GetString()
+        if ($method -ceq 'GET') {
+            if ($path -cne 'models' -or $stream -ne [System.Text.Json.JsonValueKind]::False -or
+                $root.GetProperty('reply').ValueKind -ne [System.Text.Json.JsonValueKind]::Null -or
+                $carried.GetArrayLength() -ne 0) { throw 'Invalid fixture metadata' }
+            return $false
+        }
+        if ($method -cne 'POST' -or $path -cne 'chat-completions') { throw 'Invalid fixture metadata' }
+        $reply = Get-DiagFixtureId ($root.GetProperty('reply'))
+        return $reply -eq 1
+    } finally { $document.Dispose() }
+}
+
+function Test-DiagFirstFixtureRequest {
+    param([string]$Directory)
+    $path = Join-Path $Directory 'fixture.jsonl' # Only this Windows-local metadata file.
+    $file = [IO.FileInfo]::new($path)
+    if (-not $file.Exists) { return $false }
+    $limit = 1048576
+    if ($file.Length -gt $limit -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Invalid fixture metadata'
+    }
+    $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try {
+        $buffer = [byte[]]::new($limit + 1)
+        $count = 0
+        while ($count -lt $buffer.Length) {
+            $read = $stream.Read($buffer, $count, $buffer.Length - $count)
+            if ($read -eq 0) { break }
+            $count += $read
+        }
+        if ($count -gt $limit) { throw 'Invalid fixture metadata' }
+    } finally { $stream.Dispose() }
+    $decoder = [Text.UTF8Encoding]::new($false, $true)
+    $start = 0
+    $records = 0
+    $found = $false
+    for ($i = 0; $i -lt $count; $i++) {
+        if ($buffer[$i] -ne 10) { continue }
+        if ($i - $start -gt 4096 -or $records -ge 256) { throw 'Invalid fixture metadata' }
+        $line = $decoder.GetString($buffer, $start, $i - $start)
+        if (Test-DiagFixtureRecord $line) { $found = $true }
+        $records++
+        $start = $i + 1
+    }
+    $partial = $count - $start
+    if ($partial -gt 4096 -or ($partial -gt 0 -and $records -ge 256)) { throw 'Invalid fixture metadata' }
+    # An append can be observed before its newline (even inside UTF-8). Wait
+    # for the complete record; never parse or arm from an incomplete tail.
+    if ($partial -gt 0) { return $false }
+    return $found
 }
 
 function Test-DiagNamespaceExit {
@@ -127,6 +211,7 @@ function Invoke-DiagWatchdog {
     $process = $null
     $armedAt = -1L
     $row = @{ schema = 1; status = 'launch-failed'; elapsed_ms = 0L; armed_at_ms = $null
+        arm_basis = 'first-fixture-request'
         launcher_exit_code = $null; namespace_exit_confirmed = $false; terminate_state = 'pending' }
     try {
         $process = Start-DiagProcess -Arguments @('--distribution', 'Ubuntu-24.04', '--user', 'root', '--exec',
@@ -136,10 +221,11 @@ function Invoke-DiagWatchdog {
             $elapsed = Get-DiagMilliseconds $clock
             $deadline = Get-DiagDeadline $elapsed $armedAt
             if ($deadline) { $row.status = $deadline; break }
-            # The first observation arms exactly once. File rewrites cannot reset it.
+            # First parsed fixture request, not exact resume start: this window
+            # includes the tail of turn one. Later observations cannot rearm it.
             if ($armedAt -lt 0) {
                 try {
-                    if (Test-DiagResumeStart $Directory) { $armedAt = $elapsed; $row.armed_at_ms = $armedAt }
+                    if (Test-DiagFirstFixtureRequest $Directory) { $armedAt = $elapsed; $row.armed_at_ms = $armedAt }
                 } catch { $row.status = 'invalid-metadata'; break }
             }
             if ($process.HasExited) {

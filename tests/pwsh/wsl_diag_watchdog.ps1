@@ -49,19 +49,60 @@ Assert-Equal (Get-DiagDeadline 309000 179000) 'resume-timeout'
 Assert-Equal (Get-DiagDeadline 360000 359999) 'absolute-timeout'
 Assert-Equal (Get-DiagDeadline 360000 -1) 'absolute-timeout'
 
-# Real bounded local-file reader and marker schema, but no WSL calls.
+# Real bounded local-file reader and first-request schema, but no WSL calls.
 $null = New-Item -ItemType Directory -Path $Scratch
-Assert-Equal (Test-DiagResumeStart $Scratch) $false
-[IO.File]::WriteAllText((Join-Path $Scratch 'resume-start.json'),
-    '{"schema":1,"pid":9,"pgid":9,"start_ticks":123,"deadline_seconds":120}')
-Assert-Equal (Test-DiagResumeStart $Scratch) $true
-[IO.File]::WriteAllText((Join-Path $Scratch 'resume-start.json'), '{"schema":1,"argv":"private"}')
+$fixture = Join-Path $Scratch 'fixture.jsonl'
+$get = '{"event":"request-parsed","method":"GET","path_category":"models","model":"fixture-model-1","stream":false,"reply":null,"carried":[]}'
+$post = '{"event":"request-parsed","method":"POST","path_category":"chat-completions","model":"fixture-model-1","stream":true,"reply":1,"carried":[]}'
+$second = $post.Replace('"reply":1', '"reply":2').Replace('"carried":[]', '"carried":[1]')
+Assert-Equal (Test-DiagFirstFixtureRequest $Scratch) $false
+[IO.File]::WriteAllText($fixture, "$get`n")
+Assert-Equal (Test-DiagFirstFixtureRequest $Scratch) $false
+[IO.File]::WriteAllText($fixture, "$second`n")
+Assert-Equal (Test-DiagFirstFixtureRequest $Scratch) $false
+[IO.File]::WriteAllText($fixture, $post.Substring(0, 20))
+Assert-Equal (Test-DiagFirstFixtureRequest $Scratch) $false # Partial append cannot arm.
+[IO.File]::WriteAllText($fixture, "$get`n$post`n")
+Assert-Equal (Test-DiagFirstFixtureRequest $Scratch) $true
+[IO.File]::WriteAllText($fixture, "$post`n" + $second.Substring(0, 20))
+Assert-Equal (Test-DiagFirstFixtureRequest $Scratch) $false # Unvalidated tail stays pending.
+[IO.File]::WriteAllText($fixture, "$post`n$second`n")
+Assert-Equal (Test-DiagFirstFixtureRequest $Scratch) $true
+# A split UTF-8 sequence in an incomplete tail must also stay pending.
+[IO.File]::WriteAllBytes($fixture, ([Text.Encoding]::UTF8.GetBytes("$post`n" + '{"event":"') + [byte[]]@(195)))
+Assert-Equal (Test-DiagFirstFixtureRequest $Scratch) $false
+function Assert-FixtureRejected {
+    param([string]$Data)
+    [IO.File]::WriteAllText($fixture, $Data)
+    $rejected = $false
+    try { $null = Test-DiagFirstFixtureRequest $Scratch } catch { $rejected = $true }
+    Assert-True $rejected
+}
+foreach ($invalid in @(
+    '{broken}',
+    $post.Replace('"method":"POST"', '"method":"POST","method":"POST"'),
+    $post.Replace('fixture-model-1', 'other-model'),
+    $post.Replace('chat-completions', 'other'),
+    $post.Replace('"method":"POST"', '"method":"PUT"'),
+    $post.Replace('request-parsed', 'delivered'),
+    $post.Replace('"stream":true', '"stream":"true"'),
+    $post.Replace('"reply":1', '"reply":1.0'),
+    $post.Replace('"reply":1', '"reply":true'),
+    $post.Replace('"reply":1', '"reply":-1'),
+    $post.Replace('"carried":[]', '"carried":[1,1]'),
+    $post.Replace('"carried":[]', '"carried":[2,1]'),
+    $post.Replace('"carried":[]', '"carried":[true]'),
+    ($post.TrimEnd('}') + ',"raw":"private"}')
+)) {
+    Assert-FixtureRejected "$invalid`n"
+    Assert-FixtureRejected "$post`n$invalid`n" # No early return past an invalid record.
+}
+Assert-FixtureRejected (($get + "`n") * 257)
+Assert-FixtureRejected ('x' * 4097)
+Assert-FixtureRejected ('x' * 1048577)
+[IO.File]::WriteAllText((Join-Path $Scratch 'namespace.json'), ('x' * 2049))
 $rejected = $false
-try { $null = Test-DiagResumeStart $Scratch } catch { $rejected = $true }
-Assert-True $rejected
-[IO.File]::WriteAllText((Join-Path $Scratch 'resume-start.json'), ('x' * 2049))
-$rejected = $false
-try { $null = Read-DiagJson (Join-Path $Scratch 'resume-start.json') } catch { $rejected = $true }
+try { $null = Read-DiagJson (Join-Path $Scratch 'namespace.json') } catch { $rejected = $true }
 Assert-True $rejected
 $rejected = $false
 try { Assert-DiagMetadataPath '\\wsl.localhost\Ubuntu-24.04\home\journey' } catch { $rejected = $true }
@@ -82,11 +123,12 @@ function Start-DiagProcess {
     if ($script:launchFails) { throw 'synthetic launch failure' }
     return $script:process
 }
-function Test-DiagResumeStart {
+function Test-DiagFirstFixtureRequest {
     param($Directory)
-    $script:markerReads++
-    if ($script:invalidMarker) { throw 'synthetic invalid marker' }
-    return $script:hasMarker
+    $script:fixtureReads++
+    if ($script:invalidFixture) { throw 'synthetic invalid fixture metadata' }
+    if ($script:partialFixture) { $script:partialFixture = $false; return $false }
+    return $script:hasFirstRequest
 }
 function Test-DiagNamespaceExit { param($Directory) return $script:namespaceExited }
 function Write-DiagResult {
@@ -104,9 +146,10 @@ function Reset-Scenario {
     param([long[]]$Times)
     $script:times = $Times
     $script:index = 0
-    $script:markerReads = 0
-    $script:hasMarker = $false
-    $script:invalidMarker = $false
+    $script:fixtureReads = 0
+    $script:hasFirstRequest = $false
+    $script:invalidFixture = $false
+    $script:partialFixture = $false
     $script:namespaceExited = $false
     $script:terminated = $false
     $script:launchFails = $false
@@ -124,11 +167,21 @@ Assert-Equal $script:argumentsSeen[0] '--distribution'
 Assert-Equal $script:argumentsSeen[-1] '/mnt/d/a/meta'
 
 Reset-Scenario @(179000, 308999, 309000)
-$script:hasMarker = $true
+$script:hasFirstRequest = $true
 Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
 Assert-Equal $script:writes[0].status 'resume-timeout'
 Assert-Equal $script:writes[0].armed_at_ms 179000
-Assert-Equal $script:markerReads 1 # Repeated/rewritten markers cannot rearm.
+Assert-Equal $script:fixtureReads 1 # Repeated/rewritten fixture records cannot rearm.
+Assert-Equal $script:writes[0].arm_basis 'first-fixture-request'
+
+Reset-Scenario @(1000, 2000, 131999, 132000)
+$script:hasFirstRequest = $true
+$script:partialFixture = $true
+Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
+Assert-Equal $script:writes[0].status 'resume-timeout'
+Assert-Equal $script:writes[0].armed_at_ms 2000 # Only the complete validated record arms.
+Assert-Equal $script:writes[0].arm_basis 'first-fixture-request'
+Assert-Equal $script:fixtureReads 2
 
 Reset-Scenario @(179999, 360000)
 Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
@@ -150,7 +203,7 @@ Assert-Equal $script:terminated $false
 Assert-Equal $script:writes.Count 1
 
 Reset-Scenario @(0)
-$script:invalidMarker = $true
+$script:invalidFixture = $true
 Assert-Equal (Invoke-DiagWatchdog $Scratch '/mnt/d/a/meta') 1
 Assert-Equal $script:writes[0].status 'invalid-metadata'
 

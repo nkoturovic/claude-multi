@@ -35,7 +35,8 @@ def artifact() -> dict:
 
 def watchdog() -> dict:
     return {"schema": 1, "status": "resume-timeout", "elapsed_ms": 130000, "armed_at_ms": 0,
-            "launcher_exit_code": None, "namespace_exit_confirmed": False, "terminate_state": "timeout"}
+            "arm_basis": "first-fixture-request", "launcher_exit_code": None,
+            "namespace_exit_confirmed": False, "terminate_state": "timeout"}
 
 
 def process() -> dict:
@@ -75,7 +76,8 @@ class SourcePatchTests(ScratchTests):
         self.assertNotIn("trap cleanup EXIT", journey)
         self.assertIn("trap ':' EXIT", journey)
         self.assertIn('show_tail() { return 0; }', journey)
-        self.assertNotIn('(cd "$work/project" && "$cm" -c -- -p "journey turn two")', journey)
+        self.assertIn(diag.RESUME_ANCHOR, journey)
+        self.assertNotIn('wsl_diag.py" resume', journey)
         self.assertIn('first=$(reply_number "$work/turn1.txt")', journey)
         self.assertIn('second=$(reply_number "$work/turn2.txt")', journey)
         self.assertIn('fx carried --log "$work/fixture.log" --reply "$second" --earlier "$first" ||', journey)
@@ -90,6 +92,20 @@ class SourcePatchTests(ScratchTests):
         self.assertEqual(parsed.returncode, 0, parsed.stderr)
         for name, raw in originals.items():
             self.assertEqual((SCRIPTS / name).read_bytes(), raw)
+
+    def test_original_foreground_resume_and_inter_turn_bytes_are_exact(self) -> None:
+        original = (SCRIPTS / "journey.sh").read_bytes()
+        diag.patch(SCRIPTS, self.root)
+        patched = (self.root / "journey.sh").read_bytes()
+        first = b'\tfirst=$(reply_number "$work/turn1.txt")'
+        second = b'\tsecond=$(reply_number "$work/turn2.txt")'
+        block = original[original.index(first):original.index(second) + len(second)]
+        self.assertEqual(patched.count(block), 1)
+        self.assertEqual(patched.count(diag.RESUME_ANCHOR.encode()), 1)
+        self.assertNotIn(b'wsl_diag.py" resume', patched)
+        self.assertFalse(any(old == diag.RESUME_ANCHOR for old, _ in diag.JOURNEY_PATCHES))
+        # This byte span includes first-turn extraction/completion, the original
+        # foreground argv/CWD/redirections/null stdin, and resume failure handling.
 
     def test_pristine_product_goldens_remain_unchanged(self) -> None:
         # tools/test.py supplies this subprocess a private HOME and tripwire.
@@ -386,6 +402,49 @@ class ExportTests(ScratchTests):
             diag.validate_record("validation.json", {**good, "optional_metadata_valid": True})
 
 
+class VariantATests(ScratchTests):
+    def test_watchdog_basis_is_fixed_and_resume_markers_can_be_absent(self) -> None:
+        diag.validate_record("watchdog.json", watchdog())
+        for basis in ("resume-start", "client-pid", None):
+            with self.subTest(basis=basis), self.assertRaises(ValueError):
+                diag.validate_record("watchdog.json", {**watchdog(), "arm_basis": basis})
+        diag.validate_directory(self.meta, self.output)
+        for name in ("resume-start.json", "resume-end.json"):
+            self.assertFalse((self.meta / name).exists())
+            self.assertFalse((self.output / name).exists())
+        self.assertEqual(json.loads((self.output / "watchdog.json").read_text())["arm_basis"],
+                         "first-fixture-request")
+        diag.check_export(self.output)
+
+    def test_observer_keeps_journey_launcher_without_wrapping_continuation(self) -> None:
+        scratch = self.root / "scratch"
+        scratch.mkdir()
+        child = mock.Mock(pid=42, returncode=0)
+        child.poll.return_value = 0
+        def launched(*args, **kwargs):
+            diag.atomic_json(self.meta / "outcome.json",
+                             {"schema": 1, "managed_turn_passed": True, "journey_exit_code": None})
+            return child
+        def observed(home, event, elapsed):
+            return {"event": event, "elapsed_ms": int(elapsed * 1000), "processes": [], "locks": [],
+                    "processes_truncated": False, "locks_available": True, "locks_truncated": False}
+        with mock.patch.object(diag.os, "geteuid", return_value=1000), \
+             mock.patch.object(diag.Path, "home", return_value=Path("/home/journey")), \
+             mock.patch.object(diag, "snapshot", side_effect=observed), \
+             mock.patch.object(diag.subprocess, "Popen", side_effect=launched) as popen, \
+             mock.patch.object(diag.os, "killpg"):
+            self.assertEqual(diag.run(scratch, self.meta), 0)
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0], ["sh", str(scratch / "journey.sh"), "installed", "1.1.0"])
+        self.assertEqual(popen.call_args.kwargs["cwd"], scratch)
+        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertTrue(popen.call_args.kwargs["start_new_session"]) # Whole-journey launcher unchanged.
+        self.assertFalse((self.meta / "resume-start.json").exists())
+        self.assertFalse((self.meta / "resume-end.json").exists())
+        self.assertEqual([json.loads(line)["event"] for line in (self.meta / "snapshots.jsonl").read_text().splitlines()],
+                         ["start", "end"])
+
+
 class ResumeTests(ScratchTests):
     def exercise(self, waits: list, returncode: int | None) -> tuple:
         work = self.root / "local-turns"
@@ -554,6 +613,30 @@ class WorkflowContainmentTests(unittest.TestCase):
         self.assertIn("no uncontained retry", text)
         self.assertIn('metadata=$2', text)  # Save before parsing the contract URL/hash/size.
         self.assertIn('"$install" "$metadata"', text)
+
+    def test_watchdog_first_fixture_reader_is_bounded_strict_and_partial_safe(self) -> None:
+        text = (SCRIPTS / "wsl_diag_watchdog.ps1").read_text()
+        reader = text[text.index("function Test-DiagFirstFixtureRequest"):
+                      text.index("function Test-DiagNamespaceExit")]
+        self.assertEqual(re.findall(r"Join-Path \$Directory '([^']+)'", reader), ["fixture.jsonl"])
+        self.assertIn(f'$limit = {diag.LIMITS["fixture.jsonl"]}', reader)
+        self.assertIn(f'$records -ge {diag.RECORD_LIMITS["fixture.jsonl"]}', reader)
+        self.assertIn(f'$partial -gt {diag.LINE_LIMITS["fixture.jsonl"]}', reader)
+        self.assertIn('if ($partial -gt 0) { return $false }', reader)
+        self.assertIn('if (Test-DiagFixtureRecord $line)', reader)
+        self.assertNotIn('return $true', reader) # All complete records validate before arming.
+        self.assertNotIn('resume-start.json', text)
+        self.assertNotIn('Test-DiagResumeStart', text)
+        for required in ("EnumerateObject()", "JsonDocumentOptions", "TryGetInt64", "1000000",
+                         "carried,event,method,model,path_category,reply,stream", "request-parsed",
+                         "fixture-model-1", "$path -cne 'models'", "$path -cne 'chat-completions'",
+                         "return $reply -eq 1", "arm_basis = 'first-fixture-request'"):
+            self.assertIn(required, text)
+        native = (REPO_ROOT / "tests/pwsh/wsl_diag_watchdog.ps1").read_text()
+        for case in ("Partial append cannot arm", "Unvalidated tail stays pending", "UTF-8",
+                     "other-model", "'delivered'", "'\"reply\":1.0'", "* 257", "* 1048577",
+                     "fixtureReads 1", "fixtureReads 2", "armed_at_ms 2000", "arm_basis 'first-fixture-request'"):
+            self.assertIn(case, native)
 
     def test_watchdog_has_monotonic_deadlines_one_arm_and_no_synchronous_wsl(self) -> None:
         text = (SCRIPTS / "wsl_diag_watchdog.ps1").read_text()

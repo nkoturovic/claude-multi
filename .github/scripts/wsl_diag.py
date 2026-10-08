@@ -62,8 +62,6 @@ CARRIED_ANCHOR = '''\tfx carried --log "$work/fixture.log" --reply "$second" --e
 JOURNEY_PATCHES = (
     (TAIL_ANCHOR, 'show_tail() { return 0; }'),
     ('trap cleanup EXIT\n', "trap ':' EXIT # PID namespace teardown owns all process cleanup.\n"),
-    (RESUME_ANCHOR, '''\t"$install_dir/runtime/python/bin/python3" -I "$here/wsl_diag.py" resume \\
-\t\t"$cm" "$work/project" "$work" ||'''),
     (CARRIED_ANCHOR, CARRIED_ANCHOR.replace('\tsay ',
         '\t"$install_dir/runtime/python/bin/python3" -I "$here/wsl_diag.py" outcome\n\tsay ')),
     ('\t\t\tmanaged_turn\n', '\t\t\tmanaged_turn\n\t\t\texit 0 # Namespace exit, not later shutdown/uninstall controls.\n'),
@@ -161,7 +159,7 @@ def validate_record(name: str, row: dict) -> None:
         "resume-start.json": "schema pid pgid start_ticks deadline_seconds",
         "resume-end.json": "schema timed_out exit_code kill_sent group_gone wait_bounded",
         "outcome.json": "schema managed_turn_passed journey_exit_code",
-        "watchdog.json": "schema status elapsed_ms armed_at_ms launcher_exit_code namespace_exit_confirmed terminate_state",
+        "watchdog.json": "schema status elapsed_ms armed_at_ms arm_basis launcher_exit_code namespace_exit_confirmed terminate_state",
         "validation.json": "schema optional_metadata_valid omitted",
     }
     keys(row, fields[name])
@@ -197,6 +195,7 @@ def validate_record(name: str, row: dict) -> None:
         boolean(row["managed_turn_passed"])
         code(row["journey_exit_code"])
     elif name == "watchdog.json":
+        require(row["arm_basis"] == "first-fixture-request")
         require(row["status"] in ("completed", "bootstrap-timeout", "resume-timeout", "absolute-timeout",
                                    "launch-failed", "invalid-metadata", "watchdog-error"))
         integer(row["elapsed_ms"], 0, 480000)
