@@ -25,6 +25,12 @@ ARTIFACT_ID = 11488260478
 ARTIFACT_DIGEST = "sha256:c3d5f116bccab719c962df4502dca9efcbcca5ef0884ced6af7dcd8514fff6d3"
 CLIENT_SHA = "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3"
 CLIENT_SIZE = 251456696
+ENV_MODE = "inherited-from-existing-launcher"
+ENV_REFUSAL = "WSL diagnostic refused unsafe inherited environment"
+CREDENTIAL_NAME = re.compile(
+    r"(?:^|_)(?:APIKEY|ACCESSKEY|ACCESSTOKEN|AUTH(?:ORIZATION)?|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|COOKIE|KEY|JWT|BEARER|PAT)(?:_|$)", re.I)
+OPERATOR_ENV_NAMES = frozenset(("CLAUDECODE", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL",
+                               "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"))
 LIMITS = {
     "artifact.json": 2048, "dist.json": 2048, "client.json": 2048,
     "containment.json": 2048, "namespace.json": 2048,
@@ -88,6 +94,34 @@ import wsl_diag
 def require(condition: bool) -> None:
     if not condition:
         raise ValueError("diagnostic metadata or input rejected")
+
+
+class InheritedEnvironmentRefused(ValueError):
+    """A fixed, value-free refusal; no inherited variable is removed."""
+
+
+def admit_inherited_environment(environ) -> None:
+    # Inspect names only for credentials or operator-state selection. Runtime
+    # flags and temporary-directory choices otherwise remain inherited.
+    for name in environ:
+        upper = name.upper()
+        if CREDENTIAL_NAME.search(name) or upper in OPERATOR_ENV_NAMES or upper.startswith("CLAUDE_MULTI_"):
+            raise InheritedEnvironmentRefused(ENV_REFUSAL)
+    if "WSL_INTEROP" not in environ:
+        return
+    # This is the sole value inspected: prove its socket target is absent under
+    # a masked root. Never connect, expose the socket, or report its path.
+    try:
+        target = Path(environ["WSL_INTEROP"])
+        if target.anchor != "/" or len(target.parts) < 3 or target.parts[1] not in ("run", "tmp", "mnt") \
+                or ".." in target.parts:
+            raise InheritedEnvironmentRefused(ENV_REFUSAL)
+        target.lstat()
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError, TypeError, KeyError):
+        raise InheritedEnvironmentRefused(ENV_REFUSAL) from None
+    raise InheritedEnvironmentRefused(ENV_REFUSAL)
 
 
 def keys(record: object, names: str) -> None:
@@ -154,7 +188,7 @@ def validate_record(name: str, row: dict) -> None:
         "artifact.json": "schema repository run_id artifact_id name size_bytes digest head_sha",
         "dist.json": "schema sha256sums_verified sums_sha256 launcher_version client_version client_sha256",
         "client.json": "schema installed_version client_version sha256 size_bytes verified",
-        "containment.json": "schema network_private pid_private ipc_private proc_private loopback_up ordinary_user linux_filesystem",
+        "containment.json": "schema env_mode network_private pid_private ipc_private proc_private loopback_up ordinary_user linux_filesystem",
         "namespace.json": "schema phase exited exit_code",
         "resume-start.json": "schema pid pgid start_ticks deadline_seconds",
         "resume-end.json": "schema timed_out exit_code kill_sent group_gone wait_bounded",
@@ -176,7 +210,8 @@ def validate_record(name: str, row: dict) -> None:
         require(row["installed_version"] == "1.1.0" and row["client_version"] == "2.1.292"
                 and row["sha256"] == CLIENT_SHA and row["size_bytes"] == CLIENT_SIZE and row["verified"] is True)
     elif name == "containment.json":
-        require(all(row[field] is True for field in row if field != "schema"))
+        require(row["env_mode"] == ENV_MODE)
+        require(all(row[field] is True for field in row if field not in ("schema", "env_mode")))
     elif name == "namespace.json":
         boolean(row["exited"])
         code(row["exit_code"])
@@ -562,9 +597,10 @@ def resume(cm: str, cwd: Path, work: Path, metadata: Path) -> int:
 
 def run(scratch: Path, metadata: Path) -> int:
     require(os.geteuid() != 0 and Path.home() == Path("/home/journey"))
-    atomic_json(metadata / "containment.json", {"schema": 1, **{field: True for field in
+    atomic_json(metadata / "containment.json", {"schema": 1, "env_mode": ENV_MODE, **{field: True for field in
         "network_private pid_private ipc_private proc_private loopback_up ordinary_user linux_filesystem".split()}})
     atomic_json(metadata / "outcome.json", {"schema": 1, "managed_turn_passed": False, "journey_exit_code": None})
+    admit_inherited_environment(os.environ)
     start = time.monotonic()
     append_json(metadata / "snapshots.jsonl", snapshot(Path.home(), "start", 0), LIMITS["snapshots.jsonl"])
     armed = False
@@ -628,6 +664,8 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except InheritedEnvironmentRefused:
+        sys.exit(ENV_REFUSAL)
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
         # No exception repr, raw subprocess output, record or path in public logs.
         sys.exit("WSL diagnostic failed (input, containment or metadata); no raw output exported")

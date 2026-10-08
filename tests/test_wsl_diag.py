@@ -421,7 +421,11 @@ class VariantATests(ScratchTests):
         scratch.mkdir()
         child = mock.Mock(pid=42, returncode=0)
         child.poll.return_value = 0
+        inherited = {"HOME": "/home/journey", "WSL_DISTRO_NAME": "Ubuntu-24.04", "WSLENV": "FIXTURE_FLAG/u",
+                     "FIXTURE_FLAG": "kept", "TMPDIR": "/tmp/inherited", "CLAUDE_CODE_TMPDIR": "/tmp/inherited-code"}
         def launched(*args, **kwargs):
+            for name in inherited:
+                self.assertEqual(os.environ[name], inherited[name])
             diag.atomic_json(self.meta / "outcome.json",
                              {"schema": 1, "managed_turn_passed": True, "journey_exit_code": None})
             return child
@@ -432,17 +436,93 @@ class VariantATests(ScratchTests):
              mock.patch.object(diag.Path, "home", return_value=Path("/home/journey")), \
              mock.patch.object(diag, "snapshot", side_effect=observed), \
              mock.patch.object(diag.subprocess, "Popen", side_effect=launched) as popen, \
-             mock.patch.object(diag.os, "killpg"):
+             mock.patch.object(diag.os, "killpg"), mock.patch.dict(os.environ, inherited, clear=True):
             self.assertEqual(diag.run(scratch, self.meta), 0)
         popen.assert_called_once()
         self.assertEqual(popen.call_args.args[0], ["sh", str(scratch / "journey.sh"), "installed", "1.1.0"])
         self.assertEqual(popen.call_args.kwargs["cwd"], scratch)
         self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertNotIn("env", popen.call_args.kwargs)
         self.assertTrue(popen.call_args.kwargs["start_new_session"]) # Whole-journey launcher unchanged.
+        self.assertEqual(json.loads((self.meta / "containment.json").read_text())["env_mode"],
+                         "inherited-from-existing-launcher")
         self.assertFalse((self.meta / "resume-start.json").exists())
         self.assertFalse((self.meta / "resume-end.json").exists())
         self.assertEqual([json.loads(line)["event"] for line in (self.meta / "snapshots.jsonl").read_text().splitlines()],
                          ["start", "end"])
+
+
+class InheritedEnvironmentTests(ScratchTests):
+    def test_runtime_flags_are_admitted_without_reading_values_or_mutation(self) -> None:
+        class NamesOnly(dict):
+            def __getitem__(self, name):
+                raise AssertionError("unexpected environment value read")
+        environment = NamesOnly.fromkeys(("PATH", "TMPDIR", "CLAUDE_CODE_TMPDIR", "WSL_DISTRO_NAME",
+                                          "WSLENV", "WSL2_GUI_APPS_ENABLED", "XDG_RUNTIME_DIR"))
+        before = set(environment)
+        with mock.patch("builtins.open", side_effect=AssertionError("config read")):
+            diag.admit_inherited_environment(environment)
+        self.assertEqual(set(environment), before)
+
+    def test_credential_and_operator_selection_names_refuse_without_value_reads(self) -> None:
+        class NamesOnly(dict):
+            def __getitem__(self, name):
+                raise AssertionError("credential value read")
+        for name in ("ANTHROPIC_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "SYSTEM_ACCESSTOKEN",
+                     "HTTP_AUTHORIZATION", "ACTIONS_RUNTIME_TOKEN",
+                     "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "AWS_SECRET_ACCESS_KEY", "SSH_AUTH_SOCK",
+                     "management_password", "PRIVATE_KEY", "some_apikey", "CLAUDECODE",
+                     "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+                     "XDG_STATE_HOME", "CLAUDE_MULTI_ASSETS", "claude_multi_managed_id"):
+            environment = NamesOnly({name: "NEVER-EXPORT"})
+            with self.subTest(name=name), self.assertRaises(diag.InheritedEnvironmentRefused) as caught:
+                diag.admit_inherited_environment(environment)
+            self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
+            self.assertEqual(set(environment), {name}) # Even empty/unsafe variables are not unset.
+        with self.assertRaises(diag.InheritedEnvironmentRefused):
+            diag.admit_inherited_environment({"GH_TOKEN": ""})
+
+    def test_interop_pointer_requires_absent_target_under_a_masked_root(self) -> None:
+        for path in ("/run/WSL/fixture_interop", "/tmp/fixture_interop", "/mnt/c/fixture_interop"):
+            with self.subTest(path=path), mock.patch.object(Path, "lstat", side_effect=FileNotFoundError) as probe:
+                diag.admit_inherited_environment({"WSL_INTEROP": path})
+                probe.assert_called_once()
+        for path in ("", "relative", "/home/journey/socket", "/run/../home/journey/socket"):
+            with self.subTest(path=path), mock.patch.object(Path, "lstat") as probe:
+                with self.assertRaises(diag.InheritedEnvironmentRefused) as caught:
+                    diag.admit_inherited_environment({"WSL_INTEROP": path})
+                self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
+                probe.assert_not_called()
+        for side_effect in (None, PermissionError("NEVER-EXPORT")):
+            with self.subTest(side_effect=side_effect), mock.patch.object(Path, "lstat", side_effect=side_effect):
+                with self.assertRaises(diag.InheritedEnvironmentRefused) as caught:
+                    diag.admit_inherited_environment({"WSL_INTEROP": "/run/WSL/fixture_interop"})
+                self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
+
+    def test_unsafe_inheritance_stops_before_observer_and_any_journey_client(self) -> None:
+        for name, value in (("GH_TOKEN", "NEVER-EXPORT"), ("XDG_STATE_HOME", "/NEVER-EXPORT")):
+            with self.subTest(name=name), \
+                 mock.patch.object(diag.os, "geteuid", return_value=1000), \
+                 mock.patch.object(diag.Path, "home", return_value=Path("/home/journey")), \
+                 mock.patch.dict(os.environ, {name: value}, clear=True), \
+                 mock.patch.object(diag, "snapshot") as observer, \
+                 mock.patch.object(diag.subprocess, "Popen") as client:
+                with self.assertRaises(diag.InheritedEnvironmentRefused) as caught:
+                    diag.run(self.root, self.meta)
+                self.assertEqual(str(caught.exception), diag.ENV_REFUSAL)
+                client.assert_not_called()
+                observer.assert_not_called()
+            self.assertFalse(json.loads((self.meta / "outcome.json").read_text())["managed_turn_passed"])
+            self.assertNotIn("NEVER-EXPORT", "".join(p.read_text() for p in self.meta.iterdir()))
+
+    def test_env_mode_is_fixed_metadata_not_an_environment_dump(self) -> None:
+        row = {"schema": 1, "env_mode": "inherited-from-existing-launcher", **{name: True for name in
+            "network_private pid_private ipc_private proc_private loopback_up ordinary_user linux_filesystem".split()}}
+        diag.validate_record("containment.json", row)
+        self.assertLess(len(diag.encoded(row)), diag.LIMITS["containment.json"])
+        for changed in ({**row, "env_mode": "ordinary-wsl-user"}, {**row, "environment": {"flag": "value"}}):
+            with self.assertRaises(ValueError):
+                diag.validate_record("containment.json", changed)
 
 
 class ResumeTests(ScratchTests):
@@ -603,8 +683,13 @@ class WorkflowContainmentTests(unittest.TestCase):
         text = (SCRIPTS / "wsl_diag.sh").read_text()
         self.assertIn("unshare --net --pid --ipc --mount --fork --kill-child=KILL --mount-proc", text)
         self.assertIn("ip link set dev lo up", text)
-        self.assertIn("exec runuser -u journey -- env -i", text)
-        self.assertIn("TMPDIR=/tmp CLAUDE_CODE_TMPDIR=/tmp", text)
+        runtime = text.split("inside)\n", 1)[1]
+        self.assertIn('exec runuser -u journey -- /usr/bin/env HOME="$home" USER=journey LOGNAME=journey', runtime)
+        self.assertIn('CM_DIAG_METADATA=/cm-diag-metadata JOURNEY_CLIENT="$scratch/claude"', runtime)
+        self.assertIn('/usr/bin/python3 -I "$scratch/wsl_diag.py" run "$scratch"', runtime)
+        for removed in ("env -i", "PATH=", "TMPDIR=", "CLAUDE_CODE_TMPDIR="):
+            self.assertNotIn(removed, runtime)
+        self.assertIn('runuser -u journey -- env -i HOME="$home" PATH=/usr/bin:/bin', text.split("run)\n", 1)[0])
         self.assertIn("mount --bind \"$metadata\" /cm-diag-metadata", text)
         self.assertIn("tmpfs /mnt", text)
         self.assertIn("tmpfs /run", text)

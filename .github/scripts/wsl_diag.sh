@@ -75,10 +75,9 @@ inside)
     for path in "$home" "$scratch" "$home/.local/share/claude-multi/install/current"; do
         case $(stat -f -c %T "$path") in ext2/ext3|ext4) ;; *) exit 1 ;; esac
     done
-    exec runuser -u journey -- env -i HOME="$home" USER=journey LOGNAME=journey \
-        PATH="$home/.local/bin:/usr/bin:/bin" TMPDIR=/tmp CLAUDE_CODE_TMPDIR=/tmp \
+    exec runuser -u journey -- /usr/bin/env HOME="$home" USER=journey LOGNAME=journey \
         CM_DIAG_METADATA=/cm-diag-metadata JOURNEY_CLIENT="$scratch/claude" \
-        python3 -I "$scratch/wsl_diag.py" run "$scratch"
+        /usr/bin/python3 -I "$scratch/wsl_diag.py" run "$scratch"
     ;;
 *) printf '%s\n' 'usage: wsl_diag.sh stage|run|inside' >&2; exit 2 ;;
 esac
