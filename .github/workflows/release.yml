@@ -249,7 +249,7 @@ jobs:
         if: always()
         timeout-minutes: 3
         run: |
-          python harness/.github/scripts/wsl_diag.py validate "$env:CM_DIAG_METADATA" "$env:CM_DIAG_UPLOAD"
+          python harness/.github/scripts/wsl_diag.py validate "$env:CM_DIAG_METADATA" "$env:CM_DIAG_UPLOAD" dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Invalid optional metadata still fails the diagnostic
         if: always() && steps.validate.outcome == 'success'

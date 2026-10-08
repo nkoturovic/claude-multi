@@ -12,6 +12,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from _layout import REPO_ROOT
+from tests.test_wsl_diag import artifact, diag, watchdog
 
 PLATFORMS = ("linux",)
 SCRIPTS = REPO_ROOT / ".github/scripts"
@@ -56,9 +58,10 @@ class LocationTests(unittest.TestCase):
         self.source = next(iter(reporter.SOURCES.values()))
         self.registry = {"verified.py": {"source": self.source, "functions": {"main", "<module>"}, "lines": 100}}
 
-    def fake_release(self):
+    def fake_release(self, overrides=None):
         original = bundle.launcher_text("claude-multi", "3.14.8")
         files = {relative: b"def main():\n    return None\n" for relative in reporter.SOURCES}
+        files.update(overrides or {})
         files["bin/claude-multi"] = original
         for relative, raw in files.items():
             path = self.install / relative
@@ -194,6 +197,106 @@ class LocationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reporter.export_reports(self.install, self.scratch, destination)
         self.assertFalse(destination.exists())
+
+    def upload_inputs(self, *rows):
+        diag.atomic_json(self.meta / "artifact.json", artifact())
+        diag.atomic_json(self.meta / "watchdog.json", watchdog())
+        (self.meta / "locations.jsonl").write_bytes(b"".join(reporter.encoded(row) for row in rows))
+
+    def assert_locations_omitted(self, destination):
+        self.assertEqual(json.loads((destination / "artifact.json").read_text()), artifact())
+        self.assertEqual(json.loads((destination / "watchdog.json").read_text()), watchdog())
+        self.assertFalse((destination / "locations.jsonl").exists())
+        self.assertEqual(json.loads((destination / "validation.json").read_text()), {
+            "schema": 1, "optional_metadata_valid": False,
+            "omitted": [{"file": "locations.jsonl", "reason": "invalid-metadata"}]})
+        with self.assertRaises(ValueError):
+            diag.check_export(destination)
+
+    def test_final_export_rejects_private_function_and_ignores_writable_allowlist(self):
+        self.fake_release()
+        relative = next(iter(reporter.SOURCES))
+        good = reporter.capture(1, {relative: self.registry["verified.py"]}, {1: Frame(relative)}, 1)
+        bad = json.loads(reporter.encoded(good))
+        bad["capture"] = 2
+        sentinel = "PRIVATE_SENTINEL_NotAPublicFunction"
+        bad["threads"][0]["frames"][0]["function"] = sentinel
+        reporter.validate_report(bad) # Structurally valid; the final trust check must still reject it.
+        self.upload_inputs(good, bad)
+        (self.meta / reporter.ALLOWLIST).write_text(json.dumps({self.source: {"functions": [sentinel]}}))
+        destination = self.root / "validated"
+        with mock.patch.object(diag.locations, "read_regular", wraps=diag.locations.read_regular) as read:
+            diag.validate_directory(self.meta, destination, self.dist)
+        self.assert_locations_omitted(destination)
+        self.assertTrue(read.called)
+        self.assertTrue(all(not call.args[0].resolve().is_relative_to(self.meta) for call in read.call_args_list))
+        self.assertNotIn(sentinel, "".join(path.read_text() for path in destination.iterdir()))
+        # Exercise the actual final CLI, including its independent original-dist argument.
+        output = self.root / "cli-validated"
+        exported = subprocess.run([sys.executable, str(SCRIPTS / "wsl_diag.py"), "validate",
+                                   str(self.meta), str(output), str(self.dist)],
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        self.assertEqual(exported.returncode, 0, exported.stderr)
+        self.assert_locations_omitted(output)
+        checked = subprocess.run([sys.executable, str(SCRIPTS / "wsl_diag.py"), "check-export", str(output)],
+                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        self.assertEqual(checked.returncode, 1)
+        self.assertNotIn(sentinel, exported.stdout + exported.stderr + checked.stdout + checked.stderr
+                         + "".join(path.read_text() for path in output.iterdir()))
+
+    def test_final_export_accepts_exact_linux_bundle_functions_and_fixed_generalizations(self):
+        runtime = f"{reporter.RUNTIME}/threading.py"
+        self.fake_release({runtime: b"def linux_bundle_only():\n    return None\n"})
+        reporter.prepare(self.install, self.dist, self.scratch, self.meta)
+        registry = reporter.load_registry(self.install, self.scratch / reporter.ALLOWLIST)
+        relative = next(iter(reporter.SOURCES))
+        frame = Frame(relative, parent=Frame(runtime, "linux_bundle_only", parent=
+            Frame("/private/NEVER-EXPORT.py", "PRIVATE_SENTINEL", parent=
+                  Frame(relative, "PRIVATE_SENTINEL", parent=Frame(str(SCRIPTS / "resume_locations.py"), "capture")))))
+        row = reporter.capture(1, registry, {1: frame}, 1)
+        self.upload_inputs(row)
+        destination = self.root / "validated"
+        diag.validate_directory(self.meta, destination, self.dist)
+        self.assertEqual(json.loads((destination / "locations.jsonl").read_text()), row)
+        self.assertEqual([item["function"] for item in row["threads"][0]["frames"]],
+                         ["main", "linux_bundle_only", "other", "other", "capture"])
+        self.assertNotIn("PRIVATE_SENTINEL", (destination / "locations.jsonl").read_text())
+        diag.check_export(destination)
+
+    def test_final_export_rejects_function_allowed_only_under_another_source(self):
+        runtime = f"{reporter.RUNTIME}/threading.py"
+        self.fake_release({runtime: b"def linux_bundle_only():\n    return None\n"})
+        row = reporter.capture(1, self.registry, {1: Frame("verified.py")}, 1)
+        row["threads"][0]["frames"][0]["function"] = "linux_bundle_only"
+        self.upload_inputs(row)
+        destination = self.root / "validated"
+        diag.validate_directory(self.meta, destination, self.dist)
+        self.assert_locations_omitted(destination)
+
+    def test_missing_corrupt_or_metadata_local_trust_preserves_mandatory_evidence(self):
+        self.fake_release()
+        row = reporter.capture(1, self.registry, {1: Frame("verified.py")}, 1)
+        self.upload_inputs(row)
+        for index, trust in enumerate((None, self.root / "missing", self.meta)):
+            with self.subTest(trust=index):
+                destination = self.root / f"validated-{index}"
+                diag.validate_directory(self.meta, destination, trust)
+                self.assert_locations_omitted(destination)
+        archive = next(self.dist.glob("*.tar.gz"))
+        archive.write_bytes(archive.read_bytes() + b"changed")
+        destination = self.root / "validated-corrupt"
+        diag.validate_directory(self.meta, destination, self.dist)
+        self.assert_locations_omitted(destination)
+
+    def test_upload_trust_reader_uses_bundle_sources_without_linux_only_open_flags(self):
+        self.fake_release()
+        reporter.prepare(self.install, self.dist, self.scratch, self.meta)
+        registry = reporter.load_registry(self.install, self.scratch / reporter.ALLOWLIST)
+        with mock.patch.object(reporter, "os", SimpleNamespace(O_RDONLY=os.O_RDONLY, open=os.open,
+                                                              fdopen=os.fdopen, fstat=os.fstat)):
+            sources = reporter.trusted_sources(self.dist)
+        for relative, source in reporter.SOURCES.items():
+            self.assertEqual(sources[source], registry[relative])
 
     def test_missing_or_empty_capture_has_no_inferred_cause(self):
         destination = self.meta / "locations.jsonl"

@@ -139,9 +139,10 @@ def digest(value: object) -> None:
     require(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None)
 
 
-def validate_record(name: str, row: dict) -> None:
+def validate_record(name: str, row: dict, location_sources: dict | None = None) -> None:
     if name == "locations.jsonl":
-        locations.validate_report(row)
+        require(location_sources is not None)
+        locations.validate_report(row, location_sources)
         return
     if name == "fixture.jsonl":
         keys(row, "event method path_category model stream reply carried")
@@ -314,20 +315,24 @@ def safe_read(path: Path, limit: int) -> bytes:
     return raw
 
 
-def validated_bytes(path: Path, name: str) -> bytes:
+def validated_bytes(path: Path, name: str, dist: Path | None = None) -> bytes:
     raw = safe_read(path, LIMITS[name])
+    location_sources = None
+    if name == "locations.jsonl":
+        require(dist is not None and not dist.resolve().is_relative_to(path.parent.resolve()))
+        location_sources = locations.trusted_sources(dist)
     records = raw.splitlines() if name.endswith(".jsonl") else [raw]
     require(len(records) <= RECORD_LIMITS.get(name, 1))
     clean = []
     for record in records:
         require(len(record) <= LINE_LIMITS.get(name, 4096))
         row = parse(record)
-        validate_record(name, row)
+        validate_record(name, row, location_sources)
         clean.append(encoded(row))
     return b"".join(clean)
 
 
-def validate_directory(source: Path, destination: Path) -> None:
+def validate_directory(source: Path, destination: Path, dist: Path | None = None) -> None:
     info = source.lstat()
     require(stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400)
     require(not source.is_symlink() and source.resolve() != destination.resolve())
@@ -337,7 +342,7 @@ def validate_directory(source: Path, destination: Path) -> None:
     # Never enumerate, open or copy unknown files, nor recurse into a HOME.
     for name in sorted(OPTIONAL):
         try:
-            sanitized[name] = validated_bytes(source / name, name)
+            sanitized[name] = validated_bytes(source / name, name, dist)
         except FileNotFoundError:
             continue  # A failed bootstrap may leave only partial metadata.
         except (OSError, ValueError, KeyError, TypeError, RecursionError):

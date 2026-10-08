@@ -803,6 +803,7 @@ class WorkflowHostedTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         self.assertNotIn('resume-locations.raw.jsonl', workflow)
         self.assertIn('${{ env.CM_DIAG_UPLOAD }}/locations.jsonl', workflow)
+        self.assertIn('wsl_diag.py validate "$env:CM_DIAG_METADATA" "$env:CM_DIAG_UPLOAD" dist', workflow)
 
     def test_watchdog_has_monotonic_deadlines_one_arm_and_no_synchronous_wsl(self) -> None:
         text = (SCRIPTS / "wsl_diag_watchdog.ps1").read_text()

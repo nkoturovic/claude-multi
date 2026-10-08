@@ -62,10 +62,12 @@ def encoded(row: dict) -> bytes:
 
 def read_regular(path: Path, limit: int, *, private: bool = False) -> bytes:
     before = path.lstat()
-    require(stat.S_ISREG(before.st_mode) and before.st_size <= limit)
+    require(stat.S_ISREG(before.st_mode) and before.st_size <= limit
+            and not getattr(before, "st_file_attributes", 0) & 0x400)
     if private:
         require(stat.S_IMODE(before.st_mode) == 0o600 and before.st_uid == os.geteuid() and before.st_nlink == 1)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+                 | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(fd, "rb") as handle:
         after = os.fstat(handle.fileno())
         require((before.st_dev, before.st_ino) == (after.st_dev, after.st_ino) and stat.S_ISREG(after.st_mode))
@@ -144,7 +146,7 @@ def capture(capture_id: int, registry: dict, frames: dict, main_ident: int | Non
     return row
 
 
-def validate_report(row: dict) -> None:
+def validate_report(row: dict, sources: dict | None = None) -> None:
     require(type(row) is dict and set(row) == {"schema", "mode", "capture", "threads", "threads_capped", "bytes_capped"})
     require(type(row["schema"]) is int and row["schema"] == 1 and row["mode"] == MODE)
     require(type(row["capture"]) is int and row["capture"] in (1, 2))
@@ -165,6 +167,9 @@ def validate_report(row: dict) -> None:
                 require(name == "other" and location["line"] == 0)
             if name == "other":
                 require(location["line"] == 0)
+            elif sources is not None:
+                info = sources.get(location["source"])
+                require(info is not None and name in info["functions"] and location["line"] <= info["lines"])
     require(sum(thread["main"] for thread in row["threads"]) <= 1 and len(encoded(row)) <= MAX_CAPTURE_BYTES)
 
 
@@ -226,20 +231,21 @@ def instrument_wrapper(original: bytes, install: Path, scratch: Path, metadata: 
     return text.replace(ROOT_ANCHOR, "root=" + shlex.quote(str(install)), 1).replace(BOOTSTRAP, injected, 1).encode()
 
 
-def prepare(install: Path, dist: Path, scratch: Path, metadata: Path) -> None:
+def verified_bundle(dist: Path) -> dict:
     archive_name = "claude-multi-1.1.0-linux-x86_64.tar.gz"
     release = parse(read_regular(dist / "MANIFEST.json", 1024 * 1024))
     require(release["version"] == "1.1.0")
     asset = release["assets"][archive_name]
     archive = dist / archive_name
-    require(archive.is_file() and not archive.is_symlink() and archive.stat().st_size == asset["size"])
+    info = archive.lstat()
+    require(stat.S_ISREG(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400
+            and info.st_size == asset["size"])
     digest = hashlib.sha256()
     with open(archive, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     require(digest.hexdigest() == asset["sha256"])
     files = {}
-    wrapper = None
     top = archive_name.removesuffix(".tar.gz") + "/"
     with tarfile.open(archive, "r:gz") as members:
         for member in members:
@@ -248,17 +254,35 @@ def prepare(install: Path, dist: Path, scratch: Path, metadata: Path) -> None:
             relative = member.name[len(top):]
             if relative not in SOURCES and relative != "bin/claude-multi":
                 continue
-            require(member.isfile() and 0 <= member.size <= 2 * 1024 * 1024)
+            require(relative not in files and member.isfile() and 0 <= member.size <= 2 * 1024 * 1024)
             raw = members.extractfile(member).read(2 * 1024 * 1024 + 1)
             require(len(raw) == member.size)
-            installed = read_regular(install / relative, 2 * 1024 * 1024)
-            require(installed == raw)
-            if relative == "bin/claude-multi":
-                wrapper = raw
-            else:
-                source_info(raw, SOURCES[relative]) # Parse with the bundled Python's own grammar.
-                files[relative] = hashlib.sha256(raw).hexdigest()
-    require(set(files) == set(SOURCES) and wrapper is not None)
+            files[relative] = raw
+    require(set(files) == set(SOURCES) | {"bin/claude-multi"})
+    return files
+
+
+def trusted_sources(dist: Path) -> dict:
+    # Independently rebuilt from the original dist and this trusted harness,
+    # never from a reported allowlist or the Windows host's stdlib sources.
+    try:
+        files = verified_bundle(dist)
+        sources = {source: source_info(files[relative], source) for relative, source in SOURCES.items()}
+        sources[DIAG_SOURCE] = source_info(read_regular(Path(__file__), 128 * 1024), DIAG_SOURCE)
+        return sources
+    except (OSError, SyntaxError, tarfile.TarError):
+        require(False) # Missing/unreadable trust inputs invalidate optional locations, not mandatory evidence.
+
+
+def prepare(install: Path, dist: Path, scratch: Path, metadata: Path) -> None:
+    bundle = verified_bundle(dist)
+    files = {}
+    for relative, raw in bundle.items():
+        require(read_regular(install / relative, 2 * 1024 * 1024) == raw)
+        if relative in SOURCES:
+            source_info(raw, SOURCES[relative]) # Parse with the bundled Python's own grammar.
+            files[relative] = hashlib.sha256(raw).hexdigest()
+    wrapper = bundle["bin/claude-multi"]
     document = {"schema": 1, "root": str(install), "files": files,
                 "diagnostic_sha256": hashlib.sha256(read_regular(Path(__file__), 128 * 1024)).hexdigest()}
     raw = encoded(document)
