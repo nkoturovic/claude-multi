@@ -2369,6 +2369,17 @@ class NativeLaneTests(unittest.TestCase):
             offset = job.index(needle, offset) + len(needle)
         self.assertEqual(job.count(probe), 2)
 
+    def test_windows_registers_missing_default_gallery_before_pinned_pester(self) -> None:
+        job = self.release["journeys-windows"]
+        step = next(step for step in _steps(job) if "- name: install.ps1 Pester suite" in step)
+        self.assertEqual(_commands(step)[:5], [
+            "if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {",
+            "Register-PSRepository -Default",
+            "}",
+            "Install-Module Pester -RequiredVersion 6.2.0 -Repository PSGallery -Scope CurrentUser -Force -SkipPublisherCheck",
+            "Import-Module Pester -RequiredVersion 6.2.0"])
+        self.assertEqual(job.count("Register-PSRepository"), 1)
+
     def test_windows_installer_is_sourced_before_step_variable_assignments(self) -> None:
         job = self.release["journeys-windows"]
         step = job.split("- name: The release's install.ps1 installs into WSL 2", 1)[1]

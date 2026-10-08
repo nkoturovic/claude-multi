@@ -674,6 +674,9 @@ jobs:
       - name: install.ps1 Pester suite
         shell: pwsh
         run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
           Install-Module Pester -RequiredVersion 6.2.0 -Repository PSGallery -Scope CurrentUser -Force -SkipPublisherCheck
           Import-Module Pester -RequiredVersion 6.2.0
           $config = New-PesterConfiguration
